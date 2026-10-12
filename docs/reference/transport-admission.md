@@ -1,6 +1,6 @@
 # Transport 接入容量与生命周期
 
-状态：**U03-A 已实现的连接/HELLO 限额，U03-B 已实现全局残帧预算与超时**；**U03-C Provider 单连接 Inflight 约束尚待实现**。
+状态：**U03-A 连接/HELLO 限额、U03-B 全局残帧预算与超时、U03-C Provider 单连接 Inflight 限额均已实现**；TLS 握手前资源治理不在这些限额覆盖范围内。
 
 ## 目的与边界
 
@@ -12,7 +12,7 @@ Provider 在进入 RPC Core Admission 前需要抵御大量连接与停留在握
 | `maxHandshakes` | 1024 | 已启用：在 `NetSocket` 回调后开始，直至 HELLO_ACK 成功写出或连接关闭 |
 | `maxBufferedPartialFrameBytes` | 67108864 | 已启用：每个 Transport Server 实例的残帧保留字节额度（追加前预留、消费后释放） |
 | `partialFrameTimeout` | 10s | 已启用：残帧首次驻留到期关闭连接；追加小碎片不重置时限 |
-| `maxInflightPerConnection` | 1024 | 独立的 `RpcTransportOptions` 字段；U03-C 将实现 Provider 入站限额 |
+| `maxInflightPerConnection` | 1024 | 已启用：每条 Provider NetSocket 独立跟踪未结束的 REQUEST 数；容量耗尽返回 OVERLOADED，不运行 Handler |
 
 这些默认值是配置基线，**不是**经生产负载矩阵证明的最佳容量。请结合目标环境的连接数、容器内存、TLS 模式和业务并发重新验证。
 
@@ -64,4 +64,31 @@ U03-B 已在 `FrameAccumulator` 追加不完整数据前预留全局字节预算
 
 全局残帧预算覆盖的是 **FrameAccumulator 逻辑保留的字节**，不是 TLS 引擎内存、Socket 接收缓冲、Netty Direct Buffer 容量或整个 JVM Heap 的硬上限。已有残帧时，会为新的 TCP chunk 在追加前保守地预留全部字节（即便其中可能包含随后立即交付的完整帧），避免瞬时无额度拷贝。
 
-U03-C 将为每个服务端连接独立限制未完成 REQUEST，并覆盖 CANCEL、重复 ID 与 Drain。在此之前不能宣传“全链路 Transport 容量已收敛”。
+### Provider 每连接 Inflight（U03-C）
+
+服务端 `VertxRpcTransportServer.ServerConnection` 在 EventLoop 内使用连接所有的 Inflight Map。优先检查 Request ID 非零、重复 ID 和协商 Codec，再检查 `inflight.size() >= maxInflightPerConnection`；超限用相同 Request ID 返回 `RpcStatus.OVERLOADED`，**不调用 Handler**，也不分配新的协议 Inflight 槽位。若写队列已满或拒绝帧超过协商的最大长度，改用 GO_AWAY 关闭连接，而不是无限堆积拒绝响应。
+
+完成、CANCEL、关闭与 Drain 共同管理 Map 生命周期。特别注意 CANCEL 已删除旧 ID 后，新请求可能立即复用它：完成回调必须使用 **Request ID + 原 Future 实例** 双重匹配，绝不能让旧回调错误地移除新请求。重复正在执行的 ID 仍按协议错误拒绝。
+
+```mermaid
+sequenceDiagram
+    participant Consumer
+    participant NetSocket as Provider Connection
+    participant Handler as RPC Handler
+    Consumer->>NetSocket: REQUEST id=1
+    NetSocket->>Handler: 受理并记录 Future#1
+    Consumer->>NetSocket: REQUEST id=2（超出容量）
+    NetSocket-->>Consumer: RESPONSE id=2 OVERLOADED
+    Consumer->>NetSocket: CANCEL id=1
+    NetSocket->>NetSocket: 删除 id=1 并取消 Future#1
+    Consumer->>NetSocket: REQUEST id=1（再次复用）
+    NetSocket->>Handler: 受理并记录 Future#2
+    Handler-->>NetSocket: Future#1 迟到完成
+    Note over NetSocket: 旧 Future 不可清理 Future#2 的槽位
+    Handler-->>NetSocket: Future#2 完成
+    NetSocket-->>Consumer: RESPONSE id=1 OK
+```
+
+**容量模型限制：** 此限额指连接层仍跟踪的请求数。CANCEL 能使连接协议槽位释放，但无法证明远端实际业务已退出；仍在运行的业务由 Core Provider Admission Lease 独立约束。多连接各自拥有独立预算，并非全局 Provider 并发限制。TLS 预握手、FrameAccumulator、写队列和业务资源必须分别建模，不能用这一个值宣传全链路硬容量约束。
+
+验证测试：`serverMustEnforceConnectionInflightLimitAndRecover`、`cancelAndReusedRequestIdMustNotLoseNewInflightSlot`、`oneBusyConnectionMustNotExhaustAnotherConnectionsQuota`。现有重复 ID、CANCEL、Drain 与 TLS 回归继续作为硬门禁。

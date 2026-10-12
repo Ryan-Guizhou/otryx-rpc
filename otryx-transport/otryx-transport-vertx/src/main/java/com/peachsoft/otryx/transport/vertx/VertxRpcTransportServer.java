@@ -11,6 +11,7 @@ import com.peachsoft.otryx.observability.RpcConnectionRole;
 import com.peachsoft.otryx.protocol.RpcErrorCodec;
 import com.peachsoft.otryx.protocol.RpcFeature;
 import com.peachsoft.otryx.protocol.RpcFrame;
+import com.peachsoft.otryx.protocol.RpcFrameView;
 import com.peachsoft.otryx.protocol.RpcHandshakeCodec;
 import com.peachsoft.otryx.protocol.RpcMessageType;
 import com.peachsoft.otryx.protocol.RpcNegotiatedCapabilities;
@@ -54,6 +55,8 @@ final class VertxRpcTransportServer implements RpcTransportServer {
             LoggerFactory.getLogger(VertxRpcTransportServer.class);
     private static final int MESSAGE_TYPE_OFFSET = 6;
     private static final int CODEC_OFFSET = 7;
+    private static final String INFLIGHT_OVERLOADED_MESSAGE =
+            "RPC connection inflight capacity exhausted";
 
     private final Vertx vertx = Vertx.vertx();
     private final NetServer server;
@@ -322,15 +325,51 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                                 + requestId));
                 return;
             }
+            if (inflight.size() >= options.maxInflightPerConnection()) {
+                rejectOverloadedRequest(frame);
+                return;
+            }
             CompletableFuture<byte[]> requestFuture =
                     handler.handle(remote, frame).toCompletableFuture();
+            // 只有返回 Future 并取得所有权之后才计入连接级协议槽位。
             inflight.put(requestId, requestFuture);
             requestFuture.whenComplete((response, error) ->
                     context.runOnContext(ignored ->
                             completeRequest(
                                     requestId,
+                                    requestFuture,
                                     response,
                                     error)));
+        }
+
+        /**
+         * 拒绝超出当前连接入站请求容量的 RPC，不进入业务 Handler。
+         *
+         * <p>有限制的拒绝响应不会消耗 Inflight 槽位。如果写队列已满，
+         * 则转为 GO_AWAY 关闭连接，避免继续积压拒绝帧。
+         *
+         * @param bytes 已通过请求类型、Request ID 与 Codec 校验的完整帧
+         */
+        private void rejectOverloadedRequest(byte[] bytes) {
+            RpcFrameView request = RpcProtocolCodec.view(bytes);
+            byte[] rejected = RpcProtocolCodec.encodeResponse(
+                    RpcCodecIds.CONTROL,
+                    RpcStatus.OVERLOADED,
+                    request.requestId(),
+                    request.serviceId(),
+                    request.methodId(),
+                    RpcErrorCodec.encode(new RpcRemoteError(
+                            RpcProtocolException.class.getName(),
+                            INFLIGHT_OVERLOADED_MESSAGE)));
+            if (rejected.length > negotiated.maxFrameBytes()
+                    || socket.writeQueueFull()) {
+                goAwayAndClose(
+                        RpcStatus.OVERLOADED,
+                        INFLIGHT_OVERLOADED_MESSAGE);
+                return;
+            }
+            socket.write(Buffer.buffer(rejected))
+                    .onFailure(this::closeWithError);
         }
 
         private void handleHello(byte[] bytes) {
@@ -389,11 +428,12 @@ final class VertxRpcTransportServer implements RpcTransportServer {
 
         private void completeRequest(
                 long requestId,
+                CompletableFuture<byte[]> requestFuture,
                 byte[] response,
                 Throwable error) {
-            CompletableFuture<byte[]> tracked =
-                    inflight.remove(requestId);
-            if (tracked == null) {
+            // CANCEL 后的旧 Future 可能迟到：只释放它实际持有的槽位，
+            // 不能仅凭 Request ID 删除后来复用同一 ID 的新请求。
+            if (!inflight.remove(requestId, requestFuture)) {
                 finishConnectionDrainIfIdle();
                 return;
             }
