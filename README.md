@@ -19,7 +19,7 @@
 **GitHub 仓库：** [Ryan-Guizhou/otryx-rpc](https://github.com/Ryan-Guizhou/otryx-rpc)。品牌商标、图片来源及 Maven Central Namespace 尚有外部验收条件，参见 [发布前核查](docs/publication-readiness.md)。
 · **Java：21** · **Spring Boot：3.5.4** · **Wire：v1** · **License：MIT**
 
-项目目前尚未正式发布，不对历史开发版提供 Java API、SPI、Wire、Schema 或配置兼容承诺；当前版本必须通过协议正确性、Consumer/Provider 互操作和安全验证。工程规范参见[Java 编码规范](docs/engineering/java-coding-standard.md)。
+项目目前尚未正式发布，不对历史开发版提供 Java API、SPI、Wire、Schema 或配置兼容承诺；当前版本必须通过协议正确性、Consumer/Provider 互操作和安全验证。当前网络默认可使用 PLAINTEXT，Fory 直接构造及 Starter 的默认策略仍为可信兼容模式；在不可信网络部署前须显式配置适当的 TLS/mTLS 与反序列化限制。工程规范参见[Java 编码规范](docs/engineering/java-coding-standard.md)。
 
 <!-- doc-section:capabilities -->
 ## 核心能力
@@ -112,7 +112,7 @@ Consul / Eureka 采用按需依赖与轮询式订阅，见 [Consul](docs/referen
 <!-- doc-section:development -->
 ## 开发与贡献
 
-[贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [AGENTS 工程契约](AGENTS.md)。
+[贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md) · [AGENTS 工程契约](AGENTS.md) · [首发质量改造实施契约](docs/engineering/plans/2026-10-12-open-source-quality-upgrade.md)。
 
 项目坚持**中文标准 Javadoc、英文结构化日志、可验证的兼容性与性能证据**。
 
