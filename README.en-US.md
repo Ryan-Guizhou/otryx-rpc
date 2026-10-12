@@ -19,7 +19,7 @@ Meet Otti, the engineering otter: **Simple to Call. Built to Scale.**
 **GitHub:** [Ryan-Guizhou/otryx-rpc](https://github.com/Ryan-Guizhou/otryx-rpc). Trademark use, original artwork provenance and Maven Central namespace ownership still need external clearance; see [Publication readiness](docs/publication-readiness.md).
 · **Java 21** · **Spring Boot 3.5.4** · **Wire v1** · **MIT**
 
-The project has not yet reached GA and makes no backward-compatibility promise to unpublished development snapshots for Java APIs, SPI, Wire, Schema or configuration. Current-version protocol correctness, consumer/provider interoperability and security still require verification. See the [Java coding standard](docs/engineering/java-coding-standard.md).
+The project has not yet reached GA and makes no backward-compatibility promise to unpublished development snapshots for Java APIs, SPI, Wire, Schema or configuration. Current-version protocol correctness, consumer/provider interoperability and security still require verification. The transport can default to PLAINTEXT, and directly constructed Fory codecs and the Starter currently use trusted compatibility mode by default; configure appropriate TLS/mTLS and deserialization restrictions before use on untrusted networks. See the [Java coding standard](docs/engineering/java-coding-standard.md).
 
 <!-- doc-section:capabilities -->
 ## Core capabilities
@@ -47,7 +47,7 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 ## Compatibility and migration
 
 Wire v1 keeps its 32-byte header, message/codec IDs and historical registry compatibility metadata.
-However, full Java class names affect type and method identifiers and schema fingerprints. OTRYX 2.0 is therefore a **breaking API namespace migration**.
+However, full Java class names affect type and method identifiers and schema fingerprints. the current OTRYX namespace change is therefore a **breaking API migration**.
 
 - The original Peach RPC baseline remains available and is not republished under a new GAV.
 - Isolate deployments or use blue/green upgrades until cross-version service contract compatibility is independently verified.
@@ -112,7 +112,7 @@ Validate deadline, admission, backpressure, retries, TLS and observability again
 <!-- doc-section:development -->
 ## Development and contributing
 
-[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Agent contract](AGENTS.md).
+[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Agent contract](AGENTS.md) · [First-release quality implementation plan](docs/engineering/plans/2026-10-12-open-source-quality-upgrade.md).
 
 The repository requires **Chinese standard Javadoc, English structured logs and reproducible compatibility/performance evidence**.
 
