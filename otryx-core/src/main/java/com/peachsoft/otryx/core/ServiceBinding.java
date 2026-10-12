@@ -3,6 +3,7 @@ package com.peachsoft.otryx.core;
 import com.peachsoft.otryx.api.OtryxRpcExecution;
 import com.peachsoft.otryx.api.RpcExecutionMode;
 import com.peachsoft.otryx.api.RpcIds;
+import com.peachsoft.otryx.api.RpcContractMethods;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
@@ -37,7 +38,7 @@ final class ServiceBinding {
                 .orElse(null);
 
         Map<Integer, Invoker> resolved = new HashMap<>();
-        for (Method method : api.getMethods()) {
+        for (Method method : RpcContractMethods.resolve(api)) {
             try {
                 int methodId = RpcIds.methodId(method);
                 MethodHandle handle = generatedDispatcher == null

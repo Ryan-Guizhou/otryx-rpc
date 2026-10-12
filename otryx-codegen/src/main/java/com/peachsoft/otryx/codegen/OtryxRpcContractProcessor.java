@@ -117,7 +117,8 @@ public final class OtryxRpcContractProcessor extends AbstractProcessor {
         for (ExecutableElement method : ElementFilter.methodsIn(
                 processingEnv.getElementUtils().getAllMembers(service))) {
             if (!method.getModifiers().contains(Modifier.ABSTRACT)
-                    || method.getModifiers().contains(Modifier.STATIC)) {
+                    || method.getModifiers().contains(Modifier.STATIC)
+                    || isObjectContractMethod(method)) {
                 continue;
             }
             if (!method.getTypeParameters().isEmpty()) {
@@ -141,6 +142,23 @@ public final class OtryxRpcContractProcessor extends AbstractProcessor {
             }
         }
         return methods;
+    }
+
+    /**
+     * 与反射期 RpcContractMethods.resolve 保持 Object 方法过滤一致。
+     */
+    private boolean isObjectContractMethod(ExecutableElement method) {
+        String name = method.getSimpleName().toString();
+        int parameters = method.getParameters().size();
+        if (parameters == 0) {
+            return "toString".equals(name) || "hashCode".equals(name);
+        }
+        return "equals".equals(name)
+                && parameters == 1
+                && "java.lang.Object".equals(
+                        processingEnv.getTypeUtils()
+                                .erasure(method.getParameters().get(0).asType())
+                                .toString());
     }
 
     private void writeSource(

@@ -58,8 +58,8 @@ public final class RpcCompatibilityMetadata {
     /**
      * 判定 Provider 与本地服务契约的兼容状态。
      *
-     * <p>旧 Provider 缺失 Fingerprint 时返回 LEGACY，支持 N+1 Consumer
-     * 与 N Provider 的滚动升级；新 Provider 携带 Fingerprint 时严格比较。
+     * <p>当前尚未首发版本不保留无 Schema 元数据的隐式兼容路径。
+     * 任一缺失、格式不匹配或版本不匹配都视为 INCOMPATIBLE。
      *
      * @param instance Registry 服务实例
      * @param expectedFingerprint 本地期望 Fingerprint
@@ -72,10 +72,17 @@ public final class RpcCompatibilityMetadata {
         Objects.requireNonNull(
                 expectedFingerprint,
                 "expectedFingerprint");
-        String remote =
-                instance.metadata().get(SCHEMA_FINGERPRINT);
-        if (remote == null || remote.isBlank()) {
-            return Compatibility.LEGACY;
+        Map<String, String> metadata = instance.metadata();
+        String protocol = metadata.get(PROTOCOL_VERSION);
+        String schemaVersion = metadata.get(SCHEMA_VERSION);
+        String remote = metadata.get(SCHEMA_FINGERPRINT);
+        if (!Integer.toString(Byte.toUnsignedInt(RpcProtocolCodec.VERSION))
+                        .equals(protocol)
+                || !Integer.toString(RpcSchemaFingerprint.SCHEMA_VERSION)
+                        .equals(schemaVersion)
+                || remote == null
+                || remote.isBlank()) {
+            return Compatibility.INCOMPATIBLE;
         }
         return expectedFingerprint.equals(remote)
                 ? Compatibility.COMPATIBLE
@@ -84,8 +91,6 @@ public final class RpcCompatibilityMetadata {
 
     /** 服务实例兼容状态。 */
     public enum Compatibility {
-        /** 旧节点未发布 Fingerprint，滚动升级期间允许使用。 */
-        LEGACY,
         /** 新节点 Fingerprint 与 Consumer 一致。 */
         COMPATIBLE,
         /** 新节点 Fingerprint 与 Consumer 不一致，必须隔离。 */

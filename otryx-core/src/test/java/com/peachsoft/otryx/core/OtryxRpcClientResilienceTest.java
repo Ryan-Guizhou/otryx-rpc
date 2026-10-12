@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.peachsoft.otryx.api.OtryxRpcIdempotent;
+import com.peachsoft.otryx.api.RpcCompatibilityMetadata;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.RpcStatus;
@@ -716,7 +717,8 @@ class OtryxRpcClientResilienceTest {
                             key,
                             new RpcEndpoint("127.0.0.1", 19090),
                             100,
-                            Map.of())),
+                            RpcCompatibilityMetadata.providerMetadata(
+                                    key, RetryService.class))),
                     1L);
         }
     }
