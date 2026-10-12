@@ -1095,9 +1095,18 @@ public final class OtryxRpcClient implements AutoCloseable {
         responseCompletionExecutor.shutdownNow();
         deadlineScheduler.shutdownNow();
 
-        // Future 回调可能执行用户代码，必须与 close() 调用线程隔离。
-        pendingCalls.forEach(call -> call.completeExceptionally(
-                new RpcUnavailableException("RPC client is closed")));
+        // Future 回调可能执行不配合中断的用户代码，必须独立于其他清理阶段。
+        CompletableFuture<Void> settleCalls = new CompletableFuture<>();
+        Thread.ofVirtual()
+                .name("otryx-client-settle-calls")
+                .start(() -> {
+                    try {
+                        pendingCalls.forEach(call -> call.completeExceptionally(
+                                new RpcUnavailableException("RPC client is closed")));
+                    } finally {
+                        settleCalls.complete(null);
+                    }
+                });
 
         CompletableFuture<Void> directoryClose = new CompletableFuture<>();
         Thread.ofVirtual()
@@ -1154,7 +1163,7 @@ public final class OtryxRpcClient implements AutoCloseable {
         try {
             long remainingNanos = remainingClientNanos(deadlineNanos);
             if (remainingNanos > 0L) {
-                CompletableFuture.allOf(directoryClose, transportClose)
+                CompletableFuture.allOf(settleCalls, directoryClose, transportClose)
                         .get(remainingNanos, TimeUnit.NANOSECONDS);
             }
         } catch (InterruptedException error) {
