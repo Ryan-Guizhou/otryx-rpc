@@ -17,6 +17,7 @@ import com.peachsoft.otryx.protocol.RpcMessageType;
 import com.peachsoft.otryx.protocol.RpcNegotiatedCapabilities;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import com.peachsoft.otryx.protocol.RpcProtocolException;
+import com.peachsoft.otryx.transport.ResponseByteBudget;
 import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
 import com.peachsoft.otryx.transport.RpcTransportServer;
@@ -28,6 +29,7 @@ import io.vertx.core.net.NetServerOptions;
 import io.vertx.core.net.NetSocket;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -62,6 +64,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
     private final NetServer server;
     private final RpcTransportOptions options;
     private final TransportAdmissionController admission;
+    private final ResponseByteBudget responseBudget;
     private final VertxTlsSupport.FileState initialTlsFileState;
     private final Set<ServerConnection> connections =
             ConcurrentHashMap.newKeySet();
@@ -75,6 +78,8 @@ final class VertxRpcTransportServer implements RpcTransportServer {
     VertxRpcTransportServer(RpcTransportOptions options) {
         this.options = options;
         this.admission = new TransportAdmissionController(options.admission());
+        this.responseBudget = new ResponseByteBudget(
+                options.admission().maxBufferedResponseBytes());
         NetServerOptions serverOptions =
                 new NetServerOptions()
                         .setTcpKeepAlive(true)
@@ -170,6 +175,8 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 new FrameAccumulator(options.maxFrameBytes(), admission);
         private final Map<Long, CompletableFuture<byte[]>> inflight =
                 new HashMap<>();
+        private final Set<ResponseByteBudget.Lease> pendingResponses =
+                new HashSet<>();
 
         private boolean open = true;
         private boolean handshakeComplete;
@@ -219,6 +226,9 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 inflight.values().forEach(future ->
                         future.cancel(true));
                 inflight.clear();
+                // 连接关闭后必须归还其持有的所有待写 RESPONSE 额度。
+                pendingResponses.forEach(ResponseByteBudget.Lease::close);
+                pendingResponses.clear();
                 connections.remove(this);
                 // 所有异步关闭、异常与握手失败共用此所有权释放点。
                 handshakeLease.close();
@@ -472,9 +482,31 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                         "RPC response write queue is full");
                 return;
             }
-            socket.write(Buffer.buffer(response))
-                    .onSuccess(ignored -> finishConnectionDrainIfIdle())
-                    .onFailure(this::closeWithError);
+            ResponseByteBudget.Lease lease =
+                    responseBudget.tryAcquire(response.length);
+            if (lease == null) {
+                goAwayAndClose(
+                        RpcStatus.OVERLOADED,
+                        "RPC encoded-response capacity exhausted");
+                return;
+            }
+            pendingResponses.add(lease);
+            try {
+                socket.write(Buffer.buffer(response))
+                        .onComplete(result -> {
+                            pendingResponses.remove(lease);
+                            lease.close();
+                            if (result.failed()) {
+                                closeWithError(result.cause());
+                            } else {
+                                finishConnectionDrainIfIdle();
+                            }
+                        });
+            } catch (RuntimeException failure) {
+                pendingResponses.remove(lease);
+                lease.close();
+                closeWithError(failure);
+            }
         }
 
         private void startHeartbeat() {
@@ -624,6 +656,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         private void finishConnectionDrainIfIdle() {
             if (connectionDraining
                     && inflight.isEmpty()
+                    && pendingResponses.isEmpty()
                     && open) {
                 socket.end();
             }
@@ -882,6 +915,11 @@ final class VertxRpcTransportServer implements RpcTransportServer {
     /** 供受控网络测试观察当前不完整帧实际占用的逻辑字节。 */
     long bufferedPartialBytes() {
         return admission.bufferedPartialBytes();
+    }
+
+    /** 供受控网络测试观察当前仍持有的编码 RESPONSE 字节。 */
+    long bufferedResponseBytes() {
+        return responseBudget.reservedBytes();
     }
 
     @Override

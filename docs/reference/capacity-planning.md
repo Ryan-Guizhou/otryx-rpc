@@ -125,3 +125,12 @@ Controlled Evidence
 ## 11. Evidence
 
 见 [Performance Evidence](performance-evidence.md)。
+
+
+## U04：已编码 RESPONSE 字节预算的边界
+
+Provider 资源分为 Transport 连接/HELLO、残帧字节、每连接在途数、Core 分层请求 Frame/真实业务 Lease，以及每个 Transport Server 新增的 **已编码 RESPONSE 待写额度**。不同所有权范围不能合计得出 JVM/Native 的内存硬上限。
+
+`otryx.rpc.transport.admission.max-buffered-response-bytes` 默认 67108864（64 MiB；未经过受控容量矩阵确定）。Vert.x 在调用 `socket.write()` 前获取 `ResponseByteBudget.Lease`，对应写 Future 完成/失败或 Socket 断连时归还；Drain 同时等待仍存在的写入 Lease。额度耗尽时用 OVERLOADED/GO_AWAY 及时拒绝，不阻塞 EventLoop。
+
+**无法约束的内存：** Fory 返回值编码期间的峰值、业务对象图、Direct/TLS 缓冲、Socket 写队列和操作系统内核缓存。这些指标需要结合 GC、堆/Native、Socket backpressure、吞吐和 p99/p99.9 的固定硬件矩阵才能设置安全生产上限。CI 慢读 Socket 回归只能验证框架响应 Lease 有界，不能证明整个网络栈、JVM 或远端消费有界。

@@ -34,7 +34,7 @@
 
 `otryx.rpc.transport.admission.max-connections`（默认 4096）约束 Vert.x 已接入连接；`max-handshakes`（默认 1024）约束同时进行的 OTRYX HELLO 协议握手，失败即时关闭 Socket、关闭后归还幂等 Lease。注意二者均**不能**直接覆盖 TLS 预握手阶段、TCP backlog 或操作系统 Socket 内存。
 
-`max-buffered-partial-frame-bytes`（默认 64 MiB）已对每个 Transport 实例的实际残帧逻辑字节实施全局额度，并在追加前预留；`partial-frame-timeout`（默认 10s）会回收长期无完整帧交付的残片连接，追加少量字节不会无限延长驻留。Provider 已按 `otryx.rpc.transport.max-inflight-per-connection`（默认 1024）限制每个 NetSocket 未结束的入站请求；容量超限优先返回 `OVERLOADED` 且不调用 Handler。CANCEL 释放连接层逻辑槽位，但不证明用户业务已强制停止；真正执行预算仍由 Core Admission Lease 管理。该预算不等于 TLS、Netty 或 JVM 的绝对内存上限。详见 [Transport 接入容量](reference/transport-admission.md)。
+`max-buffered-partial-frame-bytes`（默认 64 MiB）已对每个 Transport 实例的实际残帧逻辑字节实施全局额度，并在追加前预留；`partial-frame-timeout`（默认 10s）会回收长期无完整帧交付的残片连接，追加少量字节不会无限延长驻留。Provider 已按 `otryx.rpc.transport.max-inflight-per-connection`（默认 1024）限制每个 NetSocket 未结束的入站请求；容量超限优先返回 `OVERLOADED` 且不调用 Handler。CANCEL 释放连接层逻辑槽位，但不证明用户业务已强制停止；真正执行预算仍由 Core Admission Lease 管理。新增 `max-buffered-response-bytes`（默认 67108864）约束每个 Transport Server 尚由框架持有的已编码 RESPONSE 字节，在写 Future 终态或断连后释放；满额则 OVERLOADED 拒绝，Drain 等待未完成写入。它不控制 Fory 编码峰值、TLS/Netty/Socket 内存。详见 [Transport 接入容量](reference/transport-admission.md)。
 
 ## 3. Provider
 
