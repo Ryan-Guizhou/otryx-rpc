@@ -1,6 +1,6 @@
 # Transport 接入容量与生命周期
 
-状态：**U03-A 已实现的连接/HELLO 限额**；**U03-B 部分帧全局预算、U03-C Provider 单连接 Inflight 约束尚待实现**。
+状态：**U03-A 已实现的连接/HELLO 限额，U03-B 已实现全局残帧预算与超时**；**U03-C Provider 单连接 Inflight 约束尚待实现**。
 
 ## 目的与边界
 
@@ -10,8 +10,8 @@ Provider 在进入 RPC Core Admission 前需要抵御大量连接与停留在握
 |---|---:|---|
 | `maxConnections` | 4096 | 已启用：Vert.x `NetSocket` 连接回调已接入且未关闭的连接数 |
 | `maxHandshakes` | 1024 | 已启用：在 `NetSocket` 回调后开始，直至 HELLO_ACK 成功写出或连接关闭 |
-| `maxBufferedPartialFrameBytes` | 67108864 | U03-B 预留配置；此时 **尚未**形成跨连接全局字节硬限制 |
-| `partialFrameTimeout` | 10s | U03-B 预留配置；此时 **尚未**为每个不完整帧设置超时 |
+| `maxBufferedPartialFrameBytes` | 67108864 | 已启用：每个 Transport Server 实例的残帧保留字节额度（追加前预留、消费后释放） |
+| `partialFrameTimeout` | 10s | 已启用：残帧首次驻留到期关闭连接；追加小碎片不重置时限 |
 | `maxInflightPerConnection` | 1024 | 独立的 `RpcTransportOptions` 字段；U03-C 将实现 Provider 入站限额 |
 
 这些默认值是配置基线，**不是**经生产负载矩阵证明的最佳容量。请结合目标环境的连接数、容器内存、TLS 模式和业务并发重新验证。
@@ -60,4 +60,8 @@ otryx:
 - `VertxRpcTransportAdmissionTest`：真实 TCP 连接限额、HELLO 配额失败与关闭后的恢复；
 - `OtryxRpcAutoConfigurationTest`：Spring 配置绑定与非法数值拒绝。
 
-U03-B 将在 `FrameAccumulator` 追加数据前预留全局部分帧预算，并在消费/断连/超时中归还；U03-C 将为每个服务端连接独立限制未完成 REQUEST，同时覆盖 CANCEL、重复 ID 与 Drain。上述能力未交付前仍不能宣传“全链路 Transport 容量已收敛”。
+U03-B 已在 `FrameAccumulator` 追加不完整数据前预留全局字节预算，在完整帧消费、错误、超时和关闭时立即归还。正常完整帧继续走无全局计数与中间累积复制的快速路径。残帧超时从开始保留的时间起算；如果交付了一帧而仍有下一帧残留，重启对应的新驻留时钟，小碎片追加不会无限续期。
+
+全局残帧预算覆盖的是 **FrameAccumulator 逻辑保留的字节**，不是 TLS 引擎内存、Socket 接收缓冲、Netty Direct Buffer 容量或整个 JVM Heap 的硬上限。已有残帧时，会为新的 TCP chunk 在追加前保守地预留全部字节（即便其中可能包含随后立即交付的完整帧），避免瞬时无额度拷贝。
+
+U03-C 将为每个服务端连接独立限制未完成 REQUEST，并覆盖 CANCEL、重复 ID 与 Drain。在此之前不能宣传“全链路 Transport 容量已收敛”。
