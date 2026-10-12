@@ -21,7 +21,7 @@ import java.util.Properties;
 @Extension(NacosRegistryFactory.EXTENSION_NAME)
 public final class NacosRegistryFactory implements RegistryFactory {
 
-    private static final String EXTENSION_NAME = "nacos";
+    static final String EXTENSION_NAME = "nacos";
     private static final String OPTION_GROUP = "nacosGroup";
     private static final String OPTION_CLUSTER = "nacosCluster";
     private static final String OPTION_USERNAME = "nacosUsername";
