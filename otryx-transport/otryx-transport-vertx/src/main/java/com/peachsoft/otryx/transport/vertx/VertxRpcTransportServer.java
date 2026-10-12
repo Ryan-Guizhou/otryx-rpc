@@ -58,6 +58,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
     private final Vertx vertx = Vertx.vertx();
     private final NetServer server;
     private final RpcTransportOptions options;
+    private final VertxTlsSupport.FileState initialTlsFileState;
     private final Set<ServerConnection> connections =
             ConcurrentHashMap.newKeySet();
     private final AtomicBoolean draining = new AtomicBoolean();
@@ -77,6 +78,10 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 serverOptions,
                 options.security(),
                 options.observer());
+        // 与初始 SSL 配置在同一构造阶段建立基线；运行期不在 EventLoop 读取文件。
+        this.initialTlsFileState = options.security().enabled()
+                ? VertxTlsSupport.fileState(options.security())
+                : null;
         this.server = vertx.createNetServer(serverOptions);
     }
 
@@ -650,6 +655,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         TlsReloadController<VertxTlsSupport.FileState> controller =
                 new TlsReloadController<>(
                         vertx.getOrCreateContext(),
+                        initialTlsFileState,
                         () -> VertxTlsSupport.fileState(
                                 options.security()),
                         ignored -> VertxTlsSupport.reloadOptions(
