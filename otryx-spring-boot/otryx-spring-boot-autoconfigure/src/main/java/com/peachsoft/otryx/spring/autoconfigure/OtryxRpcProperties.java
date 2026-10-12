@@ -1302,6 +1302,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private int maxConcurrent = 4096;
         private Duration drainTimeout = Duration.ofSeconds(30);
         private Duration controlPlaneTimeout = Duration.ofSeconds(3);
+        private Duration shutdownTimeout = Duration.ofSeconds(25);
         private final Execution execution = new Execution();
         private final Admission admission = new Admission();
 
@@ -1447,6 +1448,24 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public void setControlPlaneTimeout(Duration controlPlaneTimeout) {
             this.controlPlaneTimeout = controlPlaneTimeout;
+        }
+
+        /**
+         * 返回 Provider 总关闭预算。Spring 默认 25 秒以适应默认 30 秒阶段超时。
+         *
+         * @return 所有清理阶段共享的总预算
+         */
+        public Duration getShutdownTimeout() {
+            return shutdownTimeout;
+        }
+
+        /**
+         * 设置 Provider 总关闭预算，必须为正值且不超过一天。
+         *
+         * @param shutdownTimeout 总关闭预算
+         */
+        public void setShutdownTimeout(Duration shutdownTimeout) {
+            this.shutdownTimeout = shutdownTimeout;
         }
 
         /**
