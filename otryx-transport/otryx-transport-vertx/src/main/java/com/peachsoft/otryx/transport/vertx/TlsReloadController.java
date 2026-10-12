@@ -57,6 +57,33 @@ final class TlsReloadController<S> implements AutoCloseable {
             Function<S, SSLOptions> materialPreparer,
             Function<SSLOptions, Future<?>> publisher,
             BiConsumer<Long, Throwable> completionObserver) {
+        this(
+                publicationContext,
+                null,
+                stateReader,
+                materialPreparer,
+                publisher,
+                completionObserver);
+    }
+
+    /**
+     * 使用启动时已启用的材料状态建立初始基线，避免无变化的立即 SSL 更新打断握手。
+     *
+     * @param publicationContext SSL 配置归属的 Vert.x Context
+     * @param initialSuccessfulState 在初始 TLS 配置已经建立后得到的材料快照
+     * @param stateReader 控制面专用文件状态读取器
+     * @param materialPreparer 控制面专用材料验证与构建器
+     * @param publisher Vert.x Context 中的异步 SSL 配置发布器
+     * @param completionObserver 实际重载完成后的统计回调
+     */
+    TlsReloadController(
+            Context publicationContext,
+            S initialSuccessfulState,
+            Supplier<S> stateReader,
+            Function<S, SSLOptions> materialPreparer,
+            Function<SSLOptions, Future<?>> publisher,
+            BiConsumer<Long, Throwable> completionObserver) {
+        this.lastSuccessfulState = initialSuccessfulState;
         this.publicationContext = Objects.requireNonNull(
                 publicationContext, "publicationContext");
         this.stateReader = Objects.requireNonNull(stateReader, "stateReader");
