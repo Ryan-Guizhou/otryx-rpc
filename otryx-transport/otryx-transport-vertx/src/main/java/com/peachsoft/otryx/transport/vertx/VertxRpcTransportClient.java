@@ -63,6 +63,7 @@ final class VertxRpcTransportClient implements RpcTransportClient {
     private final Vertx vertx = Vertx.vertx();
     private final NetClient client;
     private final RpcTransportOptions options;
+    private final VertxTlsSupport.FileState initialTlsFileState;
     private final ConcurrentMap<RpcEndpoint, ConnectionGroup> groups =
             new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -82,6 +83,10 @@ final class VertxRpcTransportClient implements RpcTransportClient {
                 clientOptions,
                 options.security(),
                 options.observer());
+        // 与初始 SSL 配置在同一构造阶段建立基线；运行期不在 EventLoop 读取文件。
+        this.initialTlsFileState = options.security().enabled()
+                ? VertxTlsSupport.fileState(options.security())
+                : null;
         this.client = vertx.createNetClient(clientOptions);
         startTlsReload();
         this.groupSweepTimerId = vertx.setPeriodic(
@@ -980,6 +985,7 @@ final class VertxRpcTransportClient implements RpcTransportClient {
         TlsReloadController<VertxTlsSupport.FileState> controller =
                 new TlsReloadController<>(
                         vertx.getOrCreateContext(),
+                        initialTlsFileState,
                         () -> VertxTlsSupport.fileState(
                                 options.security()),
                         ignored -> VertxTlsSupport.reloadOptions(
