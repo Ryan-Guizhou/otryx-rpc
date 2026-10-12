@@ -7,7 +7,7 @@
 
 - 本仓库尚未正式发布，当前根 Maven 坐标为 com.peachsoft.otryx:otryx-rpc:1.0.0-SNAPSHOT。
 - 用户已批准 V1.1 治理：允许调整未发布版本的 Java API、SPI、模块、配置、序列化及协议设计，**不对历史开发版本承担兼容义务**；任何行为性变化仍须独立设计、验证、分 PR 实施。
-- 当前阶段 PR-02 仅制定工程规范、Javadoc/日志门禁和存量审计；PR-03 至 PR-06 分模块治理手写 Java 源码，最终开启全仓严格门禁。
+- 工程规范与 Javadoc/日志治理沿用既定 PR 阶段；Issue #76 由独立 PR 完成全仓语义字面量审计、整改与八类高置信度位置的 --enforce-all CI 门禁。未覆盖的容量数值、状态映射等仍需人工审查，不将自动零发现当作全语义证明。
 - 所有模块以现有 Maven Reactor、实际源代码和测试为准，不为尚未实现的 Registry/Serialization Provider 创建空模块。
 - 协议健壮性、线程归属、资源回收、TLS/鉴权、Consumer/Provider 互操作和高并发安全**始终是正确性要求**，即使对旧版不承担兼容责任也不得降低。
 - 已验证的稳定分支保持不动：stable/peach-rpc-1.0.1-pre-otryx-2026-10-10 和 stable/agent-quality-2026-10-09。
