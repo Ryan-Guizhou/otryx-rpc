@@ -330,10 +330,10 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                                 options.capabilities()));
                 byte[] encoded = RpcProtocolCodec.encode(ack);
                 handshakeComplete = true;
-                cancelHandshakeTimer();
                 socket.write(Buffer.buffer(encoded))
                         .onSuccess(ignored -> {
-                            // ACK 实际写成功后才退出握手容量；失败由 closeHandler 释放。
+                            // 握手超时覆盖 HELLO_ACK 写出全过程，避免挂起的 ACK 租约。
+                            cancelHandshakeTimer();
                             handshakeLease.close();
                             if (options.observer().enabled()) {
                                 options.observer()
