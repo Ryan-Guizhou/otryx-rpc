@@ -46,6 +46,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -53,7 +54,10 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -92,6 +96,8 @@ public final class OtryxRpcClient implements AutoCloseable {
     private final ConcurrentMap<ServiceKey, ServiceDirectory> directories =
             new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicReference<CompletableFuture<RpcClientShutdownReport>>
+            shutdownResult = new AtomicReference<>();
     private final Set<CompletableFuture<Object>> pendingCalls =
             ConcurrentHashMap.newKeySet();
     private final ConcurrentMap<RpcEndpoint, EndpointStats> stats =
@@ -1034,35 +1040,167 @@ public final class OtryxRpcClient implements AutoCloseable {
                 response.payloadLength());
     }
 
-    @Override
-    public void close() {
-        if (!closed.compareAndSet(false, true)) {
-            return;
+    /**
+     * 使用统一单调时钟预算异步关闭 Consumer，不阻塞调用方线程。
+     *
+     * <p>先拒绝新调用，后台结算所有 Pending 逻辑调用并关闭由本实例持有的
+     * 目录、Transport 与执行器。无法强制停止第三方同步 close() 或已经运行的
+     * 用户回调；总预算届满时返回包含残留信息的报告。
+     *
+     * @param options 单次关闭的总预算
+     * @return 可重复订阅的首次关闭结果 Stage
+     */
+    public CompletionStage<RpcClientShutdownReport> shutdown(
+            RpcShutdownOptions options) {
+        Objects.requireNonNull(options, "options");
+        CompletableFuture<RpcClientShutdownReport> current =
+                shutdownResult.get();
+        if (current != null) {
+            return current;
         }
-        // 先结算全部逻辑调用，避免关闭调度器后延迟重试永远无法完成。
+        CompletableFuture<RpcClientShutdownReport> created =
+                new CompletableFuture<>();
+        if (!shutdownResult.compareAndSet(null, created)) {
+            return shutdownResult.get();
+        }
+        closed.set(true);
+        long startedAtNanos = System.nanoTime();
+        long deadlineNanos =
+                startedAtNanos + options.totalTimeout().toNanos();
+        ClientShutdownProgress progress = new ClientShutdownProgress();
+        CompletableFuture.delayedExecutor(
+                        options.totalTimeout().toNanos(),
+                        TimeUnit.NANOSECONDS)
+                .execute(() -> created.complete(
+                        clientShutdownReport(
+                                startedAtNanos,
+                                progress,
+                                true)));
+        Thread.ofVirtual()
+                .name("otryx-client-shutdown")
+                .start(() -> runClientShutdown(
+                        startedAtNanos,
+                        deadlineNanos,
+                        progress,
+                        created));
+        return created;
+    }
+
+    private void runClientShutdown(
+            long startedAtNanos,
+            long deadlineNanos,
+            ClientShutdownProgress progress,
+            CompletableFuture<RpcClientShutdownReport> result) {
+        // 执行器清理不能被任何不响应中断的外部 SPI 关闭调用推迟。
+        responseCompletionExecutor.shutdownNow();
+        deadlineScheduler.shutdownNow();
+
+        // Future 回调可能执行用户代码，必须与 close() 调用线程隔离。
         pendingCalls.forEach(call -> call.completeExceptionally(
                 new RpcUnavailableException("RPC client is closed")));
+
+        CompletableFuture<Void> directoryClose = new CompletableFuture<>();
+        Thread.ofVirtual()
+                .name("otryx-client-directory-close")
+                .start(() -> {
+                    boolean success = true;
+                    for (ServiceDirectory directory : directories.values()) {
+                        try {
+                            directory.close();
+                        } catch (Throwable error) {
+                            success = false;
+                            progress.failures.incrementAndGet();
+                            LOGGER.warn(
+                                    "RPC service directory close failed: errorType={}",
+                                    error.getClass().getName());
+                        }
+                    }
+                    progress.directoriesClosed = success;
+                    directoryClose.complete(null);
+                });
+
+        CompletableFuture<Void> transportClose = new CompletableFuture<>();
+        Thread.ofVirtual()
+                .name("otryx-client-transport-close")
+                .start(() -> {
+                    try {
+                        transport.close();
+                        progress.transportClosed = true;
+                    } catch (Throwable error) {
+                        progress.failures.incrementAndGet();
+                        LOGGER.warn(
+                                "RPC client transport close failed: errorType={}",
+                                error.getClass().getName());
+                    } finally {
+                        transportClose.complete(null);
+                    }
+                });
+
         try {
-            directories.values().forEach(directory -> {
-                try {
-                    directory.close();
-                } catch (RuntimeException error) {
-                    LOGGER.warn(
-                            "RPC service directory close failed: errorType={}",
-                            error.getClass().getName());
-                }
-            });
-            try {
-                transport.close();
-            } catch (RuntimeException error) {
-                LOGGER.warn(
-                        "RPC transport close failed: errorType={}",
-                        error.getClass().getName());
-            }
-        } finally {
-            responseCompletionExecutor.shutdownNow();
-            deadlineScheduler.shutdownNow();
+            boolean completionTerminated =
+                    responseCompletionExecutor.awaitTermination(
+                            remainingClientNanos(deadlineNanos),
+                            TimeUnit.NANOSECONDS);
+            boolean deadlinesTerminated =
+                    deadlineScheduler.awaitTermination(
+                            remainingClientNanos(deadlineNanos),
+                            TimeUnit.NANOSECONDS);
+            progress.executorsTerminated =
+                    completionTerminated && deadlinesTerminated;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            progress.failures.incrementAndGet();
         }
+        try {
+            long remainingNanos = remainingClientNanos(deadlineNanos);
+            if (remainingNanos > 0L) {
+                CompletableFuture.allOf(directoryClose, transportClose)
+                        .get(remainingNanos, TimeUnit.NANOSECONDS);
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            progress.failures.incrementAndGet();
+        } catch (ExecutionException | TimeoutException error) {
+            progress.failures.incrementAndGet();
+        }
+        result.complete(clientShutdownReport(
+                startedAtNanos,
+                progress,
+                remainingClientNanos(deadlineNanos) == 0L));
+    }
+
+    private static long remainingClientNanos(long deadlineNanos) {
+        return Math.max(0L, deadlineNanos - System.nanoTime());
+    }
+
+    private RpcClientShutdownReport clientShutdownReport(
+            long startedAtNanos,
+            ClientShutdownProgress progress,
+            boolean expired) {
+        return new RpcClientShutdownReport(
+                TimeUnit.NANOSECONDS.toMillis(
+                        System.nanoTime() - startedAtNanos),
+                expired,
+                progress.directoriesClosed,
+                progress.transportClosed,
+                progress.executorsTerminated,
+                pendingCalls.size(),
+                progress.failures.get());
+    }
+
+    /**
+     * 非阻塞发起默认预算关闭；需要确认资源终态应使用 shutdown(options)。
+     */
+    @Override
+    public void close() {
+        shutdown(RpcShutdownOptions.DEFAULT);
+    }
+
+    private static final class ClientShutdownProgress {
+        private volatile boolean directoriesClosed;
+        private volatile boolean transportClosed;
+        private volatile boolean executorsTerminated;
+        private final AtomicInteger failures = new AtomicInteger();
     }
 
     private record ClientReference(
