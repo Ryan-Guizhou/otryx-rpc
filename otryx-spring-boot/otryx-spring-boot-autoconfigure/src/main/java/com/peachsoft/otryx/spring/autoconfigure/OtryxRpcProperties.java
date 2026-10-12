@@ -889,42 +889,74 @@ public class OtryxRpcProperties implements InitializingBean {
         public TransportAdmission() {
         }
 
-        /** @return 最大已接入连接数 */
+        /**
+         * 返回单个 Provider 实例已接入的最大连接数。
+         *
+         * @return 最大已接入连接数
+         */
         public int getMaxConnections() {
             return maxConnections;
         }
 
-        /** @param value 最大已接入连接数 */
+        /**
+         * 设置单个 Provider 实例已接入的最大连接数。
+         *
+         * @param value 最大已接入连接数
+         */
         public void setMaxConnections(int value) {
             maxConnections = value;
         }
 
-        /** @return 并发 HELLO 握手限额 */
+        /**
+         * 返回并发 OTRYX HELLO 握手容量。
+         *
+         * @return 并发 HELLO 握手限额
+         */
         public int getMaxHandshakes() {
             return maxHandshakes;
         }
 
-        /** @param value 并发 HELLO 握手限额 */
+        /**
+         * 设置并发 OTRYX HELLO 握手容量。
+         *
+         * @param value 并发 HELLO 握手限额
+         */
         public void setMaxHandshakes(int value) {
             maxHandshakes = value;
         }
 
-        /** @return 全局不完整帧预算（字节） */
+        /**
+         * 返回预留的全局不完整帧内存预算。
+         *
+         * @return 全局不完整帧预算（字节）
+         */
         public long getMaxBufferedPartialFrameBytes() {
             return maxBufferedPartialFrameBytes;
         }
 
-        /** @param value 全局不完整帧预算（字节） */
+        /**
+         * 设置预留的全局不完整帧内存预算。
+         *
+         * @param value 全局不完整帧预算（字节）
+         */
         public void setMaxBufferedPartialFrameBytes(long value) {
             maxBufferedPartialFrameBytes = value;
         }
 
-        /** @return 不完整帧最大驻留时间 */
+        /**
+         * 返回预留的不完整帧最大驻留时间。
+         *
+         * @return 不完整帧最大驻留时间
+         */
         public Duration getPartialFrameTimeout() {
             return partialFrameTimeout;
         }
 
-        /** @param value 不完整帧最大驻留时间 */
+        /**
+         * 设置预留的不完整帧最大驻留时间。
+         *
+         * @param value 不完整帧最大驻留时间
+         */
         public void setPartialFrameTimeout(Duration value) {
             partialFrameTimeout = value;
         }
