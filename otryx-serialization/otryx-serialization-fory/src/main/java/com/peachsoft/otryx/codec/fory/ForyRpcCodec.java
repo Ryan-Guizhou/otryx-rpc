@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.codec.fory;
 
+import com.peachsoft.otryx.api.RpcContractTypeModel;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.RpcTypeRegistry;
 import com.peachsoft.otryx.codec.RpcCodec;
@@ -120,7 +121,44 @@ public final class ForyRpcCodec implements RpcCodec {
             RpcMethodDescriptor descriptor) {
         Objects.requireNonNull(descriptor, "descriptor");
         typeRegistry.register(descriptor);
+        ensureAllowedContractTypes(descriptor);
         return new ForyMethodCodec();
+    }
+
+    /**
+     * 在方法绑定时验证声明 DTO 不会绕过应用显式的严格白名单。
+     *
+     * <p>多态 Object 或实际未知子类仍必须由应用的 Fory ClassChecker
+     * 在真实反序列化时验证；这项静态检查不保证运行期动态子类安全。
+     *
+     * @param descriptor RPC 方法的静态类型契约
+     */
+    private void ensureAllowedContractTypes(RpcMethodDescriptor descriptor) {
+        if (securityOptions.mode()
+                != ForyRpcSecurityOptions.Mode.STRICT_ALLOWLIST) {
+            return;
+        }
+        for (Class<?> type :
+                RpcContractTypeModel.applicationClasses(descriptor)) {
+            boolean allowed = securityOptions.allowedClassPatterns().stream()
+                    .anyMatch(rule -> matchesAllowPattern(rule, type.getName()));
+            if (!allowed) {
+                throw new IllegalArgumentException(
+                        "STRICT_ALLOWLIST missing RPC contract DTO: "
+                                + type.getName());
+            }
+        }
+    }
+
+    private static boolean matchesAllowPattern(String rule, String className) {
+        if (rule.equals(className)) {
+            return true;
+        }
+        if (rule.endsWith(".*")) {
+            return className.startsWith(
+                    rule.substring(0, rule.length() - 1));
+        }
+        return false;
     }
 
     private final class ForyMethodCodec

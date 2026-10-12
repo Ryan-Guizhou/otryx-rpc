@@ -45,13 +45,13 @@ public final class RpcTypeRegistry {
     }
 
     /**
-     * 批量注册方法参数与返回类型。
+     * 批量注册方法参数/返回类型及可达 DTO 类型图。
      *
      * @param descriptor RPC 方法描述
      */
     public void register(RpcMethodDescriptor descriptor) {
-        descriptor.parameterTypes().forEach(this::register);
-        register(descriptor.returnType());
+        RpcContractTypeModel.reachableTypes(descriptor)
+                .forEach(this::register);
     }
 
     /**

@@ -2,13 +2,17 @@ package com.peachsoft.otryx.examples;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.generated.RpcGeneratedClients;
 import com.peachsoft.otryx.generated.RpcGeneratedInvocation;
 import com.peachsoft.otryx.generated.RpcGeneratedServers;
+import com.peachsoft.otryx.proxy.jdk.JdkProxyFactory;
 import java.lang.reflect.Method;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -105,6 +109,44 @@ class GeneratedStubTest {
         assertEquals(
                 RpcIds.methodId(method),
                 actualMethodId.get());
+    }
+
+    @Test
+    void generatedAndFallbackMustMatchNullAndExceptionalResults() {
+        var factory = RpcGeneratedClients.find(GreetingService.class)
+                .orElseThrow();
+        RpcGeneratedInvocation invocation = (RpcGeneratedInvocation)
+                java.lang.reflect.Proxy.newProxyInstance(
+                        RpcGeneratedInvocation.class.getClassLoader(),
+                        new Class<?>[] {RpcGeneratedInvocation.class},
+                        (proxy, method, args) -> {
+                            if (!"invoke1".equals(method.getName())) {
+                                throw new AssertionError(
+                                        "Unexpected generated invocation arity");
+                            }
+                            return resultFor(args[1]);
+                        });
+        GreetingService generated = factory.create(invocation);
+        GreetingService fallback = new JdkProxyFactory().create(
+                GreetingService.class,
+                (method, args) -> resultFor(args[0]));
+
+        assertNull(generated.hello(null));
+        assertNull(fallback.hello(null));
+
+        GreetingRequest failing = new GreetingRequest("fail");
+        assertThrows(CompletionException.class,
+                () -> generated.hello(failing));
+        assertThrows(CompletionException.class,
+                () -> fallback.hello(failing));
+    }
+
+    private static CompletionStage<Object> resultFor(Object request) {
+        if (request == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return CompletableFuture.failedFuture(
+                new IllegalArgumentException("Synthetic failure"));
     }
 
     @Test
