@@ -37,7 +37,7 @@ Provider 使用单一单调时钟总预算：先停止接收新请求，批量�
 
 `RpcShutdownReport` 分别报告是否超时、是否全部注销、是否排空、Transport 是否关闭、Executor 是否真正终止、还有多少 Admission Lease 仍被占用及已检测的清理失败数。若外部 SDK 或用户业务不响应中断，框架只能给出有界终态报告，不能承诺强制停止底层工作。Spring 模式的 `otryx.rpc.server.shutdown-timeout` 默认为 25 秒，`SmartLifecycle.stop(Runnable)` 会在报告完成后调用回调；应与 `spring.lifecycle.timeout-per-shutdown-phase` 联合校准。
 
-Consumer 在关闭时将尚未完成的逻辑调用以 unavailable 终态结算，阻止新的引用/调用，停止受其控制的 Deadline 与延迟重试。自行实现的 Transport/Registry 仍需遵守资源所有权和可重入关闭契约；不要以调用 `Future.cancel` 证明远端业务实际停止。
+Consumer 调用 `close()` 会立即拒绝新的引用/调用，并发起非阻塞关闭；若需确定清理结果，可等待 `shutdown(RpcShutdownOptions)` 返回的 `CompletionStage<RpcClientShutdownReport>`。框架后台结算 Pending 逻辑调用、取消 Deadline/延迟重试，将目录关闭与 Transport 关闭分开隔离，避免单个不响应中断的 SPI 阻断其他清理。`RpcClientShutdownReport` 中的 `transportClosed`、`directoriesClosed`、`executorsTerminated` 与 `remainingLogicalCalls` 必须分别解释，不得在超时报告中声称资源已全部释放。自行实现的 Transport/Registry 仍需遵守资源所有权和可重入关闭契约；不要以调用 `Future.cancel` 证明远端业务实际停止。
 
 ## 5. 兼容、回滚与风险边界
 
