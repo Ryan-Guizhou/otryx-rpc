@@ -240,7 +240,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     admissionOptions,
                     methodsByService);
         } catch (RuntimeException error) {
-            state.set(State.CLOSED);
+            state.compareAndSet(State.STARTING, State.CLOSED);
             return CompletableFuture.failedFuture(error);
         }
 
@@ -248,8 +248,15 @@ public final class OtryxRpcServer implements AutoCloseable {
         transport.start(bindEndpoint, this::handle)
                 .whenComplete((endpoint, transportError) -> {
                     if (transportError != null) {
-                        state.set(State.CLOSED);
+                        state.compareAndSet(State.STARTING, State.CLOSED);
                         started.completeExceptionally(transportError);
+                        return;
+                    }
+                    if (state.get() != State.STARTING) {
+                        transport.close();
+                        started.completeExceptionally(
+                                new IllegalStateException(
+                                        "RPC server was closed during startup"));
                         return;
                     }
                     actualEndpoint = endpoint;
@@ -257,7 +264,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     try {
                         published = resolveAdvertisedEndpoint(endpoint);
                     } catch (RuntimeException error) {
-                        state.set(State.CLOSED);
+                        state.compareAndSet(State.STARTING, State.CLOSED);
                         transport.close();
                         started.completeExceptionally(error);
                         return;
@@ -268,7 +275,9 @@ public final class OtryxRpcServer implements AutoCloseable {
                                 if (registryError != null) {
                                     rollbackRegisteredServices(published)
                                             .whenComplete((rollbackIgnored, rollbackError) -> {
-                                                state.set(State.CLOSED);
+                                                state.compareAndSet(
+                                                        State.STARTING,
+                                                        State.CLOSED);
                                                 transport.close();
                                                 if (rollbackError != null) {
                                                     registryError.addSuppressed(rollbackError);
@@ -277,7 +286,23 @@ public final class OtryxRpcServer implements AutoCloseable {
                                             });
                                     return;
                                 }
-                                state.set(State.STARTED);
+                                if (!state.compareAndSet(
+                                        State.STARTING,
+                                        State.STARTED)) {
+                                    rollbackRegisteredServices(published)
+                                            .whenComplete((ignoredRollback, rollbackError) -> {
+                                                if (rollbackError != null) {
+                                                    LOGGER.warn(
+                                                            "RPC startup rollback failed during shutdown: "
+                                                                    + "errorType={}",
+                                                            rollbackError.getClass().getName());
+                                                }
+                                                started.completeExceptionally(
+                                                        new IllegalStateException(
+                                                                "RPC server closed during startup"));
+                                            });
+                                    return;
+                                }
                                 LOGGER.info(
                                         "OTRYX RPC server started: bind={}, advertised={}",
                                         endpoint.authority(),
