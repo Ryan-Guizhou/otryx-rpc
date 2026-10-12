@@ -63,7 +63,7 @@ final class ServiceDirectory implements AutoCloseable {
         return RpcCompatibilityMetadata.compatibility(
                 instance,
                 expectedSchemaFingerprint)
-                != RpcCompatibilityMetadata.Compatibility.INCOMPATIBLE;
+                == RpcCompatibilityMetadata.Compatibility.COMPATIBLE;
     }
 
     ServiceInstance[] snapshot() {

@@ -43,7 +43,7 @@ class ServiceDirectoryTest {
     }
 
     @Test
-    void shouldFilterExplicitSchemaMismatchButKeepLegacyNodes() {
+    void shouldFilterMissingAndMismatchedSchemaMetadata() {
         ServiceKey key = new ServiceKey(
                 "example.Service",
                 "1.0.0",
@@ -61,6 +61,10 @@ class ServiceDirectoryTest {
                     new RpcEndpoint("127.0.0.1", 19091),
                     100,
                     Map.of(
+                            RpcCompatibilityMetadata.PROTOCOL_VERSION, "1",
+                            RpcCompatibilityMetadata.SCHEMA_VERSION,
+                            Integer.toString(
+                                    com.peachsoft.otryx.api.RpcSchemaFingerprint.SCHEMA_VERSION),
                             RpcCompatibilityMetadata.SCHEMA_FINGERPRINT,
                             "expected"));
             ServiceInstance legacy = instance(
@@ -73,6 +77,10 @@ class ServiceDirectoryTest {
                     new RpcEndpoint("127.0.0.1", 19093),
                     100,
                     Map.of(
+                            RpcCompatibilityMetadata.PROTOCOL_VERSION, "1",
+                            RpcCompatibilityMetadata.SCHEMA_VERSION,
+                            Integer.toString(
+                                    com.peachsoft.otryx.api.RpcSchemaFingerprint.SCHEMA_VERSION),
                             RpcCompatibilityMetadata.SCHEMA_FINGERPRINT,
                             "different"));
 
@@ -85,8 +93,7 @@ class ServiceDirectoryTest {
 
             assertArrayEquals(
                     new ServiceInstance[] {
-                            matching,
-                            legacy
+                            matching
                     },
                     directory.snapshot());
         }

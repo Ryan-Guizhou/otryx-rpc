@@ -15,11 +15,11 @@ import org.junit.jupiter.api.Test;
 class RpcCompatibilityMetadataTest {
 
     @Test
-    void shouldAllowLegacyProviderDuringRollingUpgrade() {
+    void shouldRejectProviderWithoutSchemaMetadata() {
         ServiceInstance instance = instance(Map.of());
 
         assertEquals(
-                RpcCompatibilityMetadata.Compatibility.LEGACY,
+                RpcCompatibilityMetadata.Compatibility.INCOMPATIBLE,
                 RpcCompatibilityMetadata.compatibility(
                         instance,
                         "expected"));
@@ -27,9 +27,7 @@ class RpcCompatibilityMetadataTest {
 
     @Test
     void shouldRejectExplicitSchemaMismatch() {
-        ServiceInstance instance = instance(Map.of(
-                RpcCompatibilityMetadata.SCHEMA_FINGERPRINT,
-                "remote"));
+        ServiceInstance instance = instance(validMetadata("remote"));
 
         assertEquals(
                 RpcCompatibilityMetadata.Compatibility.INCOMPATIBLE,
@@ -40,15 +38,43 @@ class RpcCompatibilityMetadataTest {
 
     @Test
     void shouldAcceptMatchingSchema() {
-        ServiceInstance instance = instance(Map.of(
-                RpcCompatibilityMetadata.SCHEMA_FINGERPRINT,
-                "expected"));
+        ServiceInstance instance = instance(validMetadata("expected"));
 
         assertEquals(
                 RpcCompatibilityMetadata.Compatibility.COMPATIBLE,
                 RpcCompatibilityMetadata.compatibility(
                         instance,
                         "expected"));
+    }
+
+    @Test
+    void protocolVersionMismatchMustRejectProvider() {
+        java.util.Map<String, String> metadata =
+                new java.util.HashMap<>(validMetadata("expected"));
+        metadata.put(RpcCompatibilityMetadata.PROTOCOL_VERSION, "999");
+        assertEquals(
+                RpcCompatibilityMetadata.Compatibility.INCOMPATIBLE,
+                RpcCompatibilityMetadata.compatibility(
+                        instance(metadata), "expected"));
+    }
+
+    @Test
+    void schemaVersionMismatchMustRejectProvider() {
+        java.util.Map<String, String> metadata =
+                new java.util.HashMap<>(validMetadata("expected"));
+        metadata.put(RpcCompatibilityMetadata.SCHEMA_VERSION, "999");
+        assertEquals(
+                RpcCompatibilityMetadata.Compatibility.INCOMPATIBLE,
+                RpcCompatibilityMetadata.compatibility(
+                        instance(metadata), "expected"));
+    }
+
+    private static Map<String, String> validMetadata(String fingerprint) {
+        return Map.of(
+                RpcCompatibilityMetadata.PROTOCOL_VERSION, "1",
+                RpcCompatibilityMetadata.SCHEMA_VERSION,
+                Integer.toString(RpcSchemaFingerprint.SCHEMA_VERSION),
+                RpcCompatibilityMetadata.SCHEMA_FINGERPRINT, fingerprint);
     }
 
     private static ServiceInstance instance(

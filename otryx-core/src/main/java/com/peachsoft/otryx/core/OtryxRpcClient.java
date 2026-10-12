@@ -4,6 +4,7 @@ import com.peachsoft.otryx.api.OtryxRpcIdempotent;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcSchemaFingerprint;
 import com.peachsoft.otryx.api.RpcException;
+import com.peachsoft.otryx.api.RpcContractMethods;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.RpcOverloadedException;
 import com.peachsoft.otryx.api.RpcRemoteException;
@@ -1229,7 +1230,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                 RpcClientResilienceOptions resilienceOptions) {
             Map<Method, ClientMethodBinding> methods = new HashMap<>();
             Map<Integer, ClientMethodBinding> methodsById = new HashMap<>();
-            for (Method method : api.getMethods()) {
+            for (Method method : RpcContractMethods.resolve(api)) {
                 RpcMethodDescriptor descriptor = RpcMethodDescriptor.from(key, method);
                 ClientMethodBinding binding = new ClientMethodBinding(
                         descriptor.methodId(),

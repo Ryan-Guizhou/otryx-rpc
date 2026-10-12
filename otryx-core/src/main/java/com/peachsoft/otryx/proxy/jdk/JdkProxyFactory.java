@@ -3,6 +3,7 @@ package com.peachsoft.otryx.proxy.jdk;
 import com.peachsoft.otryx.proxy.ProxyFactory;
 import com.peachsoft.otryx.proxy.RpcInvocation;
 import com.peachsoft.otryx.spi.Extension;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.concurrent.CompletionStage;
@@ -47,12 +48,16 @@ public final class JdkProxyFactory implements ProxyFactory {
             Class<?> serviceType,
             RpcInvocation invocation,
             Method method,
-            Object[] arguments) {
+            Object[] arguments) throws Throwable {
         if (method.getDeclaringClass() == Object.class) {
             return invokeObjectMethod(proxy, serviceType, method, arguments);
         }
 
         Object[] actualArguments = arguments == null ? new Object[0] : arguments;
+        if (method.isDefault()) {
+            // default 方法不是远程契约，必须在本地调用其接口实现。
+            return InvocationHandler.invokeDefault(proxy, method, actualArguments);
+        }
         CompletionStage<Object> stage = invocation.invoke(method, actualArguments);
         if (CompletionStage.class.isAssignableFrom(method.getReturnType())) {
             return stage;

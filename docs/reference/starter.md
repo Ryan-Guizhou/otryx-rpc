@@ -180,6 +180,8 @@ public interface OrderService {
 
 编译器同时生成 `<Service>OtryxRpcClientFactory` 与 `<Service>OtryxRpcServerFactory`。Consumer `refer()` 优先使用 Generated Stub；Provider 注册服务时优先使用 Generated Dispatcher。缺失生成代码时分别回退到配置的 `ProxyFactory` 与 MethodHandle。
 
+生成与反射 fallback 的有效 RPC 方法解析、DTO 结构指纹及 Registry 严格兼容规则，参见 [RPC 契约与 Schema](rpc-contract-schema.md)。
+
 ## 5. 主要配置
 
 - `otryx.rpc.enabled`：总开关。

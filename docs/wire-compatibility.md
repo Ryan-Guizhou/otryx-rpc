@@ -1,6 +1,6 @@
 # OTRYX RPC Wire Compatibility
 
-> 状态：**1.0.x GA Contract / Wire v1 Frozen**  
+> 状态：**1.0.0-SNAPSHOT 契约候选 / Wire v1 固定头格式**  
 > 本文定义 1.0.x 的稳定标识、Schema Fingerprint 与滚动升级语义。
 
 > OTRYX 1.0 保留 Wire v1，但 Java 类型全限定名和 Maven 坐标已迁移；跨 Peach RPC 1.0.x 的 Type ID/Method ID/Schema Fingerprint **不自动兼容**。详见 [迁移指南](migration.md)。
@@ -52,6 +52,9 @@ Fingerprint 输入包括：
 - 排序后的 RPC 方法；
 - 参数泛型类型；
 - 返回泛型类型；
+- 自定义参数化 DTO 的实际类型变量与字段结构；
+- Enum 常量集合；
+- 仅 public abstract 实例方法作为 RPC 方法，default/static/Object 不属于远程方法；
 - Record Component；
 - 普通 DTO 的非 static、非 transient 字段；
 - 父类 DTO 字段。
@@ -88,19 +91,20 @@ Consumer 在 Registry Snapshot 更新时完成兼容过滤，单次 RPC 热路�
 |---|---|---|
 | N | N | 原有 v1 行为 |
 | N | N+1 | 旧 Consumer 忽略新增 Registry Metadata |
-| N+1 | N | Provider 无 Fingerprint，按 LEGACY 保留 |
+| N+1 | N（缺少完整 Schema Metadata） | INCOMPATIBLE，从本地目录剔除 |
+| N+1 | N（Metadata 完整且 Fingerprint 相同） | COMPATIBLE，可以滚动互操作 |
 | N+1 | N+1，相同 Schema | COMPATIBLE，正常路由 |
 | N+1 | N+1，不同 Schema | INCOMPATIBLE，从本地目录剔除 |
 
-因此同一 Wire v1、同一业务契约的滚动升级不要求瞬间同时升级所有节点。
+因此同一 Wire v1、相同指纹规范且完整 Meta 的业务契约可以滚动升级；**不再**为尚未发行的历史快照保留缺失 Fingerprint 的宽松路径。
 
 ## 6. Rollback
 
 N+1 回滚到 N 时：
 
-1. N Consumer 本身不依赖 Fingerprint；
-2. N+1 Consumer 允许缺失 Fingerprint 的 N Provider；
-3. N Provider 恢复后仍可进入 N+1 Consumer 本地目录；
+1. N Consumer 的行为取决于 N 版本自身的兼容策略；
+2. N+1 Consumer **拒绝**缺少 Wire/Schema Version/Fingerprint 的 N Provider；
+3. N Provider 只有发布了完整且一致的元数据才会进入 N+1 本地目录；
 4. Registry revision 继续保证旧 Snapshot 不覆盖新 Snapshot。
 
 如果 N+1 引入了不兼容业务契约，则必须通过新的 ServiceKey.version 隔离，不能依赖 Rollback 自动兼容 Schema。
@@ -124,6 +128,6 @@ HELLO 继续负责 Protocol Version、Codec、Compression、Feature 与 Max Fram
 - Fory Native 仍是 Java Codec；
 - 1.0.x 不提供字段级宽松兼容；
 - 不允许根据 Classpath 顺序分配 Type ID；
-- 缺失 Fingerprint 的旧 Provider 只标记为 LEGACY。
+- 缺失 Fingerprint、协议版本或 Schema 版本的节点均会拒绝；这些安全拒绝不能当作 Registry 故障进行无限重试。
 
 跨语言 Protobuf/IDL 属于 1.1.x+ 战略生态，不阻塞 1.0 GA。
