@@ -496,6 +496,12 @@ public class OtryxRpcServerStartTest {
         }
 
         @Override
+        public CompletionStage<Void> drain(Duration timeout) {
+            // 独立测试排空和实际关闭；默认 SPI 的 drain() 本身会调用 close()。
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
         public void close() {
             closeCount.incrementAndGet();
         }
