@@ -612,7 +612,8 @@ public final class OtryxRpcClient implements AutoCloseable {
                         Duration.ofNanos(remainingNanos))
                 .toCompletableFuture();
         result.whenComplete((ignoredValue, completionError) -> {
-            if (result.isCancelled()
+            if (closed.get()
+                    || result.isCancelled()
                     || unwrap(completionError) instanceof RpcTimeoutException) {
                 transportFuture.cancel(true);
             }
