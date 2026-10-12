@@ -69,6 +69,7 @@ class TransportAdmissionControllerTest {
         int workers = 16;
         CountDownLatch ready = new CountDownLatch(workers);
         CountDownLatch go = new CountDownLatch(1);
+        CountDownLatch attempted = new CountDownLatch(workers);
         CountDownLatch done = new CountDownLatch(workers);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger accepted = new AtomicInteger();
@@ -83,9 +84,10 @@ class TransportAdmissionControllerTest {
                         }
                         TransportAdmissionController.Lease lease =
                                 controller.tryAcquireConnection();
+                        attempted.countDown();
                         if (lease != null) {
                             accepted.incrementAndGet();
-                            release.await(2, TimeUnit.SECONDS);
+                            release.await(5, TimeUnit.SECONDS);
                             lease.close();
                         }
                     } catch (InterruptedException error) {
@@ -97,8 +99,10 @@ class TransportAdmissionControllerTest {
             }
             assertTrue(ready.await(2, TimeUnit.SECONDS));
             go.countDown();
-            // 所有未获取许可的竞争者也可能先退出，等待状态无关紧要。
+            // 所有竞争者完成一次获取尝试之前不得释放最初的租约。
+            assertTrue(attempted.await(2, TimeUnit.SECONDS));
             assertTrue(controller.activeConnections() <= 2);
+            assertTrue(accepted.get() <= 2);
         } finally {
             release.countDown();
             assertTrue(done.await(3, TimeUnit.SECONDS));
