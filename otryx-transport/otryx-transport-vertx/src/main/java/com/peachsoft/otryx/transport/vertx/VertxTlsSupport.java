@@ -4,6 +4,7 @@ import com.peachsoft.otryx.observability.RpcCertificateReloadOutcome;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.observability.RpcSecurityMode;
 import com.peachsoft.otryx.transport.RpcTransportSecurityOptions;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.ClientAuth;
 import io.vertx.core.net.NetClientOptions;
 import io.vertx.core.net.NetServerOptions;
@@ -120,12 +121,35 @@ final class VertxTlsSupport {
         SSLOptions options = new SSLOptions();
         if (!security.certificatePath().isBlank()
                 || !security.privateKeyPath().isBlank()) {
-            options.setKeyCertOptions(keyCertOptions(security));
+            options.setKeyCertOptions(
+                    new PemKeyCertOptions()
+                            .setCertValue(readPemValue(security.certificatePath()))
+                            .setKeyValue(readPemValue(security.privateKeyPath())));
         }
         if (!security.trustCertificatePath().isBlank()) {
-            options.setTrustOptions(trustOptions(security));
+            options.setTrustOptions(
+                    new PemTrustOptions()
+                            .addCertValue(readPemValue(
+                                    security.trustCertificatePath())));
         }
         return options;
+    }
+
+    /**
+     * 将 PEM 材料读取为独立快照，防止 Vert.x 发布新 SSL 配置时再访问路径。
+     *
+     * <p>此方法仅在 TLS 控制面执行器中调用，禁止在 EventLoop 执行文件 IO。
+     *
+     * @param filename 已验证的 PEM 材料路径
+     * @return 文件内容快照
+     */
+    private static Buffer readPemValue(String filename) {
+        try {
+            return Buffer.buffer(Files.readAllBytes(Path.of(filename)));
+        } catch (IOException error) {
+            throw new IllegalArgumentException(
+                    "Failed to read configured TLS material", error);
+        }
     }
 
     /**
