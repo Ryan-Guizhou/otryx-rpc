@@ -59,6 +59,8 @@ final class OtryxRpcStartupDiagnostics {
                 transportAdmission.getMaxHandshakes());
         positive("transport.admission.max-buffered-partial-frame-bytes",
                 transportAdmission.getMaxBufferedPartialFrameBytes());
+        positive("transport.admission.max-buffered-response-bytes",
+                transportAdmission.getMaxBufferedResponseBytes());
         positive("transport.admission.partial-frame-timeout",
                 transportAdmission.getPartialFrameTimeout());
         if (transportAdmission.getPartialFrameTimeout()

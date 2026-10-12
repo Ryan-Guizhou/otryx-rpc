@@ -213,7 +213,8 @@ public class OtryxRpcAutoConfiguration {
                         transport.getAdmission().getMaxConnections(),
                         transport.getAdmission().getMaxHandshakes(),
                         transport.getAdmission().getMaxBufferedPartialFrameBytes(),
-                        transport.getAdmission().getPartialFrameTimeout()));
+                        transport.getAdmission().getPartialFrameTimeout(),
+                        transport.getAdmission().getMaxBufferedResponseBytes()));
     }
 
     /**

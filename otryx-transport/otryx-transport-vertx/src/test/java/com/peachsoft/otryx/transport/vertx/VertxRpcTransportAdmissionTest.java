@@ -330,6 +330,111 @@ class VertxRpcTransportAdmissionTest {
         socket.getOutputStream().flush();
     }
 
+    @Test
+    void largeResponseMustBeRejectedWithoutLeaseLeak() throws Exception {
+        RpcTransportOptions options = responseOptions(4096L);
+        VertxRpcTransportServer server = new VertxRpcTransportServer(options);
+        RpcEndpoint endpoint = server.start(
+                        new RpcEndpoint("127.0.0.1", 0),
+                        (remote, bytes) -> CompletableFuture.completedFuture(
+                                sizedResponse(bytes, 8192)))
+                .toCompletableFuture().get(3, TimeUnit.SECONDS);
+        try (Socket socket = connect(endpoint)) {
+            handshake(socket, options);
+            byte[] request = requestFrame(1);
+            RpcProtocolCodec.writeRequestId(request, 801L);
+            socket.getOutputStream().write(request);
+            socket.getOutputStream().flush();
+            RpcFrame frame = readFrame(socket);
+            assertEquals(RpcMessageType.GO_AWAY, frame.messageType());
+            assertEquals(RpcStatus.OVERLOADED, frame.status());
+            await(() -> server.bufferedResponseBytes() == 0L);
+        } finally {
+            server.close();
+        }
+    }
+
+    @Test
+    void disconnectDuringWriteMustReleaseResponseBudget()
+            throws Exception {
+        RpcTransportOptions options = responseOptions(2L * 1024 * 1024);
+        VertxRpcTransportServer server = new VertxRpcTransportServer(options);
+        java.util.concurrent.CountDownLatch invoked =
+                new java.util.concurrent.CountDownLatch(1);
+        RpcEndpoint endpoint = server.start(
+                        new RpcEndpoint("127.0.0.1", 0),
+                        (remote, bytes) -> {
+                            invoked.countDown();
+                            return CompletableFuture.completedFuture(
+                                    sizedResponse(bytes, 1024 * 1024));
+                        })
+                .toCompletableFuture().get(3, TimeUnit.SECONDS);
+        try (Socket socket = connect(endpoint)) {
+            socket.setReceiveBufferSize(1024);
+            handshake(socket, options);
+            byte[] request = requestFrame(1);
+            RpcProtocolCodec.writeRequestId(request, 802L);
+            socket.getOutputStream().write(request);
+            socket.getOutputStream().flush();
+            assertTrue(invoked.await(2, TimeUnit.SECONDS));
+            // 提前断连时 Socket.closeHandler 和 write Future 均可先到，
+            // 两条路径通过同一个幂等 Lease 归还额度。
+        } finally {
+            await(() -> server.bufferedResponseBytes() == 0L);
+            server.close();
+        }
+    }
+
+    @Test
+    void slowReaderMustNotAccumulateUnboundedResponses()
+            throws Exception {
+        final long capacity = 256L * 1024;
+        RpcTransportOptions options = responseOptions(capacity);
+        VertxRpcTransportServer server = new VertxRpcTransportServer(options);
+        RpcEndpoint endpoint = server.start(
+                        new RpcEndpoint("127.0.0.1", 0),
+                        (remote, bytes) -> CompletableFuture.completedFuture(
+                                sizedResponse(bytes, 128 * 1024)))
+                .toCompletableFuture().get(3, TimeUnit.SECONDS);
+        try (Socket socket = connect(endpoint)) {
+            socket.setReceiveBufferSize(1024);
+            handshake(socket, options);
+            for (int i = 0; i < 64; i++) {
+                byte[] request = requestFrame(1);
+                RpcProtocolCodec.writeRequestId(request, 900L + i);
+                try {
+                    socket.getOutputStream().write(request);
+                    socket.getOutputStream().flush();
+                } catch (java.io.IOException closed) {
+                    break;
+                }
+                assertTrue(server.bufferedResponseBytes() <= capacity);
+            }
+            assertTrue(server.bufferedResponseBytes() <= capacity);
+            // 本回归覆盖框架 Lease，而非 TCP 内核缓冲或 TLS 内存。
+        } finally {
+            await(() -> server.bufferedResponseBytes() == 0L);
+            server.close();
+        }
+    }
+
+    private static RpcTransportOptions responseOptions(long budgetBytes) {
+        return RpcTransportOptions.DEFAULT.withAdmission(
+                new RpcTransportAdmissionOptions(
+                        8, 8, 65536L, Duration.ofSeconds(2), budgetBytes));
+    }
+
+    private static byte[] sizedResponse(byte[] request, int bytes) {
+        var view = RpcProtocolCodec.view(request);
+        return RpcProtocolCodec.encodeResponse(
+                RpcCodecIds.FORY_NATIVE,
+                RpcStatus.OK,
+                view.requestId(),
+                view.serviceId(),
+                view.methodId(),
+                new byte[bytes]);
+    }
+
     private static byte[] requestFrame(int payloadSize) {
         return RpcProtocolCodec.encode(new RpcFrame(
                 RpcMessageType.REQUEST,

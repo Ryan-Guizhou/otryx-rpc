@@ -884,6 +884,8 @@ public class OtryxRpcProperties implements InitializingBean {
                 RpcTransportAdmissionOptions.DEFAULT.maxBufferedPartialFrameBytes();
         private Duration partialFrameTimeout =
                 RpcTransportAdmissionOptions.DEFAULT.partialFrameTimeout();
+        private long maxBufferedResponseBytes =
+                RpcTransportAdmissionOptions.DEFAULT.maxBufferedResponseBytes();
 
         /** 创建准入配置。 */
         public TransportAdmission() {
@@ -959,6 +961,24 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public void setPartialFrameTimeout(Duration value) {
             partialFrameTimeout = value;
+        }
+
+        /**
+         * 返回同 Transport Server 已编码响应的最大待写字节容量。
+         *
+         * @return 最大待写响应字节数
+         */
+        public long getMaxBufferedResponseBytes() {
+            return maxBufferedResponseBytes;
+        }
+
+        /**
+         * 设置同 Transport Server 已编码响应的最大待写字节容量。
+         *
+         * @param value 最大待写响应字节数
+         */
+        public void setMaxBufferedResponseBytes(long value) {
+            maxBufferedResponseBytes = value;
         }
     }
 

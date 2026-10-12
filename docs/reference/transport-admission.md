@@ -13,6 +13,7 @@ Provider 在进入 RPC Core Admission 前需要抵御大量连接与停留在握
 | `maxBufferedPartialFrameBytes` | 67108864 | 已启用：每个 Transport Server 实例的残帧保留字节额度（追加前预留、消费后释放） |
 | `partialFrameTimeout` | 10s | 已启用：残帧首次驻留到期关闭连接；追加小碎片不重置时限 |
 | `maxInflightPerConnection` | 1024 | 已启用：每条 Provider NetSocket 独立跟踪未结束的 REQUEST 数；容量耗尽返回 OVERLOADED，不运行 Handler |
+| `maxBufferedResponseBytes` | 67108864 | U04-B：每 Transport Server 已编码 RESPONSE 待写额度；写 Future 终态和 Socket 关闭后归还 Lease |
 
 这些默认值是配置基线，**不是**经生产负载矩阵证明的最佳容量。请结合目标环境的连接数、容器内存、TLS 模式和业务并发重新验证。
 
@@ -50,6 +51,7 @@ otryx:
         max-handshakes: 1024
         max-buffered-partial-frame-bytes: 67108864
         partial-frame-timeout: 10s
+        max-buffered-response-bytes: 67108864
 ```
 
 程序化构建时可使用 `RpcTransportOptions.DEFAULT.withAdmission(new RpcTransportAdmissionOptions(...))`。所有额度必须为正值，部分帧超时还要求不超过一天；Spring 在绑定阶段拒绝非法配置。
@@ -92,3 +94,10 @@ sequenceDiagram
 **容量模型限制：** 此限额指连接层仍跟踪的请求数。CANCEL 能使连接协议槽位释放，但无法证明远端实际业务已退出；仍在运行的业务由 Core Provider Admission Lease 独立约束。多连接各自拥有独立预算，并非全局 Provider 并发限制。TLS 预握手、FrameAccumulator、写队列和业务资源必须分别建模，不能用这一个值宣传全链路硬容量约束。
 
 验证测试：`serverMustEnforceConnectionInflightLimitAndRecover`、`cancelAndReusedRequestIdMustNotLoseNewInflightSlot`、`oneBusyConnectionMustNotExhaustAnotherConnectionsQuota`。现有重复 ID、CANCEL、Drain 与 TLS 回归继续作为硬门禁。
+
+
+## U04-B：已编码响应的有界保留
+
+Server 在 Handler 完成、检查协商的单帧长度和 Socket 当前写队列之后，为完整编码的 RESPONSE 获取共享 `ResponseByteBudget` 的 Lease。额度不足时立即 OVERLOADED/GO_AWAY；写 Future 终态或 Socket closeHandler 归还（由 Lease 保证重复释放安全）。Drain 必须等 Map 中的请求和本连接的 pending-response Lease 都清空。
+
+这个预算跟踪的是框架响应写入的生命周期，不覆盖 Codec 编码期间峰值、OS/TLS/Netty 缓冲以及对端真正消费速度；成功的 write Future 不能被描述为远端已经接收。

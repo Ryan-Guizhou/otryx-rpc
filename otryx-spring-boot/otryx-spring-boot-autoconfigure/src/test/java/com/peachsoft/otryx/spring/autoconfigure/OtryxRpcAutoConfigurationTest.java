@@ -402,7 +402,8 @@ public class OtryxRpcAutoConfigurationTest {
                         "otryx.rpc.transport.admission.max-connections=2",
                         "otryx.rpc.transport.admission.max-handshakes=1",
                         "otryx.rpc.transport.admission.max-buffered-partial-frame-bytes=65536",
-                        "otryx.rpc.transport.admission.partial-frame-timeout=4s")
+                        "otryx.rpc.transport.admission.partial-frame-timeout=4s",
+                        "otryx.rpc.transport.admission.max-buffered-response-bytes=8192")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     RpcTransportOptions options =
@@ -415,6 +416,8 @@ public class OtryxRpcAutoConfigurationTest {
                             .isEqualTo(65536L);
                     assertThat(options.admission().partialFrameTimeout())
                             .isEqualTo(java.time.Duration.ofSeconds(4));
+                    assertThat(options.admission().maxBufferedResponseBytes())
+                            .isEqualTo(8192L);
                 });
     }
 
@@ -428,6 +431,19 @@ public class OtryxRpcAutoConfigurationTest {
                     assertThat(context.getStartupFailure())
                             .hasStackTraceContaining(
                                     "transport.admission.max-handshakes");
+                });
+    }
+
+    @Test
+    void invalidResponseByteBudgetMustFailAtStartup() {
+        contextRunner
+                .withPropertyValues(
+                        "otryx.rpc.transport.admission.max-buffered-response-bytes=0")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining(
+                                    "transport.admission.max-buffered-response-bytes");
                 });
     }
 

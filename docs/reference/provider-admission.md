@@ -108,15 +108,17 @@ Transport 发出 CANCEL 时，逻辑请求可以立即取消，但已进入业�
 
 **因此“在途请求 Frame 有界”不等于“进程整体内存绝对有界”。** 同时结合已有 `max-frame-bytes`、`max-write-queue-bytes`、Fory 的 payload/对象图保护以及 Consumer `max-inflight-per-connection`，并用实测确定 JVM Heap、GC、Native Memory 余量。PR-E 将进一步处理热路径 Buffer 和分配热点。
 
-## 5.1 U04-A：已编码响应预算基础组件（尚未接入 Transport）
+## 5.1 U04-A/B：已编码响应预算与 Transport 写入保护
 
 Core 现已提供 `com.peachsoft.otryx.transport.ResponseByteBudget` 独立额度控制器。该类用于框架已经完成编码、仍属于框架所有权且即将进行写入的响应 Buffer，**不同于 ProviderAdmissionController 的请求 Frame/实际业务 Lease**。
 
 `tryAcquire(bytes)` 在额度不足时立即返回 `null`，成功时获得独占 `ResponseByteBudget.Lease`；`release()` / `close()` 通过原子状态保证重复释放不会污染其他请求的字节额度。提供 `reservedBytes()` / `capacityBytes()` 供容量观察；并发 CAS 预留不阻塞 EventLoop。
 
-**分阶段状态：** U04-A 只交付 Core 可复用组件及 4096-byte 确定性竞争/超额/重复释放测试。此时 **Vert.x 尚未使用该预算**，不能宣称响应待写字节已经受限。U04-B 会将它绑定到 ServerConnection 的实际写入、失败、取消、Drain 与 Socket 断开路径；U04-C 将补充慢读与对象图容量证据。
+**当前实现：** U04-A 提供 Core 字节预算组件及 4096-byte 确定性并发/幂等测试；U04-B 在每个 Vert.x Provider 实例中新增独立预算，并在完整编码的 RESPONSE 调用 `socket.write()` 前预留。该响应的 Future 成功/失败或 Socket 断连后，通过独占 Lease 幂等归还；Drain 同时等待未结束的响应写入。额度不足则发送 OVERLOADED/GO_AWAY，不在 EventLoop 排队等待。
 
-此额度无法控制 Fory 编码过程中的对象图峰值、Netty/TLS 内存、操作系统 Socket 缓冲或远端消费速度，也不能把写 Future 成功视作对端已读取数据。
+默认 `otryx.rpc.transport.admission.max-buffered-response-bytes=67108864`（64 MiB）是初始基线，**不是由受控生产容量数据验证的推荐值**；程序化 API 是 `RpcTransportAdmissionOptions` 的第五个参数。真实 Socket 回归覆盖小预算的大响应拒绝、断连和慢读下框架 Lease 回收。
+
+此额度无法控制 Fory 编码过程中的对象图峰值、Netty/TLS 内存、操作系统 Socket 缓冲或远端消费速度，也不能把写 Future 成功视作对端已读取数据。慢读/多连接对象图的受控硬件长稳验证仍属 U04-C 的单独证据工作。
 
 ## 6. 验收
 
