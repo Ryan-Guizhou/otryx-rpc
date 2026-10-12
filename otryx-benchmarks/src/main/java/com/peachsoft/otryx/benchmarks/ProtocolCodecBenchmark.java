@@ -30,6 +30,9 @@ import org.openjdk.jmh.annotations.Warmup;
 @Measurement(iterations = 8, time = 1)
 @State(Scope.Thread)
 public class ProtocolCodecBenchmark {
+
+    /** 基准测试元数据中的请求截止时间键。 */
+    static final String DEADLINE_EPOCH_MILLIS_KEY = "deadlineEpochMillis";
     private RpcFrame frame;
     private byte[] encoded;
 
@@ -48,7 +51,7 @@ public class ProtocolCodecBenchmark {
                 1L,
                 1001,
                 2001,
-                Map.of("deadlineEpochMillis", "1800000000000"),
+                Map.of(DEADLINE_EPOCH_MILLIS_KEY, "1800000000000"),
                 new byte[256]);
         encoded = RpcProtocolCodec.encode(frame);
     }

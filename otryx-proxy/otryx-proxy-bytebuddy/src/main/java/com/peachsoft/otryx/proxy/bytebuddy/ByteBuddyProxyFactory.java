@@ -22,8 +22,10 @@ import net.bytebuddy.matcher.ElementMatchers;
  * @Version 1.0.0
  * @CreateTime 2026/9/23 15:46
  */
-@Extension("bytebuddy")
+@Extension(ByteBuddyProxyFactory.EXTENSION_NAME)
 public final class ByteBuddyProxyFactory implements ProxyFactory {
+
+    static final String EXTENSION_NAME = "bytebuddy";
 
     private static final AtomicLong PROXY_SEQUENCE = new AtomicLong();
 

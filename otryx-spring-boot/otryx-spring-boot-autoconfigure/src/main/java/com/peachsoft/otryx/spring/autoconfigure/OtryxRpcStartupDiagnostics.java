@@ -21,6 +21,7 @@ final class OtryxRpcStartupDiagnostics {
     private static final Logger LOGGER =
             LoggerFactory.getLogger(OtryxRpcStartupDiagnostics.class);
     private static final String PREFIX = "otryx.rpc.";
+    private static final String NACOS_REGISTRY_TYPE = "nacos";
 
     private OtryxRpcStartupDiagnostics() {
     }
@@ -34,7 +35,7 @@ final class OtryxRpcStartupDiagnostics {
         OtryxRpcProperties.Registry registry = properties.getRegistry();
         requireText("registry.type", registry.getType());
         positive("registry.lease-ttl-seconds", registry.getLeaseTtlSeconds());
-        if ("nacos".equals(registry.getType())) {
+        if (NACOS_REGISTRY_TYPE.equals(registry.getType())) {
             requireText("registry.nacos.group", registry.getNacos().getGroup());
             requireText("registry.nacos.cluster", registry.getNacos().getCluster());
         }

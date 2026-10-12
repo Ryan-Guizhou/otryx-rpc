@@ -17,8 +17,10 @@ import net.sf.cglib.proxy.MethodInterceptor;
  * @Version 1.0.0
  * @CreateTime 2026/9/23 10:51
  */
-@Extension("cglib")
+@Extension(CglibProxyFactory.EXTENSION_NAME)
 public final class CglibProxyFactory implements ProxyFactory {
+
+    static final String EXTENSION_NAME = "cglib";
 
     /**
      * 创建 CGLIB 代理工厂。

@@ -69,7 +69,7 @@ public class ProtocolEncodeBenchmark {
                 100,
                 200,
                 Map.of(
-                        "deadlineEpochMillis",
+                        ProtocolCodecBenchmark.DEADLINE_EPOCH_MILLIS_KEY,
                         Long.toString(DEADLINE)),
                 payload));
     }

@@ -53,6 +53,14 @@ import java.util.concurrent.atomic.LongAdder;
 public final class PerformanceSoakRunner {
 
     private static final int SAMPLE_CAPACITY = 1_000_000;
+    private static final String SYSTEM_JAVA_VERSION = "java.version";
+    private static final String SYSTEM_JAVA_VM_NAME = "java.vm.name";
+    private static final String SYSTEM_OS_NAME = "os.name";
+    private static final String SYSTEM_OS_ARCH = "os.arch";
+    private static final String ENV_BENCHMARK_COMMIT = "OTRYX_RPC_BENCHMARK_COMMIT";
+    private static final String ENV_GITHUB_SHA = "GITHUB_SHA";
+    private static final String TRANSPORT_EXTENSION = "vertx";
+    private static final String REGISTRY_EXTENSION = "memory";
 
     private PerformanceSoakRunner() {
     }
@@ -81,7 +89,7 @@ public final class PerformanceSoakRunner {
         Registry registry = memoryRegistry();
         RpcTransportFactory transportFactory =
                 ExtensionLoader.getLoader(RpcTransportFactory.class)
-                        .getExtension("vertx");
+                        .getExtension(TRANSPORT_EXTENSION);
         RpcTransportOptions transportOptions =
                 transportOptions(config, observer);
         RpcCodecRegistry codecs = RpcCodecRegistry.fromSpi();
@@ -137,7 +145,7 @@ public final class PerformanceSoakRunner {
 
     private static Registry memoryRegistry() {
         return ExtensionLoader.getLoader(RegistryFactory.class)
-                .getExtension("memory")
+                .getExtension(REGISTRY_EXTENSION)
                 .create(new RegistryOptions(
                         List.of(),
                         "v2d2-soak",
@@ -582,19 +590,19 @@ public final class PerformanceSoakRunner {
             append(
                     json,
                     "javaVersion",
-                    System.getProperty("java.version"),
+                    System.getProperty(SYSTEM_JAVA_VERSION),
                     true);
             append(
                     json,
                     "vmName",
-                    System.getProperty("java.vm.name"),
+                    System.getProperty(SYSTEM_JAVA_VM_NAME),
                     true);
             append(
                     json,
                     "os",
-                    System.getProperty("os.name")
+                    System.getProperty(SYSTEM_OS_NAME)
                             + " "
-                            + System.getProperty("os.arch"),
+                            + System.getProperty(SYSTEM_OS_ARCH),
                     true);
             append(
                     json,
@@ -750,9 +758,9 @@ public final class PerformanceSoakRunner {
 
         private static String benchmarkCommit() {
             String value = System.getenv(
-                    "OTRYX_RPC_BENCHMARK_COMMIT");
+                    ENV_BENCHMARK_COMMIT);
             if (value == null || value.isBlank()) {
-                value = System.getenv("GITHUB_SHA");
+                value = System.getenv(ENV_GITHUB_SHA);
             }
             return value == null || value.isBlank()
                     ? "unknown"

@@ -43,9 +43,38 @@ import org.springframework.context.annotation.Lazy;
  */
 @AutoConfiguration
 @ConditionalOnClass(OtryxRpcClient.class)
-@ConditionalOnProperty(prefix = "otryx.rpc", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(
+        prefix = OtryxRpcAutoConfiguration.PROPERTY_PREFIX,
+        name = OtryxRpcAutoConfiguration.PROPERTY_ENABLED,
+        havingValue = OtryxRpcAutoConfiguration.PROPERTY_ENABLED_VALUE,
+        matchIfMissing = true)
 @EnableConfigurationProperties(OtryxRpcProperties.class)
 public class OtryxRpcAutoConfiguration {
+
+    static final String PROPERTY_PREFIX = "otryx.rpc";
+    static final String PROPERTY_ENABLED = "enabled";
+    static final String PROPERTY_ENABLED_VALUE = "true";
+    private static final String DESTROY_METHOD_CLOSE = "close";
+    private static final String CONFIG_REGISTRY_TYPE = "otryx.rpc.registry.type";
+    private static final String CONFIG_TRANSPORT_TYPE = "otryx.rpc.transport.type";
+    private static final String PROVIDER_OPTION_LEASE_TTL_SECONDS = "leaseTtlSeconds";
+    private static final String PROVIDER_OPTION_NACOS_GROUP = "nacosGroup";
+    private static final String PROVIDER_OPTION_NACOS_CLUSTER = "nacosCluster";
+    private static final String PROVIDER_OPTION_NACOS_USERNAME = "nacosUsername";
+    private static final String PROVIDER_OPTION_NACOS_PASSWORD = "nacosPassword";
+    private static final String PROVIDER_OPTION_CONSUL_TOKEN = "consulToken";
+    private static final String PROVIDER_OPTION_CONSUL_DATACENTER = "consulDatacenter";
+    private static final String PROVIDER_OPTION_CONSUL_ENTERPRISE_NAMESPACE = "consulEnterpriseNamespace";
+    private static final String PROVIDER_OPTION_CONSUL_TTL_SECONDS = "consulTtlSeconds";
+    private static final String PROVIDER_OPTION_CONSUL_HEARTBEAT_SECONDS = "consulHeartbeatSeconds";
+    private static final String PROVIDER_OPTION_CONSUL_POLL_INTERVAL_MILLIS = "consulPollIntervalMillis";
+    private static final String PROVIDER_OPTION_CONSUL_REQUEST_TIMEOUT_MILLIS = "consulRequestTimeoutMillis";
+    private static final String PROVIDER_OPTION_EUREKA_USERNAME = "eurekaUsername";
+    private static final String PROVIDER_OPTION_EUREKA_PASSWORD = "eurekaPassword";
+    private static final String PROVIDER_OPTION_EUREKA_LEASE_SECONDS = "eurekaLeaseSeconds";
+    private static final String PROVIDER_OPTION_EUREKA_HEARTBEAT_SECONDS = "eurekaHeartbeatSeconds";
+    private static final String PROVIDER_OPTION_EUREKA_POLL_INTERVAL_MILLIS = "eurekaPollIntervalMillis";
+    private static final String PROVIDER_OPTION_EUREKA_REQUEST_TIMEOUT_MILLIS = "eurekaRequestTimeoutMillis";
 
     /**
      * 创建 OTRYX RPC 自动配置。
@@ -60,7 +89,7 @@ public class OtryxRpcAutoConfiguration {
      * @param observerProvider Registry 控制面 Observer 提供器
      * @return 注册中心实例
      */
-    @Bean(destroyMethod = "close")
+    @Bean(destroyMethod = DESTROY_METHOD_CLOSE)
     @ConditionalOnMissingBean
     public Registry peachRpcRegistry(
             OtryxRpcProperties properties,
@@ -68,39 +97,39 @@ public class OtryxRpcAutoConfiguration {
         OtryxRpcProperties.Registry registry = properties.getRegistry();
         RegistryFactory factory = requireExtension(
                 RegistryFactory.class,
-                "otryx.rpc.registry.type",
+                CONFIG_REGISTRY_TYPE,
                 registry.getType());
         return factory.create(RegistryOptions.fromCsv(
                 registry.getEndpoints(),
                 registry.getNamespace(),
                 Map.ofEntries(
-                        Map.entry("leaseTtlSeconds",
+                        Map.entry(PROVIDER_OPTION_LEASE_TTL_SECONDS,
                                 Long.toString(registry.getLeaseTtlSeconds())),
-                        Map.entry("nacosGroup", registry.getNacos().getGroup()),
-                        Map.entry("nacosCluster", registry.getNacos().getCluster()),
-                        Map.entry("nacosUsername", registry.getNacos().getUsername()),
-                        Map.entry("nacosPassword", registry.getNacos().getPassword()),
-                        Map.entry("consulToken", registry.getConsul().getToken()),
-                        Map.entry("consulDatacenter", registry.getConsul().getDatacenter()),
-                        Map.entry("consulEnterpriseNamespace",
+                        Map.entry(PROVIDER_OPTION_NACOS_GROUP, registry.getNacos().getGroup()),
+                        Map.entry(PROVIDER_OPTION_NACOS_CLUSTER, registry.getNacos().getCluster()),
+                        Map.entry(PROVIDER_OPTION_NACOS_USERNAME, registry.getNacos().getUsername()),
+                        Map.entry(PROVIDER_OPTION_NACOS_PASSWORD, registry.getNacos().getPassword()),
+                        Map.entry(PROVIDER_OPTION_CONSUL_TOKEN, registry.getConsul().getToken()),
+                        Map.entry(PROVIDER_OPTION_CONSUL_DATACENTER, registry.getConsul().getDatacenter()),
+                        Map.entry(PROVIDER_OPTION_CONSUL_ENTERPRISE_NAMESPACE,
                                 registry.getConsul().getEnterpriseNamespace()),
-                        Map.entry("consulTtlSeconds",
+                        Map.entry(PROVIDER_OPTION_CONSUL_TTL_SECONDS,
                                 Long.toString(registry.getConsul().getTtlSeconds())),
-                        Map.entry("consulHeartbeatSeconds",
+                        Map.entry(PROVIDER_OPTION_CONSUL_HEARTBEAT_SECONDS,
                                 Long.toString(registry.getConsul().getHeartbeatSeconds())),
-                        Map.entry("consulPollIntervalMillis",
+                        Map.entry(PROVIDER_OPTION_CONSUL_POLL_INTERVAL_MILLIS,
                                 Long.toString(registry.getConsul().getPollIntervalMillis())),
-                        Map.entry("consulRequestTimeoutMillis",
+                        Map.entry(PROVIDER_OPTION_CONSUL_REQUEST_TIMEOUT_MILLIS,
                                 Long.toString(registry.getConsul().getRequestTimeoutMillis())),
-                        Map.entry("eurekaUsername", registry.getEureka().getUsername()),
-                        Map.entry("eurekaPassword", registry.getEureka().getPassword()),
-                        Map.entry("eurekaLeaseSeconds",
+                        Map.entry(PROVIDER_OPTION_EUREKA_USERNAME, registry.getEureka().getUsername()),
+                        Map.entry(PROVIDER_OPTION_EUREKA_PASSWORD, registry.getEureka().getPassword()),
+                        Map.entry(PROVIDER_OPTION_EUREKA_LEASE_SECONDS,
                                 Long.toString(registry.getEureka().getLeaseSeconds())),
-                        Map.entry("eurekaHeartbeatSeconds",
+                        Map.entry(PROVIDER_OPTION_EUREKA_HEARTBEAT_SECONDS,
                                 Long.toString(registry.getEureka().getHeartbeatSeconds())),
-                        Map.entry("eurekaPollIntervalMillis",
+                        Map.entry(PROVIDER_OPTION_EUREKA_POLL_INTERVAL_MILLIS,
                                 Long.toString(registry.getEureka().getPollIntervalMillis())),
-                        Map.entry("eurekaRequestTimeoutMillis",
+                        Map.entry(PROVIDER_OPTION_EUREKA_REQUEST_TIMEOUT_MILLIS,
                                 Long.toString(registry.getEureka().getRequestTimeoutMillis()))),
                 RpcObserver.composite(
                         observerProvider.orderedStream().toList())));
@@ -137,7 +166,7 @@ public class OtryxRpcAutoConfiguration {
     public RpcTransportFactory peachRpcTransportFactory(OtryxRpcProperties properties) {
         return requireExtension(
                 RpcTransportFactory.class,
-                "otryx.rpc.transport.type",
+                CONFIG_TRANSPORT_TYPE,
                 properties.getTransport().getType());
     }
 
@@ -296,7 +325,7 @@ public class OtryxRpcAutoConfiguration {
      * @param properties OTRYX RPC 配置
      * @return 运行时协调器
      */
-    @Bean(destroyMethod = "close")
+    @Bean(destroyMethod = DESTROY_METHOD_CLOSE)
     @ConditionalOnMissingBean
     public OtryxRpcRuntimeCoordinator peachRpcRuntimeCoordinator(
             Registry registry,

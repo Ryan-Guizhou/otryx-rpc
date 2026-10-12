@@ -34,6 +34,9 @@ import java.util.concurrent.atomic.LongAdder;
 public final class ComparisonHarness {
 
     private static final int SAMPLE_LIMIT = 1_000_000;
+    private static final String SYSTEM_JAVA_VERSION = "java.version";
+    private static final String SYSTEM_OS_NAME = "os.name";
+    private static final String SYSTEM_OS_ARCH = "os.arch";
 
     private ComparisonHarness() {
     }
@@ -209,9 +212,9 @@ public final class ComparisonHarness {
         report.put("server_cpu_cores", null);
         report.put("server_gc_millis_delta", null);
         report.put("connection_count", null);
-        report.put("java_version", System.getProperty("java.version"));
-        report.put("os_name", System.getProperty("os.name"));
-        report.put("os_arch", System.getProperty("os.arch"));
+        report.put("java_version", System.getProperty(SYSTEM_JAVA_VERSION));
+        report.put("os_name", System.getProperty(SYSTEM_OS_NAME));
+        report.put("os_arch", System.getProperty(SYSTEM_OS_ARCH));
         Map<String, Long> failures = new TreeMap<>();
         errorTypes.forEach((name, value) -> failures.put(name, value.sum()));
         report.put("errors_by_type", failures);

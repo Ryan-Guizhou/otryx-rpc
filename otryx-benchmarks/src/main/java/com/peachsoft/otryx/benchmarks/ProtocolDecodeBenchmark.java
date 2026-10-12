@@ -49,7 +49,7 @@ public class ProtocolDecodeBenchmark {
                 100,
                 200,
                 Map.of(
-                        "deadlineEpochMillis",
+                        ProtocolCodecBenchmark.DEADLINE_EPOCH_MILLIS_KEY,
                         "2000000000000"),
                 new byte[payloadSize]));
     }
@@ -66,7 +66,7 @@ public class ProtocolDecodeBenchmark {
                 + frame.payload().length
                 + Long.parseLong(
                         frame.metadata().get(
-                                "deadlineEpochMillis"));
+                                ProtocolCodecBenchmark.DEADLINE_EPOCH_MILLIS_KEY));
     }
 
     /**

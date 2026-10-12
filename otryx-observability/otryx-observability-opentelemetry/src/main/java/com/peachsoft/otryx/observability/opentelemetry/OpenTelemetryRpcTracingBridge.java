@@ -35,6 +35,13 @@ public final class OpenTelemetryRpcTracingBridge
 
     private static final String INSTRUMENTATION_NAME =
             "com.peachsoft.otryx";
+    private static final String RPC_SYSTEM_NAME = "otryx";
+    private static final String ATTRIBUTE_RPC_SYSTEM = "rpc.system";
+    private static final String ATTRIBUTE_RPC_SERVICE = "rpc.service";
+    private static final String ATTRIBUTE_RPC_SERVICE_ID = "rpc.service.id";
+    private static final String ATTRIBUTE_RPC_METHOD_ID = "rpc.method.id";
+    private static final String ATTRIBUTE_RPC_STATUS = "rpc.status";
+    private static final String ATTRIBUTE_ERROR_TYPE = "error.type";
     private static final TextMapGetter<Map<String, String>>
             GETTER = new TextMapGetter<>() {
                 @Override
@@ -83,13 +90,13 @@ public final class OpenTelemetryRpcTracingBridge
                 .setParent(parent)
                 .setSpanKind(SpanKind.CLIENT)
                 .setAttribute(
-                        "rpc.system",
-                        "otryx")
+                        ATTRIBUTE_RPC_SYSTEM,
+                        RPC_SYSTEM_NAME)
                 .setAttribute(
-                        "rpc.service",
+                        ATTRIBUTE_RPC_SERVICE,
                         serviceKey.canonicalName())
                 .setAttribute(
-                        "rpc.method.id",
+                        ATTRIBUTE_RPC_METHOD_ID,
                         methodId)
                 .startSpan();
         Context context = parent.with(span);
@@ -119,13 +126,13 @@ public final class OpenTelemetryRpcTracingBridge
                 .setParent(parent)
                 .setSpanKind(SpanKind.SERVER)
                 .setAttribute(
-                        "rpc.system",
-                        "otryx")
+                        ATTRIBUTE_RPC_SYSTEM,
+                        RPC_SYSTEM_NAME)
                 .setAttribute(
-                        "rpc.service.id",
+                        ATTRIBUTE_RPC_SERVICE_ID,
                         serviceId)
                 .setAttribute(
-                        "rpc.method.id",
+                        ATTRIBUTE_RPC_METHOD_ID,
                         methodId)
                 .startSpan();
         return new OtelTraceContext(
@@ -171,14 +178,14 @@ public final class OpenTelemetryRpcTracingBridge
                 return;
             }
             span.setAttribute(
-                    "rpc.status",
+                    ATTRIBUTE_RPC_STATUS,
                     status.name());
             if (error != null) {
                 // Untrusted business exception messages / stack traces may
                 // contain raw request payloads and credentials. The safe
                 // default only exports the exception type.
                 span.setAttribute(
-                        "error.type",
+                        ATTRIBUTE_ERROR_TYPE,
                         error.getClass().getName());
                 span.setStatus(StatusCode.ERROR);
             } else if (status != RpcStatus.OK) {

@@ -13,8 +13,10 @@ import com.peachsoft.otryx.transport.RpcTransportServer;
  * @Version 1.0.0
  * @CreateTime 2026/9/23 10:51
  */
-@Extension("vertx")
+@Extension(VertxRpcTransportFactory.EXTENSION_NAME)
 public final class VertxRpcTransportFactory implements RpcTransportFactory {
+
+    static final String EXTENSION_NAME = "vertx";
 
     /**
      * 创建 Vert.x TCP 传输工厂。

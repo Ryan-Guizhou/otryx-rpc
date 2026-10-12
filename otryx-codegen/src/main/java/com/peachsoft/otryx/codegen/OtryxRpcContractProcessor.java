@@ -42,6 +42,11 @@ import javax.tools.JavaFileObject;
 @SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class OtryxRpcContractProcessor extends AbstractProcessor {
 
+    private static final String COMPLETION_STAGE_TYPE =
+            "java.util.concurrent.CompletionStage";
+    private static final String COMPLETABLE_FUTURE_TYPE =
+            "java.util.concurrent.CompletableFuture";
+
     /** 创建 OTRYX RPC 契约处理器。 */
     public OtryxRpcContractProcessor() {
     }
@@ -270,7 +275,7 @@ public final class OtryxRpcContractProcessor extends AbstractProcessor {
                     .append("        }\n\n");
             return;
         }
-        if ("java.util.concurrent.CompletionStage".equals(erasedReturn)) {
+        if (COMPLETION_STAGE_TYPE.equals(erasedReturn)) {
             source.append("            return (")
                     .append(returnType)
                     .append(") (java.util.concurrent.CompletionStage<?>) ")
@@ -279,7 +284,7 @@ public final class OtryxRpcContractProcessor extends AbstractProcessor {
                     .append("        }\n\n");
             return;
         }
-        if ("java.util.concurrent.CompletableFuture".equals(erasedReturn)) {
+        if (COMPLETABLE_FUTURE_TYPE.equals(erasedReturn)) {
             source.append("            return (")
                     .append(returnType)
                     .append(") (java.util.concurrent.CompletableFuture<?>) ")

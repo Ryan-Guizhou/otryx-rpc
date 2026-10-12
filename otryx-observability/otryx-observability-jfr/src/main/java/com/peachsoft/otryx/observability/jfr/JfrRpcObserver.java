@@ -21,6 +21,8 @@ import java.time.Duration;
  * @CreateTime 2026/9/29 15:00
  */
 public final class JfrRpcObserver implements RpcObserver {
+    private static final String TLS_REASON_PREFIX = "tls:";
+
 
     private final long slowThresholdNanos;
 
@@ -135,7 +137,7 @@ public final class JfrRpcObserver implements RpcObserver {
             return;
         }
         recovery(
-                "tls:" + mode.name(),
+                TLS_REASON_PREFIX + mode.name(),
                 "handshake",
                 error == null ? "SUCCESS" : "FAILURE",
                 durationNanos);
@@ -148,7 +150,7 @@ public final class JfrRpcObserver implements RpcObserver {
             long durationNanos,
             Throwable error) {
         recovery(
-                "tls:" + mode.name(),
+                TLS_REASON_PREFIX + mode.name(),
                 "certificate-reload",
                 outcome.name(),
                 durationNanos);

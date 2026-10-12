@@ -26,8 +26,10 @@ import org.apache.fory.ThreadSafeFory;
  * @Version 1.0.0
  * @CreateTime 2026/9/23 10:51
  */
-@Extension("fory")
+@Extension(ForyRpcCodec.EXTENSION_NAME)
 public final class ForyRpcCodec implements RpcCodec {
+
+    static final String EXTENSION_NAME = "fory";
 
     // Object[0] 不可变，无需在每次无参 RPC 上重新创建相同的临时数组。
     // 仍由 Fory 编码标准 Object[] Payload，完全不修改 Wire v1。

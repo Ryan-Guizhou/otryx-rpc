@@ -35,6 +35,48 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class MicrometerRpcObserver implements RpcObserver {
 
+    private static final String METRIC_CONNECTION_ACTIVE = "otryx.rpc.connection.active";
+    private static final String METRIC_CLIENT_INFLIGHT = "otryx.rpc.client.inflight";
+    private static final String METRIC_SERVER_INFLIGHT = "otryx.rpc.server.inflight";
+    private static final String METRIC_SERVER_INFLIGHT_BYTES = "otryx.rpc.server.inflight.bytes";
+    private static final String METRIC_CONNECTION_ESTABLISHED = "otryx.rpc.connection.established";
+    private static final String METRIC_CONNECTION_RECONNECTS = "otryx.rpc.connection.reconnects";
+    private static final String METRIC_CONNECTION_HEARTBEAT_TIMEOUTS = "otryx.rpc.connection.heartbeat.timeouts";
+    private static final String METRIC_CONNECTION_CLOSED = "otryx.rpc.connection.closed";
+    private static final String METRIC_REGISTRY_OPERATIONS = "otryx.rpc.registry.operations";
+    private static final String METRIC_REGISTRY_FAILURES = "otryx.rpc.registry.failures";
+    private static final String METRIC_REGISTRY_RECOVERIES = "otryx.rpc.registry.recoveries";
+    private static final String METRIC_TLS_HANDSHAKE = "otryx.rpc.tls.handshake";
+    private static final String METRIC_TLS_HANDSHAKE_FAILURES = "otryx.rpc.tls.handshake.failures";
+    private static final String METRIC_TLS_CERTIFICATE_RELOAD = "otryx.rpc.tls.certificate.reload";
+    private static final String METRIC_TLS_CERTIFICATE_EXPIRY_WARNINGS = "otryx.rpc.tls.certificate.expiry.warnings";
+    private static final String METRIC_CLIENT_ATTEMPTS = "otryx.rpc.client.attempts";
+    private static final String METRIC_CLIENT_FAILURES = "otryx.rpc.client.failures";
+    private static final String METRIC_CLIENT_CALLS = "otryx.rpc.client.calls";
+    private static final String METRIC_CLIENT_TIMEOUTS = "otryx.rpc.client.timeouts";
+    private static final String METRIC_CLIENT_RETRY_EXHAUSTED = "otryx.rpc.client.retry.exhausted";
+    private static final String METRIC_CLIENT_CIRCUIT_REJECTED = "otryx.rpc.client.circuit.rejected";
+    private static final String METRIC_CLIENT_OUTLIER_EJECTED = "otryx.rpc.client.outlier.ejected";
+    private static final String METRIC_CLIENT_RETRIES = "otryx.rpc.client.retries";
+    private static final String METRIC_SERVER_ADMISSION_REJECTED = "otryx.rpc.server.admission.rejected";
+    private static final String METRIC_SERVER_INVOCATIONS = "otryx.rpc.server.invocations";
+    private static final String METRIC_SERVER_FAILURES = "otryx.rpc.server.failures";
+    private static final String METRIC_SERVER_OVERLOADED = "otryx.rpc.server.overloaded";
+    private static final String METRIC_CLIENT_CIRCUIT_STATE = "otryx.rpc.client.circuit.state";
+    private static final String TAG_REGISTRY = "registry";
+    private static final String TAG_ROLE = "role";
+    private static final String TAG_REASON = "reason";
+    private static final String TAG_OPERATION = "operation";
+    private static final String TAG_OUTCOME = "outcome";
+    private static final String TAG_ACTION = "action";
+    private static final String TAG_MODE = "mode";
+    private static final String TAG_STATUS = "status";
+    private static final String TAG_CATEGORY = "category";
+    private static final String TAG_STATE = "state";
+    private static final String BASE_UNIT_BYTES = "bytes";
+    private static final String OUTCOME_SUCCESS = "SUCCESS";
+    private static final String OUTCOME_FAILURE = "FAILURE";
+
     private final MeterRegistry registry;
     private final AtomicInteger activeConnections =
             new AtomicInteger();
@@ -63,28 +105,28 @@ public final class MicrometerRpcObserver implements RpcObserver {
                 registry,
                 "registry");
         Gauge.builder(
-                        "otryx.rpc.connection.active",
+                        METRIC_CONNECTION_ACTIVE,
                         activeConnections,
                         AtomicInteger::get)
                 .description("Active OTRYX RPC transport connections")
                 .register(registry);
         Gauge.builder(
-                        "otryx.rpc.client.inflight",
+                        METRIC_CLIENT_INFLIGHT,
                         clientInflight,
                         AtomicInteger::get)
                 .description("Inflight logical OTRYX RPC client calls")
                 .register(registry);
         Gauge.builder(
-                        "otryx.rpc.server.inflight",
+                        METRIC_SERVER_INFLIGHT,
                         serverInflight,
                         AtomicInteger::get)
                 .description("Inflight OTRYX RPC provider invocations")
                 .register(registry);
         Gauge.builder(
-                        "otryx.rpc.server.inflight.bytes",
+                        METRIC_SERVER_INFLIGHT_BYTES,
                         serverInflightBytes,
                         AtomicLong::get)
-                .baseUnit("bytes")
+                .baseUnit(BASE_UNIT_BYTES)
                 .description("Accepted OTRYX RPC provider request Frame bytes")
                 .register(registry);
         registerCircuitGauge(
@@ -105,8 +147,8 @@ public final class MicrometerRpcObserver implements RpcObserver {
             long durationNanos) {
         activeConnections.incrementAndGet();
         timer(
-                "otryx.rpc.connection.established",
-                "role",
+                METRIC_CONNECTION_ESTABLISHED,
+                TAG_ROLE,
                 role.name())
                 .record(
                         Duration.ofNanos(
@@ -119,7 +161,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
             int attempt,
             long delayMillis) {
         registry.counter(
-                "otryx.rpc.connection.reconnects")
+                METRIC_CONNECTION_RECONNECTS)
                 .increment();
     }
 
@@ -129,8 +171,8 @@ public final class MicrometerRpcObserver implements RpcObserver {
             RpcEndpoint endpoint,
             long idleNanos) {
         registry.counter(
-                        "otryx.rpc.connection.heartbeat.timeouts",
-                        "role",
+                        METRIC_CONNECTION_HEARTBEAT_TIMEOUTS,
+                        TAG_ROLE,
                         role.name())
                 .increment();
     }
@@ -144,10 +186,10 @@ public final class MicrometerRpcObserver implements RpcObserver {
         activeConnections.updateAndGet(
                 current -> Math.max(0, current - 1));
         registry.counter(
-                        "otryx.rpc.connection.closed",
-                        "role",
+                        METRIC_CONNECTION_CLOSED,
+                        TAG_ROLE,
                         role.name(),
-                        "reason",
+                        TAG_REASON,
                         reason.name())
                 .increment();
     }
@@ -159,21 +201,21 @@ public final class MicrometerRpcObserver implements RpcObserver {
             long durationNanos,
             Throwable error) {
         timer(
-                "otryx.rpc.registry.operations",
-                "registry",
+                METRIC_REGISTRY_OPERATIONS,
+                TAG_REGISTRY,
                 safe(registryType),
-                "operation",
+                TAG_OPERATION,
                 operation.name(),
-                "outcome",
+                TAG_OUTCOME,
                 outcome(error))
                 .record(Duration.ofNanos(
                         Math.max(0L, durationNanos)));
         if (error != null) {
             registry.counter(
-                            "otryx.rpc.registry.failures",
-                            "registry",
+                            METRIC_REGISTRY_FAILURES,
+                            TAG_REGISTRY,
                             safe(registryType),
-                            "operation",
+                            TAG_OPERATION,
                             operation.name())
                     .increment();
         }
@@ -186,12 +228,12 @@ public final class MicrometerRpcObserver implements RpcObserver {
             long durationNanos,
             Throwable error) {
         timer(
-                "otryx.rpc.registry.recoveries",
-                "registry",
+                METRIC_REGISTRY_RECOVERIES,
+                TAG_REGISTRY,
                 safe(registryType),
-                "action",
+                TAG_ACTION,
                 action.name(),
-                "outcome",
+                TAG_OUTCOME,
                 outcome(error))
                 .record(Duration.ofNanos(
                         Math.max(0L, durationNanos)));
@@ -205,21 +247,21 @@ public final class MicrometerRpcObserver implements RpcObserver {
             long durationNanos,
             Throwable error) {
         timer(
-                "otryx.rpc.tls.handshake",
-                "role",
+                METRIC_TLS_HANDSHAKE,
+                TAG_ROLE,
                 role.name(),
-                "mode",
+                TAG_MODE,
                 mode.name(),
-                "outcome",
+                TAG_OUTCOME,
                 outcome(error))
                 .record(Duration.ofNanos(
                         Math.max(0L, durationNanos)));
         if (error != null) {
             registry.counter(
-                            "otryx.rpc.tls.handshake.failures",
-                            "role",
+                            METRIC_TLS_HANDSHAKE_FAILURES,
+                            TAG_ROLE,
                             role.name(),
-                            "mode",
+                            TAG_MODE,
                             mode.name())
                     .increment();
         }
@@ -232,10 +274,10 @@ public final class MicrometerRpcObserver implements RpcObserver {
             long durationNanos,
             Throwable error) {
         registry.counter(
-                        "otryx.rpc.tls.certificate.reload",
-                        "mode",
+                        METRIC_TLS_CERTIFICATE_RELOAD,
+                        TAG_MODE,
                         mode.name(),
-                        "outcome",
+                        TAG_OUTCOME,
                         outcome.name())
                 .increment();
     }
@@ -245,8 +287,8 @@ public final class MicrometerRpcObserver implements RpcObserver {
             RpcSecurityMode mode,
             long remainingMillis) {
         registry.counter(
-                        "otryx.rpc.tls.certificate.expiry.warnings",
-                        "mode",
+                        METRIC_TLS_CERTIFICATE_EXPIRY_WARNINGS,
+                        TAG_MODE,
                         mode.name())
                 .increment();
     }
@@ -261,10 +303,10 @@ public final class MicrometerRpcObserver implements RpcObserver {
             RpcStatus status,
             Throwable error) {
         timer(
-                "otryx.rpc.client.attempts",
-                "status",
+                METRIC_CLIENT_ATTEMPTS,
+                TAG_STATUS,
                 status.name(),
-                "category",
+                TAG_CATEGORY,
                 RpcFailureClassifier.classify(
                                 status,
                                 error)
@@ -273,8 +315,8 @@ public final class MicrometerRpcObserver implements RpcObserver {
                         Math.max(0L, durationNanos)));
         if (error != null || status != RpcStatus.OK) {
             registry.counter(
-                            "otryx.rpc.client.failures",
-                            "status",
+                            METRIC_CLIENT_FAILURES,
+                            TAG_STATUS,
                             status.name())
                     .increment();
         }
@@ -328,10 +370,10 @@ public final class MicrometerRpcObserver implements RpcObserver {
             RpcStatus status,
             Throwable error) {
         timer(
-                "otryx.rpc.client.calls",
-                "status",
+                METRIC_CLIENT_CALLS,
+                TAG_STATUS,
                 status.name(),
-                "category",
+                TAG_CATEGORY,
                 RpcFailureClassifier.classify(
                                 status,
                                 error)
@@ -340,7 +382,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
                         Math.max(0L, durationNanos)));
         if (status == RpcStatus.DEADLINE_EXCEEDED) {
             registry.counter(
-                    "otryx.rpc.client.timeouts")
+                    METRIC_CLIENT_TIMEOUTS)
                     .increment();
         }
     }
@@ -352,8 +394,8 @@ public final class MicrometerRpcObserver implements RpcObserver {
             RpcRetryExhaustionReason reason,
             Throwable cause) {
         registry.counter(
-                        "otryx.rpc.client.retry.exhausted",
-                        "reason",
+                        METRIC_CLIENT_RETRY_EXHAUSTED,
+                        TAG_REASON,
                         reason.name())
                 .increment();
     }
@@ -363,7 +405,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
             ServiceKey serviceKey,
             int methodId) {
         registry.counter(
-                "otryx.rpc.client.circuit.rejected")
+                METRIC_CLIENT_CIRCUIT_REJECTED)
                 .increment();
     }
 
@@ -373,7 +415,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
             RpcEndpoint endpoint,
             long ejectionMillis) {
         registry.counter(
-                "otryx.rpc.client.outlier.ejected")
+                METRIC_CLIENT_OUTLIER_EJECTED)
                 .increment();
     }
 
@@ -385,7 +427,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
             long delayMillis,
             Throwable cause) {
         registry.counter(
-                        "otryx.rpc.client.retries")
+                        METRIC_CLIENT_RETRIES)
                 .increment();
     }
 
@@ -395,8 +437,8 @@ public final class MicrometerRpcObserver implements RpcObserver {
             int methodId,
             String reason) {
         registry.counter(
-                        "otryx.rpc.server.admission.rejected",
-                        "reason",
+                        METRIC_SERVER_ADMISSION_REJECTED,
+                        TAG_REASON,
                         safe(reason))
                 .increment();
     }
@@ -410,12 +452,12 @@ public final class MicrometerRpcObserver implements RpcObserver {
             RpcStatus status,
             Throwable error) {
         timer(
-                "otryx.rpc.server.invocations",
+                METRIC_SERVER_INVOCATIONS,
                 "execution",
                 executionMode.name(),
-                "status",
+                TAG_STATUS,
                 status.name(),
-                "category",
+                TAG_CATEGORY,
                 RpcFailureClassifier.classify(
                                 status,
                                 error)
@@ -424,14 +466,14 @@ public final class MicrometerRpcObserver implements RpcObserver {
                         Math.max(0L, durationNanos)));
         if (error != null || status != RpcStatus.OK) {
             registry.counter(
-                            "otryx.rpc.server.failures",
-                            "status",
+                            METRIC_SERVER_FAILURES,
+                            TAG_STATUS,
                             status.name())
                     .increment();
         }
         if (status == RpcStatus.OVERLOADED) {
             registry.counter(
-                            "otryx.rpc.server.overloaded",
+                            METRIC_SERVER_OVERLOADED,
                             "execution",
                             executionMode.name())
                     .increment();
@@ -442,10 +484,10 @@ public final class MicrometerRpcObserver implements RpcObserver {
             RpcCircuitState state,
             AtomicInteger value) {
         Gauge.builder(
-                        "otryx.rpc.client.circuit.state",
+                        METRIC_CLIENT_CIRCUIT_STATE,
                         value,
                         AtomicInteger::get)
-                .tag("state", state.name())
+                .tag(TAG_STATE, state.name())
                 .description(
                         "OTRYX RPC client method circuit breakers by state")
                 .register(registry);
@@ -467,7 +509,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
     }
 
     private static String outcome(Throwable error) {
-        return error == null ? "SUCCESS" : "FAILURE";
+        return error == null ? OUTCOME_SUCCESS : OUTCOME_FAILURE;
     }
 
     private static String safe(String value) {
