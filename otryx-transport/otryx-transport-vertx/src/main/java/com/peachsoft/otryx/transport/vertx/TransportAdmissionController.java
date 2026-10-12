@@ -4,6 +4,7 @@ import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Vert.x Provider 多 EventLoop 共享的连接与协议握手准入控制器。
@@ -24,6 +25,7 @@ final class TransportAdmissionController {
     private final RpcTransportAdmissionOptions options;
     private final AtomicInteger connections = new AtomicInteger();
     private final AtomicInteger handshakes = new AtomicInteger();
+    private final AtomicLong bufferedPartialBytes = new AtomicLong();
 
     /** 以进程内 Transport 实例级额度创建控制器。 */
     TransportAdmissionController(RpcTransportAdmissionOptions options) {
@@ -38,6 +40,59 @@ final class TransportAdmissionController {
     /** 尝试预留正在进行的 OTRYX HELLO 握手；耗尽时立即返回 null。 */
     Lease tryAcquireHandshake() {
         return tryAcquire(handshakes, options.maxHandshakes());
+    }
+
+    /**
+     * 在对不完整帧进行追加和分配之前原子预留字节预算。
+     *
+     * @param bytes 需要额外保留的字节
+     * @return 预留成功；容量耗尽时立即返回 false
+     */
+    boolean tryReservePartialBytes(long bytes) {
+        if (bytes < 0L) {
+            throw new IllegalArgumentException("Reserved bytes cannot be negative");
+        }
+        if (bytes == 0L) {
+            return true;
+        }
+        long limit = options.maxBufferedPartialFrameBytes();
+        for (;;) {
+            long used = bufferedPartialBytes.get();
+            if (bytes > limit - used) {
+                return false;
+            }
+            if (bufferedPartialBytes.compareAndSet(used, used + bytes)) {
+                return true;
+            }
+        }
+    }
+
+    /**
+     * 由唯一的 FrameAccumulator 所有者归还保留的字节。
+     *
+     * @param bytes 释放字节数
+     */
+    void releasePartialBytes(long bytes) {
+        if (bytes < 0L) {
+            throw new IllegalArgumentException("Released bytes cannot be negative");
+        }
+        if (bytes == 0L) {
+            return;
+        }
+        for (;;) {
+            long used = bufferedPartialBytes.get();
+            if (used < bytes) {
+                throw new IllegalStateException("Partial-frame budget released too often");
+            }
+            if (bufferedPartialBytes.compareAndSet(used, used - bytes)) {
+                return;
+            }
+        }
+    }
+
+    /** 返回当前不完整帧已保留的逻辑字节数，仅用于包内监控与测试。 */
+    long bufferedPartialBytes() {
+        return bufferedPartialBytes.get();
     }
 
     /** 返回连接数，供包内的受控测试核验。 */
