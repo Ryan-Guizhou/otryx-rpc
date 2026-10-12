@@ -1058,12 +1058,13 @@ public final class OtryxRpcClient implements AutoCloseable {
         if (current != null) {
             return current;
         }
+        // 先线性化停收，再初始化共享关闭 Stage，避免关闭启动瞬间接纳新调用。
+        closed.set(true);
         CompletableFuture<RpcClientShutdownReport> created =
                 new CompletableFuture<>();
         if (!shutdownResult.compareAndSet(null, created)) {
             return shutdownResult.get();
         }
-        closed.set(true);
         long startedAtNanos = System.nanoTime();
         long deadlineNanos =
                 startedAtNanos + options.totalTimeout().toNanos();
