@@ -51,14 +51,18 @@ final class OtryxRpcStartupDiagnostics {
                 transport.getConnectionsPerEndpoint());
         positive("transport.connect-timeout", transport.getConnectTimeout());
         positive("transport.handshake-timeout", transport.getHandshakeTimeout());
-        OtryxRpcProperties.TransportAdmission admission = transport.getAdmission();
-        positive("transport.admission.max-connections", admission.getMaxConnections());
-        positive("transport.admission.max-handshakes", admission.getMaxHandshakes());
+        OtryxRpcProperties.TransportAdmission transportAdmission =
+                transport.getAdmission();
+        positive("transport.admission.max-connections",
+                transportAdmission.getMaxConnections());
+        positive("transport.admission.max-handshakes",
+                transportAdmission.getMaxHandshakes());
         positive("transport.admission.max-buffered-partial-frame-bytes",
-                admission.getMaxBufferedPartialFrameBytes());
+                transportAdmission.getMaxBufferedPartialFrameBytes());
         positive("transport.admission.partial-frame-timeout",
-                admission.getPartialFrameTimeout());
-        if (admission.getPartialFrameTimeout().compareTo(Duration.ofDays(1)) > 0) {
+                transportAdmission.getPartialFrameTimeout());
+        if (transportAdmission.getPartialFrameTimeout()
+                .compareTo(Duration.ofDays(1)) > 0) {
             throw invalid("transport.admission.partial-frame-timeout",
                     "must not exceed one day");
         }
