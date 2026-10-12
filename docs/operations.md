@@ -31,7 +31,15 @@ bash scripts/run_example_process_e2e.sh
 
 原始证据与脚本详见 [性能证据](reference/performance-evidence.md)、[容量规划](reference/capacity-planning.md) 和 [Soak 验收](reference/soak-acceptance.md)。
 
-## 4. 兼容、回滚与风险边界
+## 4. 关闭、排空与剩余业务
+
+Provider 使用单一单调时钟总预算：先停止接收新请求，批量注销 Registry，再等待 Transport 排空，最后尽力清理 Transport 与执行器。它不会为每个注销操作重新获得完整超时。直接调用 Java `close()` 是非阻塞地发起默认预算关闭；若需要确定结果，应调用 `shutdown(new RpcShutdownOptions(totalTimeout))` 并等待返回的 Stage。
+
+`RpcShutdownReport` 分别报告是否超时、是否全部注销、是否排空、Transport 是否关闭、Executor 是否真正终止、还有多少 Admission Lease 仍被占用及已检测的清理失败数。若外部 SDK 或用户业务不响应中断，框架只能给出有界终态报告，不能承诺强制停止底层工作。Spring 模式的 `otryx.rpc.server.shutdown-timeout` 默认为 25 秒，`SmartLifecycle.stop(Runnable)` 会在报告完成后调用回调；应与 `spring.lifecycle.timeout-per-shutdown-phase` 联合校准。
+
+Consumer 在关闭时将尚未完成的逻辑调用以 unavailable 终态结算，阻止新的引用/调用，停止受其控制的 Deadline 与延迟重试。自行实现的 Transport/Registry 仍需遵守资源所有权和可重入关闭契约；不要以调用 `Future.cancel` 证明远端业务实际停止。
+
+## 5. 兼容、回滚与风险边界
 
 - Peach RPC 1.x 到 OTRYX 1.0 的公开 API 命名空间变更属于 Breaking Change；**不要直接将两代服务混部视为受支持**。
 - 保留旧版稳定分支，先使用分区部署或蓝绿过渡，并以真实业务契约验证互通边界。
