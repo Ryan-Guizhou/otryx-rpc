@@ -58,6 +58,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
     private final Vertx vertx = Vertx.vertx();
     private final NetServer server;
     private final RpcTransportOptions options;
+    private final TransportAdmissionController admission;
     private final VertxTlsSupport.FileState initialTlsFileState;
     private final Set<ServerConnection> connections =
             ConcurrentHashMap.newKeySet();
@@ -70,6 +71,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
 
     VertxRpcTransportServer(RpcTransportOptions options) {
         this.options = options;
+        this.admission = new TransportAdmissionController(options.admission());
         NetServerOptions serverOptions =
                 new NetServerOptions()
                         .setTcpKeepAlive(true)
@@ -96,24 +98,49 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                         socket.close();
                         return;
                     }
-                    if (options.security().enabled()
-                            && options.observer().enabled()) {
-                        RpcEndpoint remote = new RpcEndpoint(
-                                socket.remoteAddress().host(),
-                                Math.max(
-                                        socket.remoteAddress().port(),
-                                        1));
-                        options.observer()
-                                .onTlsHandshakeCompleted(
-                                        RpcConnectionRole.SERVER,
-                                        remote,
-                                        options.security().mode(),
-                                        0L,
-                                        null);
+                    TransportAdmissionController.Lease connectionLease =
+                            admission.tryAcquireConnection();
+                    if (connectionLease == null) {
+                        // 配额已满：在进入连接状态机之前立即关闭。
+                        socket.close();
+                        return;
                     }
-                    ServerConnection connection =
-                            new ServerConnection(socket, handler);
-                    connections.add(connection);
+                    TransportAdmissionController.Lease handshakeLease =
+                            admission.tryAcquireHandshake();
+                    if (handshakeLease == null) {
+                        connectionLease.close();
+                        socket.close();
+                        return;
+                    }
+                    try {
+                        if (options.security().enabled()
+                                && options.observer().enabled()) {
+                            RpcEndpoint remote = new RpcEndpoint(
+                                    socket.remoteAddress().host(),
+                                    Math.max(socket.remoteAddress().port(), 1));
+                            options.observer()
+                                    .onTlsHandshakeCompleted(
+                                            RpcConnectionRole.SERVER,
+                                            remote,
+                                            options.security().mode(),
+                                            0L,
+                                            null);
+                        }
+                        ServerConnection connection =
+                                new ServerConnection(
+                                        socket, handler, connectionLease, handshakeLease);
+                        connections.add(connection);
+                        if (draining.get()) {
+                            connection.closeLocally();
+                        }
+                    } catch (RuntimeException error) {
+                        handshakeLease.close();
+                        connectionLease.close();
+                        socket.close();
+                        LOGGER.warn(
+                                "RPC admission setup failed: errorType={}",
+                                error.getClass().getName());
+                    }
                 })
                 .listen(bind.port(), bind.host())
                 .onComplete(result -> {
@@ -131,6 +158,8 @@ final class VertxRpcTransportServer implements RpcTransportServer {
 
     private final class ServerConnection {
         private final NetSocket socket;
+        private final TransportAdmissionController.Lease connectionLease;
+        private final TransportAdmissionController.Lease handshakeLease;
         private final RpcRequestHandler handler;
         private final Context context;
         private final RpcEndpoint remote;
@@ -155,8 +184,12 @@ final class VertxRpcTransportServer implements RpcTransportServer {
 
         private ServerConnection(
                 NetSocket socket,
-                RpcRequestHandler handler) {
+                RpcRequestHandler handler,
+                TransportAdmissionController.Lease connectionLease,
+                TransportAdmissionController.Lease handshakeLease) {
             this.socket = socket;
+            this.connectionLease = connectionLease;
+            this.handshakeLease = handshakeLease;
             this.handler = handler;
             this.context = Vertx.currentContext();
             if (context == null) {
@@ -181,6 +214,9 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                         future.cancel(true));
                 inflight.clear();
                 connections.remove(this);
+                // 所有异步关闭、异常与握手失败共用此所有权释放点。
+                handshakeLease.close();
+                connectionLease.close();
                 observeClosed();
                 checkDrainComplete();
             });
@@ -297,6 +333,8 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 cancelHandshakeTimer();
                 socket.write(Buffer.buffer(encoded))
                         .onSuccess(ignored -> {
+                            // ACK 实际写成功后才退出握手容量；失败由 closeHandler 释放。
+                            handshakeLease.close();
                             if (options.observer().enabled()) {
                                 options.observer()
                                         .onConnectionEstablished(
@@ -756,6 +794,16 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 future.complete(null);
             }
         });
+    }
+
+    /** 供受控网络测试观察连接租约数量。 */
+    int admittedConnections() {
+        return admission.activeConnections();
+    }
+
+    /** 供受控网络测试观察协议握手租约数量。 */
+    int admittedHandshakes() {
+        return admission.activeHandshakes();
     }
 
     @Override
