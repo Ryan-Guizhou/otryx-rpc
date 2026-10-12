@@ -2,17 +2,18 @@
 
 > 当前主线是 **OTRYX 1.0.0-SNAPSHOT** 品牌/API 迁移。以下条目仅为技术候选路线，不构成日期、已发布版本或性能承诺。
 
-## OTRYX 1.0.x：首发 API 迁移与稳定化
+## OTRYX 1.0.x：首发质量收敛与稳定化
 
 - 全仓从 io.peach.rpc / peach-rpc-* 迁移为 com.peachsoft.otryx / otryx-*。
 - 准确说明跨包名 Stable Type ID、Method ID、Schema Fingerprint 兼容边界。
-- 验证独立进程示例、Memory/Etcd/Nacos、TLS/mTLS、Chaos、CI 与编译期 Codegen。
+- 验证独立进程示例、Memory/Etcd/Nacos/Consul/Eureka、TLS/mTLS、Chaos、CI 与编译期 Codegen。
 - 完善双语 README、文档架构图、吉祥物和可复现基准测试。
-- Maven Central namespace 与品牌商标风险核查完成后，再评审公开发布。
+- 依照[首发质量改造实施契约](docs/engineering/plans/2026-10-12-open-source-quality-upgrade.md)先完成 EventLoop 隔离、关闭预算、分层背压、契约安全和可复现验证。
+- Maven Central namespace 与品牌商标风险核查完成后，再独立评审公开发布；本轮保持 `1.0.0-SNAPSHOT`。
 
 ## Peach RPC 1.0.x（历史兼容分支）
 
-目标：稳定维护。
+定位：保留历史稳定基线；不将其解释为当前 OTRYX 公开 GA 的兼容保证。
 
 - Bug fix；
 - Security fix；
@@ -34,7 +35,6 @@
 
 - Kubernetes EndpointSlice；
 - ZooKeeper；
-- Consul。
 
 ### 数据面
 
