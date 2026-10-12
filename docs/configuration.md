@@ -46,7 +46,10 @@ DIRECT 只能用于经过证明的极短非阻塞逻辑。
 - 分层 Admission 的 max-inflight-bytes / 每服务与方法限制（见 [Provider Admission 指南](reference/provider-admission.md)，当前已实现；生产配额仍需受控负载数据验证）；
 - CPU parallelism；
 - CPU queue capacity；
-- drain timeout。
+- drain timeout（排空阶段的上限，默认 30 秒）；
+- `otryx.rpc.server.shutdown-timeout`（Spring Provider 共享总关闭预算，默认 25 秒；先于排空单项预算到期时以总预算为准）。
+
+关闭并不等于强停用户代码：`shutdown(RpcShutdownOptions)` 返回 `CompletionStage<RpcShutdownReport>`，报告注销、Transport 关闭、线程池终止和剩余 Admission Lease。未响应中断的业务任务可以超出框架总关闭预算；不得因 Future 取消就提前归还仍占用的业务配额。Spring `SmartLifecycle.stop(Runnable)` 在关闭 Stage 有结果后才调用容器回调；默认 25 秒为通常 30 秒的 Spring 阶段等待留出调度余量，如调整阶段超时需与实际排空要求一致。
 
 ## 4. Consumer Resilience
 
