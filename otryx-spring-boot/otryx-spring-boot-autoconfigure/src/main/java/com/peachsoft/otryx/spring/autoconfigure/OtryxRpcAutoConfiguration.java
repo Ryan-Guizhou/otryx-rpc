@@ -23,6 +23,7 @@ import com.peachsoft.otryx.spring.processor.OtryxRpcServiceBeanPostProcessor;
 import com.peachsoft.otryx.spring.runtime.OtryxRpcRuntimeCoordinator;
 import com.peachsoft.otryx.transport.RpcTransportFactory;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
+import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import com.peachsoft.otryx.transport.RpcTransportSecurityOptions;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -207,7 +208,12 @@ public class OtryxRpcAutoConfiguration {
                 transport.getHeartbeatTimeout(),
                 transport.getReconnectBaseBackoff(),
                 transport.getReconnectMaxBackoff())
-                .withSecurity(securityOptions);
+                .withSecurity(securityOptions)
+                .withAdmission(new RpcTransportAdmissionOptions(
+                        transport.getAdmission().getMaxConnections(),
+                        transport.getAdmission().getMaxHandshakes(),
+                        transport.getAdmission().getMaxBufferedPartialFrameBytes(),
+                        transport.getAdmission().getPartialFrameTimeout()));
     }
 
     /**
