@@ -458,6 +458,11 @@ public class OtryxRpcServerStartTest {
         }
 
         @Override
+        public CompletionStage<Void> drain(Duration timeout) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
         public void close() {
             closeCalls.incrementAndGet();
             throw new IllegalStateException("synthetic close failure");
