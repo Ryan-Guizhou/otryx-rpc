@@ -57,6 +57,12 @@ import org.slf4j.LoggerFactory;
 final class EtcdRegistry implements Registry, ServiceRegistrar {
     private static final Logger LOGGER = LoggerFactory.getLogger(EtcdRegistry.class);
     private static final String DEFAULT_ROOT = "/otryx/";
+    static final String DEFAULT_NAMESPACE = "default";
+    private static final String NAMESPACE_ROOT = "ns/";
+    private static final String ESCAPE_PERCENT = "%";
+    private static final String ENCODED_PERCENT = "%25";
+    private static final String ESCAPE_PIPE = "|";
+    private static final String ENCODED_PIPE = "%7C";
     private static final long RECOVERY_BASE_DELAY_MILLIS = 200L;
     private static final long RECOVERY_MAX_DELAY_MILLIS = 30_000L;
     private static final RegistryCapabilities CAPABILITIES = RegistryCapabilities.of(
@@ -124,9 +130,9 @@ final class EtcdRegistry implements Registry, ServiceRegistrar {
         this.observer = observer == null
                 ? RpcObserver.noop()
                 : observer;
-        this.root = "default".equals(namespace)
+        this.root = DEFAULT_NAMESPACE.equals(namespace)
                 ? DEFAULT_ROOT
-                : DEFAULT_ROOT + "ns/" + encode(namespace) + '/';
+                : DEFAULT_ROOT + NAMESPACE_ROOT + encode(namespace) + '/';
     }
 
     @Override
@@ -677,11 +683,13 @@ final class EtcdRegistry implements Registry, ServiceRegistrar {
     }
 
     private static String escape(String value) {
-        return value.replace("%", "%25").replace("|", "%7C");
+        return value.replace(ESCAPE_PERCENT, ENCODED_PERCENT)
+                .replace(ESCAPE_PIPE, ENCODED_PIPE);
     }
 
     private static String unescape(String value) {
-        return value.replace("%7C", "|").replace("%25", "%");
+        return value.replace(ENCODED_PIPE, ESCAPE_PIPE)
+                .replace(ENCODED_PERCENT, ESCAPE_PERCENT);
     }
 
     private static ByteSequence bytes(String value) {

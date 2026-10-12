@@ -44,6 +44,12 @@ import org.slf4j.LoggerFactory;
 public final class HttpRegistry implements Registry, ServiceRegistrar {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(HttpRegistry.class);
+    private static final int CORE_THREADS = 2;
+    private static final int MAX_THREADS = 4;
+    private static final long IDLE_TIMEOUT_SECONDS = 30L;
+    private static final int MAX_PENDING_CONTROL_TASKS = 256;
+    private static final long CLOSE_TIMEOUT_SECONDS = 3L;
+    private static final long MIN_INTERVAL_MILLIS = 1L;
     private static final RegistryCapabilities CAPABILITIES = RegistryCapabilities.of(
             RegistryCapability.REGISTRATION,
             RegistryCapability.SUBSCRIPTION,
@@ -81,8 +87,8 @@ public final class HttpRegistry implements Registry, ServiceRegistrar {
         this.observer = observer == null ? RpcObserver.noop() : observer;
         AtomicLong sequence = new AtomicLong();
         this.workers = new ThreadPoolExecutor(
-                2, 4, 30L, TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(256),
+                CORE_THREADS, MAX_THREADS, IDLE_TIMEOUT_SECONDS, TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(MAX_PENDING_CONTROL_TASKS),
                 task -> {
                     Thread thread = new Thread(task,
                             "otryx-" + backend.type() + "-control-"
@@ -100,7 +106,7 @@ public final class HttpRegistry implements Registry, ServiceRegistrar {
 
     private static Duration positive(Duration value, String name) {
         if (value == null || value.isZero() || value.isNegative()
-                || value.toMillis() < 1) {
+                || value.toMillis() < MIN_INTERVAL_MILLIS) {
             throw new IllegalArgumentException(name + " must be at least one millisecond");
         }
         return value;
@@ -320,7 +326,7 @@ public final class HttpRegistry implements Registry, ServiceRegistrar {
                     }
                 }, workers)).toArray(CompletableFuture[]::new);
         try {
-            CompletableFuture.allOf(cleanup).orTimeout(3, TimeUnit.SECONDS).join();
+            CompletableFuture.allOf(cleanup).orTimeout(CLOSE_TIMEOUT_SECONDS, TimeUnit.SECONDS).join();
         } catch (RuntimeException error) {
             LOGGER.warn("Registry shutdown timed out: type={}", backend.type());
         }

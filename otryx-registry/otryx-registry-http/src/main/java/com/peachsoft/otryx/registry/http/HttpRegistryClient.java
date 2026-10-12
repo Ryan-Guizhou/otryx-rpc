@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.NullNode;
 import java.io.IOException;
+import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -36,6 +37,12 @@ public final class HttpRegistryClient implements AutoCloseable {
 
     /** Registry HTTP DELETE 方法。 */
     public static final String METHOD_DELETE = "DELETE";
+    private static final String HTTP_SCHEME = "http";
+    private static final String HTTPS_SCHEME = "https";
+    private static final String HEADER_ACCEPT = "Accept";
+    private static final String HEADER_CONTENT_TYPE = "Content-Type";
+    private static final String MEDIA_TYPE_JSON = "application/json";
+    private static final int MAX_RESPONSE_CHARS = 4_194_304;
 
     private final HttpClient client;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -62,8 +69,8 @@ public final class HttpRegistryClient implements AutoCloseable {
         List<String> parsed = new ArrayList<>();
         for (String endpoint : endpoints) {
             URI url = URI.create(endpoint);
-            if (!("http".equalsIgnoreCase(url.getScheme())
-                    || "https".equalsIgnoreCase(url.getScheme()))
+            if (!(HTTP_SCHEME.equalsIgnoreCase(url.getScheme())
+                    || HTTPS_SCHEME.equalsIgnoreCase(url.getScheme()))
                     || url.getHost() == null || url.getUserInfo() != null
                     || url.getQuery() != null || url.getFragment() != null) {
                 throw new IllegalArgumentException(
@@ -108,12 +115,12 @@ public final class HttpRegistryClient implements AutoCloseable {
                 HttpRequest.Builder builder = HttpRequest.newBuilder()
                         .uri(URI.create(endpoint + path))
                         .timeout(timeout)
-                        .header("Accept", "application/json");
+                        .header(HEADER_ACCEPT, MEDIA_TYPE_JSON);
                 if (!credentialHeader.isBlank() && !credential.isBlank()) {
                     builder.header(credentialHeader, credential);
                 }
                 if (payload != null) {
-                    builder.header("Content-Type", "application/json");
+                    builder.header(HEADER_CONTENT_TYPE, MEDIA_TYPE_JSON);
                 }
                 HttpRequest req = builder.method(method,
                         payload == null ? HttpRequest.BodyPublishers.noBody()
@@ -128,17 +135,18 @@ public final class HttpRegistryClient implements AutoCloseable {
                             "Registry HTTP endpoint unavailable", networkError);
                     continue;
                 }
-                if (resp.statusCode() >= 500) {
+                if (resp.statusCode() >= HttpURLConnection.HTTP_INTERNAL_ERROR) {
                     last = new IOException("Registry HTTP server unavailable: status="
                             + resp.statusCode());
                     continue;
                 }
-                if (resp.statusCode() >= 400 && resp.statusCode() != 404) {
+                if (resp.statusCode() >= HttpURLConnection.HTTP_BAD_REQUEST
+                        && resp.statusCode() != HttpURLConnection.HTTP_NOT_FOUND) {
                     throw new IOException("Registry HTTP request rejected: status="
                             + resp.statusCode());
                 }
                 String responseBody = resp.body();
-                if (responseBody.length() > 4_194_304) {
+                if (responseBody.length() > MAX_RESPONSE_CHARS) {
                     throw new IOException("Registry HTTP response exceeds safety limit");
                 }
                 JsonNode json = responseBody.isBlank()
@@ -165,7 +173,8 @@ public final class HttpRegistryClient implements AutoCloseable {
          * @return 请求是否为 HTTP 2xx
          */
         public boolean successful() {
-            return status >= 200 && status < 300;
+            return status >= HttpURLConnection.HTTP_OK
+                    && status < HttpURLConnection.HTTP_MULT_CHOICE;
         }
     }
 

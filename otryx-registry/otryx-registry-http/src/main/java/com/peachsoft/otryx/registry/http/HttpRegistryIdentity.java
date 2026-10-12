@@ -27,6 +27,10 @@ public final class HttpRegistryIdentity {
     public static final String SERVICE_KEY = "otryx.rpc.service-key";
     /** Adapter 所有的权重元数据键。 */
     public static final String WEIGHT = "otryx.rpc.weight";
+    private static final String SERVICE_NAME_HASH_ALGORITHM = "SHA-256";
+    private static final String SERVICE_NAME_PREFIX = "otryx-";
+    private static final int SERVICE_HASH_BYTES = 16;
+    private static final int MAX_ENCODED_INSTANCE_ID_LENGTH = 256;
 
     private HttpRegistryIdentity() {
     }
@@ -43,9 +47,9 @@ public final class HttpRegistryIdentity {
         String input = (namespace == null ? "" : namespace)
                 + "\u0000" + key.canonicalName();
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
+            byte[] digest = MessageDigest.getInstance(SERVICE_NAME_HASH_ALGORITHM)
                     .digest(input.getBytes(StandardCharsets.UTF_8));
-            return "otryx-" + HexFormat.of().formatHex(digest, 0, 16);
+            return SERVICE_NAME_PREFIX + HexFormat.of().formatHex(digest, 0, SERVICE_HASH_BYTES);
         } catch (NoSuchAlgorithmException error) {
             throw new IllegalStateException("SHA-256 is unavailable", error);
         }
@@ -62,7 +66,7 @@ public final class HttpRegistryIdentity {
         String encoded = Base64.getUrlEncoder()
                 .withoutPadding()
                 .encodeToString(instance.instanceId().getBytes(StandardCharsets.UTF_8));
-        if (encoded.isEmpty() || encoded.length() > 256) {
+        if (encoded.isEmpty() || encoded.length() > MAX_ENCODED_INSTANCE_ID_LENGTH) {
             throw new IllegalArgumentException("RPC instanceId length is invalid");
         }
         return serviceName(namespace, instance.serviceKey()) + "-" + encoded;
@@ -75,8 +79,11 @@ public final class HttpRegistryIdentity {
      */
     public static void requireRoutable(ServiceInstance instance) {
         String host = instance.endpoint().host();
-        if (host.isBlank() || "0.0.0.0".equals(host) || "::".equals(host)
-                || "[::]".equals(host) || instance.endpoint().port() < 1) {
+        if (host.isBlank()
+                || RpcEndpoint.UNSPECIFIED_IPV4_HOST.equals(host)
+                || RpcEndpoint.UNSPECIFIED_IPV6_HOST.equals(host)
+
+                || RpcEndpoint.UNSPECIFIED_IPV6_BRACKETED_HOST.equals(host) || instance.endpoint().port() < 1) {
             throw new IllegalArgumentException("Registry endpoint must be routable");
         }
     }
@@ -113,9 +120,12 @@ public final class HttpRegistryIdentity {
     public static ServiceInstance fromRemote(
             ServiceKey key, String host, int port, Map<String, String> metadata) {
         if (metadata == null || !key.canonicalName().equals(metadata.get(SERVICE_KEY))
-                || host == null || host.isBlank() || "0.0.0.0".equals(host)
-                || "::".equals(host) || "[::]".equals(host)
-                || port < 1 || port > 65_535) {
+                || host == null || host.isBlank()
+                || RpcEndpoint.UNSPECIFIED_IPV4_HOST.equals(host)
+
+                || RpcEndpoint.UNSPECIFIED_IPV6_HOST.equals(host)
+                || RpcEndpoint.UNSPECIFIED_IPV6_BRACKETED_HOST.equals(host)
+                || port < 1 || port > RpcEndpoint.MAX_PORT) {
             return null;
         }
         String id = metadata.get(INSTANCE_ID);

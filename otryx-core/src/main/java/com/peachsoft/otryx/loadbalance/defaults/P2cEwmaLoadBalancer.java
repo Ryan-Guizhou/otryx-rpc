@@ -15,8 +15,11 @@ import java.util.concurrent.ThreadLocalRandom;
  * @Version 1.0.0
  * @CreateTime 2026/9/23 10:51
  */
-@Extension("p2c-ewma")
+@Extension(P2cEwmaLoadBalancer.EXTENSION_NAME)
 public final class P2cEwmaLoadBalancer implements LoadBalancer {
+
+    static final String EXTENSION_NAME = "p2c-ewma";
+    private static final long MIN_EWMA_LATENCY_NANOS = 1_000_000L;
 
     /** 创建 P2C + EWMA 负载均衡器。 */
     public P2cEwmaLoadBalancer() {
@@ -104,7 +107,7 @@ public final class P2cEwmaLoadBalancer implements LoadBalancer {
             LoadBalanceMetrics metrics) {
         long latencyNanos = Math.max(
                 metrics.ewmaLatencyNanos(instance),
-                1_000_000L);
+                MIN_EWMA_LATENCY_NANOS);
         return latencyNanos
                 * (metrics.inflight(instance) + 1.0)
                 / instance.weight();
@@ -114,7 +117,7 @@ public final class P2cEwmaLoadBalancer implements LoadBalancer {
             LoadBalanceContext context) {
         long latencyNanos = Math.max(
                 context.ewmaLatencyNanos(),
-                1_000_000L);
+                MIN_EWMA_LATENCY_NANOS);
         return latencyNanos
                 * (context.inflight() + 1.0)
                 / context.instance().weight();

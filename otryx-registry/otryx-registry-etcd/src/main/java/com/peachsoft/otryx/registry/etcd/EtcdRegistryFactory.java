@@ -13,8 +13,11 @@ import java.util.List;
  * @Version 1.0.0
  * @CreateTime 2026/9/23 10:51
  */
-@Extension("etcd")
+@Extension(EtcdRegistryFactory.EXTENSION_NAME)
 public final class EtcdRegistryFactory implements RegistryFactory {
+
+    static final String EXTENSION_NAME = "etcd";
+    private static final String OPTION_LEASE_TTL_SECONDS = "leaseTtlSeconds";
 
     private static final long DEFAULT_LEASE_TTL_SECONDS = 30;
     private static final List<String> DEFAULT_ENDPOINTS =
@@ -30,14 +33,14 @@ public final class EtcdRegistryFactory implements RegistryFactory {
                 ? DEFAULT_ENDPOINTS
                 : options.endpoints();
         long leaseTtlSeconds = Long.parseLong(options.providerOption(
-                "leaseTtlSeconds",
+                OPTION_LEASE_TTL_SECONDS,
                 Long.toString(DEFAULT_LEASE_TTL_SECONDS)));
         if (leaseTtlSeconds <= 0) {
             throw new IllegalArgumentException(
                     "leaseTtlSeconds must be positive");
         }
         String namespace = options.namespace().isBlank()
-                ? "default"
+                ? EtcdRegistry.DEFAULT_NAMESPACE
                 : options.namespace();
         return new EtcdRegistry(
                 configured.toArray(String[]::new),

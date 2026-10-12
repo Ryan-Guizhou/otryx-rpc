@@ -14,13 +14,28 @@ import java.util.Objects;
  */
 public record RpcEndpoint(String host, int port) {
 
+    /** TCP 端口范围的下限。 */
+    public static final int MIN_PORT = 0;
+
+    /** TCP 端口范围的上限。 */
+    public static final int MAX_PORT = 65_535;
+
+    /** 全网 IPv4 监听地址，不可作为远端访问地址。 */
+    public static final String UNSPECIFIED_IPV4_HOST = "0.0.0.0";
+
+    /** 全网 IPv6 监听地址，不可作为远端访问地址。 */
+    public static final String UNSPECIFIED_IPV6_HOST = "::";
+
+    /** 带方括号的 IPv6 全网监听地址。 */
+    public static final String UNSPECIFIED_IPV6_BRACKETED_HOST = "[::]";
+
     /** 校验端点。 */
     public RpcEndpoint {
         Objects.requireNonNull(host, "host");
         if (host.isBlank()) {
             throw new IllegalArgumentException("host must not be blank");
         }
-        if (port < 0 || port > 65_535) {
+        if (port < MIN_PORT || port > MAX_PORT) {
             throw new IllegalArgumentException("port must be between 0 and 65535");
         }
     }

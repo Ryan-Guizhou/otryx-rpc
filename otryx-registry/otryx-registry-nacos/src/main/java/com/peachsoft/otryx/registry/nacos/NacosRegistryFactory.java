@@ -18,8 +18,15 @@ import java.util.Properties;
  * @Version 1.0.0
  * @CreateTime 2026/9/28 11:35
  */
-@Extension("nacos")
+@Extension(NacosRegistryFactory.EXTENSION_NAME)
 public final class NacosRegistryFactory implements RegistryFactory {
+
+    static final String EXTENSION_NAME = "nacos";
+    private static final String OPTION_GROUP = "nacosGroup";
+    private static final String OPTION_CLUSTER = "nacosCluster";
+    private static final String OPTION_USERNAME = "nacosUsername";
+    private static final String OPTION_PASSWORD = "nacosPassword";
+    private static final String CLUSTER_NAME_PATTERN = "[0-9A-Za-z.-]+";
 
     static final String DEFAULT_ENDPOINT = "127.0.0.1:8848";
     static final String DEFAULT_NAMESPACE = "public";
@@ -40,10 +47,10 @@ public final class NacosRegistryFactory implements RegistryFactory {
                 options.namespace(),
                 DEFAULT_NAMESPACE);
         String group = defaultIfBlank(
-                options.providerOption("nacosGroup", ""),
+                options.providerOption(OPTION_GROUP, ""),
                 DEFAULT_GROUP);
         String cluster = defaultIfBlank(
-                options.providerOption("nacosCluster", ""),
+                options.providerOption(OPTION_CLUSTER, ""),
                 DEFAULT_CLUSTER);
         validateCluster(cluster);
         Properties properties = clientProperties(
@@ -97,11 +104,11 @@ public final class NacosRegistryFactory implements RegistryFactory {
                 namespace);
         String username =
                 options.providerOption(
-                        "nacosUsername",
+                        OPTION_USERNAME,
                         "");
         String password =
                 options.providerOption(
-                        "nacosPassword",
+                        OPTION_PASSWORD,
                         "");
         if (!username.isBlank()) {
             properties.setProperty(
@@ -117,7 +124,7 @@ public final class NacosRegistryFactory implements RegistryFactory {
     }
 
     private static void validateCluster(String cluster) {
-        if (!cluster.matches("[0-9A-Za-z.-]+")) {
+        if (!cluster.matches(CLUSTER_NAME_PATTERN)) {
             throw new IllegalArgumentException(
                     "Nacos cluster must contain only 0-9, a-z, A-Z, '-' or '.'");
         }

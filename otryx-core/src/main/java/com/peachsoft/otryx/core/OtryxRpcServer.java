@@ -302,9 +302,9 @@ public final class OtryxRpcServer implements AutoCloseable {
     }
 
     private static boolean isWildcardHost(String host) {
-        return "0.0.0.0".equals(host)
-                || "::".equals(host)
-                || "[::]".equals(host);
+        return RpcEndpoint.UNSPECIFIED_IPV4_HOST.equals(host)
+                || RpcEndpoint.UNSPECIFIED_IPV6_HOST.equals(host)
+                || RpcEndpoint.UNSPECIFIED_IPV6_BRACKETED_HOST.equals(host);
     }
 
     private CompletionStage<Void> registerConfiguredServices(

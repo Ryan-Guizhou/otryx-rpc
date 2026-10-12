@@ -55,7 +55,7 @@ final class NacosInstanceMapper {
         metadata.put(
                 NacosReservedMetadata.GROUP,
                 source.serviceKey().group());
-        metadata.put(NacosReservedMetadata.PROTOCOL, "otryx");
+        metadata.put(NacosReservedMetadata.PROTOCOL, NacosReservedMetadata.PROTOCOL_NAME);
         metadata.put(NacosReservedMetadata.CLUSTER, cluster);
 
         Instance target = new Instance();
@@ -102,9 +102,9 @@ final class NacosInstanceMapper {
     private static boolean routableHost(String host) {
         return host != null
                 && !host.isBlank()
-                && !"0.0.0.0".equals(host)
-                && !"::".equals(host)
-                && !"[::]".equals(host);
+                && !RpcEndpoint.UNSPECIFIED_IPV4_HOST.equals(host)
+                && !RpcEndpoint.UNSPECIFIED_IPV6_HOST.equals(host)
+                && !RpcEndpoint.UNSPECIFIED_IPV6_BRACKETED_HOST.equals(host);
     }
 
     private static String fallbackInstanceId(

@@ -14,8 +14,13 @@ import java.util.concurrent.CompletionStage;
  * @Version 1.0.0
  * @CreateTime 2026/9/23 10:51
  */
-@Extension("jdk")
+@Extension(JdkProxyFactory.EXTENSION_NAME)
 public final class JdkProxyFactory implements ProxyFactory {
+
+    static final String EXTENSION_NAME = "jdk";
+    private static final String METHOD_TO_STRING = "toString";
+    private static final String METHOD_HASH_CODE = "hashCode";
+    private static final String METHOD_EQUALS = "equals";
 
     /**
      * 创建 JDK 动态代理工厂。
@@ -58,9 +63,9 @@ public final class JdkProxyFactory implements ProxyFactory {
     private static Object invokeObjectMethod(
             Object proxy, Class<?> serviceType, Method method, Object[] arguments) {
         return switch (method.getName()) {
-            case "toString" -> "OtryxRpcProxy(" + serviceType.getName() + ")";
-            case "hashCode" -> System.identityHashCode(proxy);
-            case "equals" -> proxy == arguments[0];
+            case METHOD_TO_STRING -> "OtryxRpcProxy(" + serviceType.getName() + ")";
+            case METHOD_HASH_CODE -> System.identityHashCode(proxy);
+            case METHOD_EQUALS -> proxy == arguments[0];
             default -> throw new UnsupportedOperationException(method.getName());
         };
     }

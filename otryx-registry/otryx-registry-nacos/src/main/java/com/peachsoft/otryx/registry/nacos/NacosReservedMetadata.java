@@ -15,6 +15,7 @@ final class NacosReservedMetadata {
     static final String VERSION = PREFIX + "version";
     static final String GROUP = PREFIX + "group";
     static final String PROTOCOL = PREFIX + "protocol";
+    static final String PROTOCOL_NAME = "otryx";
     static final String CLUSTER = PREFIX + "cluster";
 
     private NacosReservedMetadata() {
