@@ -23,6 +23,8 @@ import java.util.function.Consumer;
 final class FrameAccumulator {
 
     private final int maxFrameBytes;
+    private final TransportAdmissionController admission;
+    private long chargedBytes;
     private final byte[] header =
             new byte[RpcProtocolCodec.HEADER_LENGTH];
     private Buffer pending = Buffer.buffer();
@@ -33,46 +35,108 @@ final class FrameAccumulator {
      * @param maxFrameBytes 允许的单个完整 Frame 最大字节数
      */
     FrameAccumulator(int maxFrameBytes) {
+        this(maxFrameBytes, null);
+    }
+
+    /**
+     * 创建有全局部分帧预算约束的累积器。
+     *
+     * @param maxFrameBytes 单帧逻辑上限
+     * @param admission 本 Transport Server 共用的预算控制器；null 用于无预算测试
+     */
+    FrameAccumulator(
+            int maxFrameBytes,
+            TransportAdmissionController admission) {
         if (maxFrameBytes < RpcProtocolCodec.HEADER_LENGTH) {
             throw new IllegalArgumentException(
                     "maxFrameBytes cannot be smaller than a Wire v1 header");
         }
         this.maxFrameBytes = maxFrameBytes;
+        this.admission = admission;
     }
 
     /**
-     * 消费收到的 TCP 字节，按序向调用方交付独立完整帧数组。
+     * 消费 TCP 输入并对实际缓冲的不完整帧预留字节预算。
+     *
+     * <p>完整帧的常见路径不触碰全局预算。已有残帧时先为新数据
+     * 预留额度，随后在消费完整帧后归还。解析错误会立即清空状态，
+     * 防止等待 Socket.closeHandler 才回收缓冲额度。
      *
      * @param incoming 当前 Transport 入站 Buffer
      * @param consumer 完整帧接收方
+     * @return 本次是否交付过至少一个完整帧
      */
-    void accept(
+    boolean accept(
             Buffer incoming,
             Consumer<byte[]> consumer) {
-        if (pending.length() == 0) {
-            // 常见路径：已对齐的完整 Frame，跳过中间 appendBuffer。
-            int consumed = consumeFrames(incoming, consumer);
-            if (consumed == 0 && incoming.length() != 0) {
-                // 首包只有半帧：复用旧 appendBuffer，避免额外 byte[]。
-                if (incoming.length() > maxFrameBytes) {
-                    throw new RpcProtocolException(
-                            "Buffered partial frame exceeds transport maxFrameBytes");
+        try {
+            if (pending.length() == 0) {
+                // 完整帧快速路径不需全局字节计数或中间拷贝。
+                int consumed = consumeFrames(incoming, consumer);
+                if (consumed == 0 && incoming.length() != 0) {
+                    if (incoming.length() > maxFrameBytes) {
+                        throw new RpcProtocolException(
+                                "Buffered partial frame exceeds transport maxFrameBytes");
+                    }
+                    reserveBytes(incoming.length());
+                    pending.appendBuffer(incoming);
+                    return false;
                 }
-                pending.appendBuffer(incoming);
-                return;
+                retainIncompleteTail(incoming, consumed);
+                return consumed > 0;
             }
-            retainIncompleteTail(incoming, consumed);
+
+            // 有残帧时，在内存追加之前预留额外字节额度。
+            reserveBytes(incoming.length());
+            pending.appendBuffer(incoming);
+            int consumed = consumeFrames(pending, consumer);
+            compact(consumed);
+            releaseBytes(consumed);
+            if (pending.length() > maxFrameBytes) {
+                throw new RpcProtocolException(
+                        "Buffered partial frame exceeds transport maxFrameBytes");
+            }
+            return consumed > 0;
+        } catch (RuntimeException error) {
+            clear();
+            throw error;
+        }
+    }
+
+    /** 返回当前真正保留的不完整字节数。 */
+    int bufferedBytes() {
+        return pending.length();
+    }
+
+    /**
+     * 丢弃不完整帧并归还所有尚未释放的全局额度，重复调用安全。
+     */
+    void clear() {
+        pending = Buffer.buffer();
+        releaseBytes(chargedBytes);
+    }
+
+    private void reserveBytes(long bytes) {
+        if (admission == null || bytes == 0L) {
             return;
         }
-
-        // 存在旧的不完整帧时仍按既有语义进行拼接与压缩。
-        pending.appendBuffer(incoming);
-        int consumed = consumeFrames(pending, consumer);
-        compact(consumed);
-        if (pending.length() > maxFrameBytes) {
+        if (!admission.tryReservePartialBytes(bytes)) {
             throw new RpcProtocolException(
-                    "Buffered partial frame exceeds transport maxFrameBytes");
+                    "Global partial-frame buffer budget exceeded");
         }
+        chargedBytes += bytes;
+    }
+
+    private void releaseBytes(long bytes) {
+        if (admission == null || bytes == 0L) {
+            return;
+        }
+        if (bytes < 0L || bytes > chargedBytes) {
+            throw new IllegalStateException(
+                    "Frame buffer released beyond its reserved quota");
+        }
+        chargedBytes -= bytes;
+        admission.releasePartialBytes(bytes);
     }
 
     private int consumeFrames(
@@ -119,6 +183,7 @@ final class FrameAccumulator {
             throw new RpcProtocolException(
                     "Buffered partial frame exceeds transport maxFrameBytes");
         }
+        reserveBytes(remaining);
         pending = Buffer.buffer(
                 source.getBytes(consumed, source.length()));
     }
