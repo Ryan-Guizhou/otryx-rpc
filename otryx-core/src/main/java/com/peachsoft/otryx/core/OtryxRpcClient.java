@@ -54,6 +54,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * OTRYX RPC Consumer 运行时，负责从本地服务目录选取端点并执行请求。
@@ -70,6 +72,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @CreateTime 2026/9/23 10:51
  */
 public final class OtryxRpcClient implements AutoCloseable {
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(OtryxRpcClient.class);
     private final ServiceDiscovery discovery;
     private final RpcTransportClient transport;
     private final RpcCodecRegistry codecs;
