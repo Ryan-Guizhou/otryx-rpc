@@ -37,12 +37,14 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -94,6 +96,10 @@ public final class OtryxRpcServer implements AutoCloseable {
             new CopyOnWriteArrayList<>();
     private final AtomicReference<State> state =
             new AtomicReference<>(State.NEW);
+    private final AtomicReference<CompletableFuture<RpcShutdownReport>> shutdownResult =
+            new AtomicReference<>();
+    private final Set<CompletableFuture<byte[]>> pendingResponses =
+            ConcurrentHashMap.newKeySet();
 
     private volatile RpcEndpoint actualEndpoint;
     private volatile RpcEndpoint advertisedEndpoint;
@@ -234,7 +240,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     admissionOptions,
                     methodsByService);
         } catch (RuntimeException error) {
-            state.set(State.CLOSED);
+            state.compareAndSet(State.STARTING, State.CLOSED);
             return CompletableFuture.failedFuture(error);
         }
 
@@ -242,8 +248,15 @@ public final class OtryxRpcServer implements AutoCloseable {
         transport.start(bindEndpoint, this::handle)
                 .whenComplete((endpoint, transportError) -> {
                     if (transportError != null) {
-                        state.set(State.CLOSED);
+                        state.compareAndSet(State.STARTING, State.CLOSED);
                         started.completeExceptionally(transportError);
+                        return;
+                    }
+                    if (state.get() != State.STARTING) {
+                        transport.close();
+                        started.completeExceptionally(
+                                new IllegalStateException(
+                                        "RPC server was closed during startup"));
                         return;
                     }
                     actualEndpoint = endpoint;
@@ -251,7 +264,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     try {
                         published = resolveAdvertisedEndpoint(endpoint);
                     } catch (RuntimeException error) {
-                        state.set(State.CLOSED);
+                        state.compareAndSet(State.STARTING, State.CLOSED);
                         transport.close();
                         started.completeExceptionally(error);
                         return;
@@ -262,7 +275,9 @@ public final class OtryxRpcServer implements AutoCloseable {
                                 if (registryError != null) {
                                     rollbackRegisteredServices(published)
                                             .whenComplete((rollbackIgnored, rollbackError) -> {
-                                                state.set(State.CLOSED);
+                                                state.compareAndSet(
+                                                        State.STARTING,
+                                                        State.CLOSED);
                                                 transport.close();
                                                 if (rollbackError != null) {
                                                     registryError.addSuppressed(rollbackError);
@@ -271,7 +286,23 @@ public final class OtryxRpcServer implements AutoCloseable {
                                             });
                                     return;
                                 }
-                                state.set(State.STARTED);
+                                if (!state.compareAndSet(
+                                        State.STARTING,
+                                        State.STARTED)) {
+                                    rollbackRegisteredServices(published)
+                                            .whenComplete((ignoredRollback, rollbackError) -> {
+                                                if (rollbackError != null) {
+                                                    LOGGER.warn(
+                                                            "RPC startup rollback failed during shutdown: "
+                                                                    + "errorType={}",
+                                                            rollbackError.getClass().getName());
+                                                }
+                                                started.completeExceptionally(
+                                                        new IllegalStateException(
+                                                                "RPC server closed during startup"));
+                                            });
+                                    return;
+                                }
                                 LOGGER.info(
                                         "OTRYX RPC server started: bind={}, advertised={}",
                                         endpoint.authority(),
@@ -452,8 +483,14 @@ public final class OtryxRpcServer implements AutoCloseable {
                 releaseIfComplete.run();
             }
         };
-        result.whenComplete((ignoredValue, ignoredError) ->
-                releaseIfComplete.run());
+        pendingResponses.add(result);
+        result.whenComplete((ignoredValue, ignoredError) -> {
+            pendingResponses.remove(result);
+            releaseIfComplete.run();
+        });
+        if (state.get() != State.STARTED) {
+            result.cancel(true);
+        }
         if (observed) {
             observer.onServerInflightChanged(1);
             observer.onServerInflightBytesChanged(request.bytes().length);
@@ -916,55 +953,246 @@ public final class OtryxRpcServer implements AutoCloseable {
                 configured.metadata());
     }
 
-    @Override
-    public void close() {
-        State current = state.get();
-        if (current == State.CLOSED) {
-            return;
+    /**
+     * 在一个总预算内异步关闭 Provider，合并并发关闭请求。
+     *
+     * <p>调用本方法不会阻塞 EventLoop。到达预算时返回报告，
+     * 不把线程中断或业务 Future 取消视为已停止用户业务。
+     * 重复调用返回首次关闭对应的同一个 Stage，后续传入预算不覆盖它。
+     *
+     * @param options 总关闭预算
+     * @return 实际资源终态报告，包含剩余业务租约数量
+     */
+    public CompletionStage<RpcShutdownReport> shutdown(
+            RpcShutdownOptions options) {
+        Objects.requireNonNull(options, "options");
+        CompletableFuture<RpcShutdownReport> current = shutdownResult.get();
+        if (current != null) {
+            return current;
         }
-
-        boolean drain = current == State.STARTED
-                && state.compareAndSet(State.STARTED, State.DRAINING);
-        if (!drain) {
-            state.set(State.CLOSED);
+        CompletableFuture<RpcShutdownReport> created =
+                new CompletableFuture<>();
+        if (!shutdownResult.compareAndSet(null, created)) {
+            return shutdownResult.get();
         }
+        State previous = state.getAndSet(State.DRAINING);
+        long startedAtNanos = System.nanoTime();
+        long deadlineNanos =
+                startedAtNanos + options.totalTimeout().toNanos();
+        ShutdownProgress progress = new ShutdownProgress();
 
-        RpcEndpoint endpoint = advertisedEndpoint;
-        if (endpoint != null) {
-            for (ServiceInstance configured : configuredInstances) {
+        // 超时哨兵独立于可能卡在外部 SDK 的协调器，保证 Stage 有界终态。
+        CompletableFuture.delayedExecutor(
+                        options.totalTimeout().toNanos(),
+                        TimeUnit.NANOSECONDS)
+                .execute(() -> created.complete(
+                        shutdownReport(
+                                progress,
+                                startedAtNanos,
+                                true)));
+
+        Thread.ofVirtual()
+                .name("otryx-provider-shutdown")
+                .start(() -> runShutdown(
+                        previous,
+                        deadlineNanos,
+                        startedAtNanos,
+                        progress,
+                        created));
+        return created;
+    }
+
+    private void runShutdown(
+            State previous,
+            long deadlineNanos,
+            long startedAtNanos,
+            ShutdownProgress progress,
+            CompletableFuture<RpcShutdownReport> result) {
+        try {
+            unregisterWithinBudget(deadlineNanos, progress);
+            if (previous == State.STARTED
+                    && remainingNanos(deadlineNanos) > 0L) {
                 try {
-                    registrar.unregister(
-                                    runtimeInstance(configured, endpoint))
-                            .toCompletableFuture()
-                            .orTimeout(
-                                    controlPlaneTimeout.toMillis(),
-                                    TimeUnit.MILLISECONDS)
-                            .join();
+                    long budget = Math.min(
+                            remainingNanos(deadlineNanos),
+                            drainTimeout.toNanos());
+                    CompletionStage<Void> stage =
+                            transport.drain(Duration.ofNanos(budget));
+                    progress.drained = awaitWithin(stage, budget);
+                    if (!progress.drained) {
+                        progress.failures.incrementAndGet();
+                        LOGGER.warn("RPC provider drain did not finish within shutdown budget");
+                    }
                 } catch (RuntimeException error) {
+                    progress.failures.incrementAndGet();
                     LOGGER.warn(
-                            "Failed to unregister RPC service: service={}, errorType={}",
-                            configured.serviceKey().canonicalName(),
+                            "RPC provider drain failed: errorType={}",
                             error.getClass().getName());
                 }
+            } else if (previous != State.STARTED) {
+                progress.drained = true;
             }
-        }
-
-        if (drain) {
+        } catch (Throwable error) {
+            progress.failures.incrementAndGet();
+            LOGGER.warn(
+                    "RPC provider shutdown control phase failed: errorType={}",
+                    error.getClass().getName());
+        } finally {
+            // Transport/执行器清理独立执行；任何一个失败都不能跳过余下资源。
+            pendingResponses.forEach(response -> response.cancel(true));
             try {
-                transport.drain(drainTimeout)
-                        .toCompletableFuture()
-                        .join();
-            } catch (RuntimeException error) {
+                transport.close();
+                progress.transportClosed = true;
+            } catch (Throwable error) {
+                progress.failures.incrementAndGet();
                 LOGGER.warn(
-                        "RPC graceful drain failed; forcing transport close. errorType={}",
+                        "RPC provider transport close failed: errorType={}",
                         error.getClass().getName());
+            }
+            try {
+                blockingExecutor.shutdownNow();
+            } catch (RuntimeException error) {
+                progress.failures.incrementAndGet();
+                LOGGER.warn(
+                        "RPC blocking executor shutdown failed: errorType={}",
+                        error.getClass().getName());
+            }
+            try {
+                cpuExecutor.shutdownNow();
+            } catch (RuntimeException error) {
+                progress.failures.incrementAndGet();
+                LOGGER.warn(
+                        "RPC CPU executor shutdown failed: errorType={}",
+                        error.getClass().getName());
+            }
+            try {
+                boolean virtualTerminated =
+                        blockingExecutor.awaitTermination(
+                                remainingNanos(deadlineNanos),
+                                TimeUnit.NANOSECONDS);
+                boolean cpuTerminated =
+                        cpuExecutor.awaitTermination(
+                                remainingNanos(deadlineNanos),
+                                TimeUnit.NANOSECONDS);
+                progress.executorsTerminated =
+                        virtualTerminated && cpuTerminated;
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                progress.failures.incrementAndGet();
             } finally {
                 state.set(State.CLOSED);
+                result.complete(shutdownReport(
+                        progress,
+                        startedAtNanos,
+                        remainingNanos(deadlineNanos) == 0L));
             }
         }
-        transport.close();
-        blockingExecutor.close();
-        cpuExecutor.shutdownNow();
+    }
+
+    private void unregisterWithinBudget(
+            long deadlineNanos,
+            ShutdownProgress progress) {
+        RpcEndpoint endpoint = advertisedEndpoint;
+        if (endpoint == null || configuredInstances.isEmpty()) {
+            progress.registrationsRemoved = true;
+            return;
+        }
+        List<CompletableFuture<Void>> pending = new ArrayList<>();
+        for (ServiceInstance configured : configuredInstances) {
+            if (remainingNanos(deadlineNanos) == 0L) {
+                break;
+            }
+            try {
+                pending.add(registrar.unregister(
+                                runtimeInstance(configured, endpoint))
+                        .toCompletableFuture());
+            } catch (RuntimeException error) {
+                progress.failures.incrementAndGet();
+                LOGGER.warn(
+                        "RPC service unregister failed: errorType={}",
+                        error.getClass().getName());
+            }
+        }
+        if (pending.size() != configuredInstances.size()) {
+            return;
+        }
+        long budget = Math.min(
+                remainingNanos(deadlineNanos),
+                controlPlaneTimeout.toNanos());
+        if (budget <= 0L) {
+            return;
+        }
+        boolean completed = awaitWithin(
+                CompletableFuture.allOf(pending.toArray(
+                        CompletableFuture[]::new)),
+                budget);
+        progress.registrationsRemoved = completed
+                && pending.stream().allMatch(future ->
+                        future.isDone() && !future.isCompletedExceptionally());
+        if (!progress.registrationsRemoved) {
+            progress.failures.incrementAndGet();
+            LOGGER.warn("RPC provider registry unregister did not fully complete");
+        }
+    }
+
+    private static boolean awaitWithin(
+            CompletionStage<?> stage,
+            long timeoutNanos) {
+        if (timeoutNanos <= 0L) {
+            return false;
+        }
+        try {
+            stage.toCompletableFuture().get(
+                    timeoutNanos,
+                    TimeUnit.NANOSECONDS);
+            return true;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (ExecutionException | TimeoutException error) {
+            return false;
+        }
+    }
+
+    private static long remainingNanos(long deadlineNanos) {
+        return Math.max(0L, deadlineNanos - System.nanoTime());
+    }
+
+    private RpcShutdownReport shutdownReport(
+            ShutdownProgress progress,
+            long startedAtNanos,
+            boolean expired) {
+        ProviderAdmissionController currentAdmission = admission;
+        int remaining = currentAdmission == null
+                ? 0
+                : currentAdmission.inFlightCalls();
+        return new RpcShutdownReport(
+                TimeUnit.NANOSECONDS.toMillis(
+                        System.nanoTime() - startedAtNanos),
+                expired,
+                progress.registrationsRemoved,
+                progress.drained,
+                progress.transportClosed,
+                progress.executorsTerminated,
+                remaining,
+                progress.failures.get());
+    }
+
+    /**
+     * 发起默认预算的非阻塞关闭。需要等待或检查终态的调用方应使用
+     * {@link #shutdown(RpcShutdownOptions)} 并等待返回的 Stage。
+     */
+    @Override
+    public void close() {
+        shutdown(RpcShutdownOptions.DEFAULT);
+    }
+
+    private static final class ShutdownProgress {
+        private volatile boolean registrationsRemoved;
+        private volatile boolean drained;
+        private volatile boolean transportClosed;
+        private volatile boolean executorsTerminated;
+        private final AtomicInteger failures = new AtomicInteger();
     }
 
     private enum State {

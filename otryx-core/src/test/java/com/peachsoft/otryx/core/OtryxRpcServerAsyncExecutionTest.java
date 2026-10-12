@@ -22,6 +22,7 @@ import com.peachsoft.otryx.registry.ServiceRegistrar;
 import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportServer;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -622,6 +623,61 @@ public class OtryxRpcServerAsyncExecutionTest {
                     .get(2, TimeUnit.SECONDS);
             assertEquals(RpcStatus.OK,
                     RpcProtocolCodec.view(recovered).status());
+        } finally {
+            business.release.countDown();
+            server.close();
+        }
+    }
+
+    @Test
+    void shutdownMustReturnWithinBudgetForUninterruptibleWork()
+            throws Exception {
+        CapturingTransportServer transport = new CapturingTransportServer();
+        UncooperativeServiceImpl business = new UncooperativeServiceImpl();
+        CountDownLatch released = new CountDownLatch(1);
+        RpcObserver observer = new RpcObserver() {
+            @Override
+            public void onServerInflightChanged(int delta) {
+                if (delta < 0) {
+                    released.countDown();
+                }
+            }
+        };
+        OtryxRpcServer server = OtryxRpcServer.builder()
+                .serviceRegistrar(new NoopRegistry())
+                .transportServer(transport)
+                .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
+                .bindEndpoint(new RpcEndpoint("127.0.0.1", 19107))
+                .maxConcurrent(1)
+                .executionOptions(new RpcProviderExecutionOptions(false, 1, 2))
+                .observer(observer)
+                .build()
+                .registerService(
+                        UncooperativeService.class,
+                        business,
+                        "1.0.0",
+                        "default");
+        try {
+            server.start().toCompletableFuture().join();
+            CompletableFuture<byte[]> response = transport.handle(
+                            requestFor(UncooperativeService.class, "stall"))
+                    .toCompletableFuture();
+            assertTrue(business.entered.await(2, TimeUnit.SECONDS));
+            long startedAtNanos = System.nanoTime();
+            RpcShutdownReport report = server.shutdown(
+                            new RpcShutdownOptions(Duration.ofMillis(120)))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime() - startedAtNanos) < 1000L);
+            assertTrue(report.remainingAdmissionLeases() >= 1,
+                    "A still-running business method must retain its lease");
+            assertFalse(report.executorsTerminated());
+            assertTrue(response.isDone());
+            assertEquals(1L, released.getCount(),
+                    "Shutdown cannot release a lease just by cancelling a Future");
+
+            business.release.countDown();
+            assertTrue(released.await(2, TimeUnit.SECONDS));
         } finally {
             business.release.countDown();
             server.close();
