@@ -14,6 +14,7 @@ import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
 import java.net.Socket;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -82,6 +83,90 @@ class VertxRpcTransportAdmissionTest {
         }
     }
 
+    @Test
+    void partialFrameBudgetMustReleaseOnDisconnect() throws Exception {
+        RpcTransportOptions options = RpcTransportOptions.DEFAULT.withAdmission(
+                new RpcTransportAdmissionOptions(
+                        3, 3, 1024L, Duration.ofSeconds(2)));
+        VertxRpcTransportServer server = new VertxRpcTransportServer(options);
+        RpcEndpoint endpoint = start(server);
+        byte[] firstChunk = Arrays.copyOf(requestFrame(2048), 700);
+        try (Socket first = connect(endpoint);
+             Socket second = connect(endpoint)) {
+            handshake(first, options);
+            handshake(second, options);
+
+            first.getOutputStream().write(firstChunk);
+            first.getOutputStream().flush();
+            await(() -> server.bufferedPartialBytes() == 700L);
+
+            second.getOutputStream().write(firstChunk);
+            second.getOutputStream().flush();
+            assertEquals(RpcMessageType.GO_AWAY,
+                    readFrame(second).messageType());
+            await(() -> server.bufferedPartialBytes() == 700L);
+
+            first.close();
+            await(() -> server.bufferedPartialBytes() == 0L);
+            try (Socket recovered = connect(endpoint)) {
+                handshake(recovered, options);
+                recovered.getOutputStream().write(firstChunk);
+                recovered.getOutputStream().flush();
+                await(() -> server.bufferedPartialBytes() == 700L);
+            }
+            await(() -> server.bufferedPartialBytes() == 0L);
+        } finally {
+            server.close();
+        }
+    }
+
+    @Test
+    void stalledPartialFrameMustExpire() throws Exception {
+        RpcTransportOptions options = RpcTransportOptions.DEFAULT.withAdmission(
+                new RpcTransportAdmissionOptions(
+                        2, 2, 1024L, Duration.ofMillis(120)));
+        VertxRpcTransportServer server = new VertxRpcTransportServer(options);
+        RpcEndpoint endpoint = start(server);
+        try (Socket stalled = connect(endpoint)) {
+            handshake(stalled, options);
+            stalled.getOutputStream().write(
+                    Arrays.copyOf(requestFrame(2048), 64));
+            stalled.getOutputStream().flush();
+            await(() -> server.bufferedPartialBytes() == 64L);
+            assertEquals(RpcMessageType.GO_AWAY,
+                    readFrame(stalled).messageType());
+            await(() -> server.bufferedPartialBytes() == 0L);
+        } finally {
+            server.close();
+        }
+    }
+
+    private static byte[] requestFrame(int payloadSize) {
+        return RpcProtocolCodec.encode(new RpcFrame(
+                RpcMessageType.REQUEST,
+                RpcCodecIds.FORY_NATIVE,
+                RpcStatus.OK,
+                91L,
+                1,
+                1,
+                Map.of(),
+                new byte[payloadSize]));
+    }
+
+    private static RpcFrame readFrame(Socket socket) throws Exception {
+        byte[] header = socket.getInputStream().readNBytes(
+                RpcProtocolCodec.HEADER_LENGTH);
+        assertEquals(RpcProtocolCodec.HEADER_LENGTH, header.length);
+        int length = RpcProtocolCodec.expectedFrameLength(header);
+        byte[] payload = socket.getInputStream().readNBytes(
+                length - header.length);
+        assertEquals(length - header.length, payload.length);
+        byte[] framed = new byte[length];
+        System.arraycopy(header, 0, framed, 0, header.length);
+        System.arraycopy(payload, 0, framed, header.length, payload.length);
+        return RpcProtocolCodec.decode(framed);
+    }
+
     private static RpcTransportOptions options(
             int maxConnections,
             int maxHandshakes) {
@@ -122,16 +207,7 @@ class VertxRpcTransportAdmissionTest {
                 RpcHandshakeCodec.encode(options.capabilities()));
         socket.getOutputStream().write(RpcProtocolCodec.encode(hello));
         socket.getOutputStream().flush();
-        byte[] header = socket.getInputStream().readNBytes(
-                RpcProtocolCodec.HEADER_LENGTH);
-        assertEquals(RpcProtocolCodec.HEADER_LENGTH, header.length);
-        int fullLength = RpcProtocolCodec.expectedFrameLength(header);
-        byte[] content = socket.getInputStream().readNBytes(
-                fullLength - header.length);
-        byte[] frame = new byte[fullLength];
-        System.arraycopy(header, 0, frame, 0, header.length);
-        System.arraycopy(content, 0, frame, header.length, content.length);
-        RpcFrame ack = RpcProtocolCodec.decode(frame);
+        RpcFrame ack = readFrame(socket);
         assertEquals(RpcMessageType.HELLO_ACK, ack.messageType());
         assertEquals(RpcStatus.OK, ack.status());
     }
