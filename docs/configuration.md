@@ -30,6 +30,12 @@
 - heartbeat timeout 小于正常 GC/网络抖动窗口；
 - reconnect backoff 过小形成恢复风暴。
 
+### Transport 接入准入预算（U03-A）
+
+`otryx.rpc.transport.admission.max-connections`（默认 4096）约束 Vert.x 已接入连接；`max-handshakes`（默认 1024）约束同时进行的 OTRYX HELLO 协议握手，失败即时关闭 Socket、关闭后归还幂等 Lease。注意二者均**不能**直接覆盖 TLS 预握手阶段、TCP backlog 或操作系统 Socket 内存。
+
+`max-buffered-partial-frame-bytes` 和 `partial-frame-timeout` 目前仅为已绑定配置，服务端全局部分帧与超时治理将由 U03-B 实现；入站单连接 Inflight 约束由 U03-C 实现。详见 [Transport 接入容量](reference/transport-admission.md)。
+
 ## 3. Provider
 
 默认：

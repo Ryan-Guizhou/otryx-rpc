@@ -1,6 +1,7 @@
 package com.peachsoft.otryx.spring.autoconfigure;
 
 import com.peachsoft.otryx.observability.RpcSecurityMode;
+import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -652,6 +653,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private Duration reconnectBaseBackoff = Duration.ofMillis(50);
         private Duration reconnectMaxBackoff = Duration.ofSeconds(3);
         private final Security security = new Security();
+        private final TransportAdmission admission = new TransportAdmission();
 
         /**
          * 返回Transport SPI 名称。
@@ -858,6 +860,105 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public Security getSecurity() {
             return security;
+        }
+
+        /**
+         * 返回 Transport 连接、协议握手和部分帧缓存预算。
+         *
+         * @return Transport 准入参数
+         */
+        public TransportAdmission getAdmission() {
+            return admission;
+        }
+    }
+
+    /**
+     * Transport 准入配置，当前 U03-A 启用连接与协议握手限额。
+     */
+    public static class TransportAdmission {
+        private int maxConnections =
+                RpcTransportAdmissionOptions.DEFAULT.maxConnections();
+        private int maxHandshakes =
+                RpcTransportAdmissionOptions.DEFAULT.maxHandshakes();
+        private long maxBufferedPartialFrameBytes =
+                RpcTransportAdmissionOptions.DEFAULT.maxBufferedPartialFrameBytes();
+        private Duration partialFrameTimeout =
+                RpcTransportAdmissionOptions.DEFAULT.partialFrameTimeout();
+
+        /** 创建准入配置。 */
+        public TransportAdmission() {
+        }
+
+        /**
+         * 返回单个 Provider 实例已接入的最大连接数。
+         *
+         * @return 最大已接入连接数
+         */
+        public int getMaxConnections() {
+            return maxConnections;
+        }
+
+        /**
+         * 设置单个 Provider 实例已接入的最大连接数。
+         *
+         * @param value 最大已接入连接数
+         */
+        public void setMaxConnections(int value) {
+            maxConnections = value;
+        }
+
+        /**
+         * 返回并发 OTRYX HELLO 握手容量。
+         *
+         * @return 并发 HELLO 握手限额
+         */
+        public int getMaxHandshakes() {
+            return maxHandshakes;
+        }
+
+        /**
+         * 设置并发 OTRYX HELLO 握手容量。
+         *
+         * @param value 并发 HELLO 握手限额
+         */
+        public void setMaxHandshakes(int value) {
+            maxHandshakes = value;
+        }
+
+        /**
+         * 返回预留的全局不完整帧内存预算。
+         *
+         * @return 全局不完整帧预算（字节）
+         */
+        public long getMaxBufferedPartialFrameBytes() {
+            return maxBufferedPartialFrameBytes;
+        }
+
+        /**
+         * 设置预留的全局不完整帧内存预算。
+         *
+         * @param value 全局不完整帧预算（字节）
+         */
+        public void setMaxBufferedPartialFrameBytes(long value) {
+            maxBufferedPartialFrameBytes = value;
+        }
+
+        /**
+         * 返回预留的不完整帧最大驻留时间。
+         *
+         * @return 不完整帧最大驻留时间
+         */
+        public Duration getPartialFrameTimeout() {
+            return partialFrameTimeout;
+        }
+
+        /**
+         * 设置预留的不完整帧最大驻留时间。
+         *
+         * @param value 不完整帧最大驻留时间
+         */
+        public void setPartialFrameTimeout(Duration value) {
+            partialFrameTimeout = value;
         }
     }
 

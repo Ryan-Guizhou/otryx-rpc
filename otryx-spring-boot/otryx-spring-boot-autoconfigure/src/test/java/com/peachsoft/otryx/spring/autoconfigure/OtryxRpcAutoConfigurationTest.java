@@ -396,6 +396,42 @@ public class OtryxRpcAutoConfigurationTest {
     }
 
     @Test
+    void transportAdmissionOptionsShouldBindToRpcTransportOptions() {
+        contextRunner
+                .withPropertyValues(
+                        "otryx.rpc.transport.admission.max-connections=2",
+                        "otryx.rpc.transport.admission.max-handshakes=1",
+                        "otryx.rpc.transport.admission.max-buffered-partial-frame-bytes=65536",
+                        "otryx.rpc.transport.admission.partial-frame-timeout=4s")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    RpcTransportOptions options =
+                            context.getBean(RpcTransportOptions.class);
+                    assertThat(options.admission().maxConnections())
+                            .isEqualTo(2);
+                    assertThat(options.admission().maxHandshakes())
+                            .isEqualTo(1);
+                    assertThat(options.admission().maxBufferedPartialFrameBytes())
+                            .isEqualTo(65536L);
+                    assertThat(options.admission().partialFrameTimeout())
+                            .isEqualTo(java.time.Duration.ofSeconds(4));
+                });
+    }
+
+    @Test
+    void invalidTransportAdmissionMustFailBeforeStartingNetwork() {
+        contextRunner
+                .withPropertyValues(
+                        "otryx.rpc.transport.admission.max-handshakes=0")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining(
+                                    "transport.admission.max-handshakes");
+                });
+    }
+
+    @Test
     void providerAdmissionBudgetPropertiesShouldBind() {
         contextRunner.withPropertyValues(
                 "otryx.rpc.server.max-concurrent=64",

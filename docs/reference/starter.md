@@ -219,6 +219,11 @@ public interface OrderService {
 - `otryx.rpc.server.execution.cpu-parallelism`：CPU 执行池线程数，默认当前 JVM 可用处理器数。
 - `otryx.rpc.server.execution.cpu-queue-capacity`：CPU 执行池有界队列容量，默认 1024。
 - `otryx.rpc.transport.max-inflight-per-connection`：单连接最大未完成请求数。
+- `otryx.rpc.transport.admission.max-connections`：Transport Server 在 NetSocket 回调后已接入连接限额，默认 4096；TLS 预握手不在此统计范围内。
+- `otryx.rpc.transport.admission.max-handshakes`：同时进行 OTRYX HELLO 握手的已接入连接限额，默认 1024。
+- `otryx.rpc.transport.admission.max-buffered-partial-frame-bytes`：全局部分帧预算预留配置，默认 67108864；**U03-B 前尚不实际强制执行**。
+- `otryx.rpc.transport.admission.partial-frame-timeout`：部分帧驻留时间预留配置，默认 10 秒；**U03-B 前尚不实际强制执行**。
+- [Transport 准入限制与资源所有权](transport-admission.md) 说明已实现的连接/握手限制及 TLS 安全边界。
 - `otryx.rpc.client.resilience.max-attempts`：单次逻辑调用最大尝试次数，默认 2，包含首次调用。
 - `otryx.rpc.client.resilience.retry-budget-ratio`：每个原始请求补充的全局重试额度比例，默认 0.10。
 - `otryx.rpc.client.resilience.retry-budget-min-retries` / `retry-budget-max-retries`：重试预算突发下限/上限，默认 10/100。
