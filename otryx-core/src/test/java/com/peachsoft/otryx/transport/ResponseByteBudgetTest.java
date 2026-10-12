@@ -41,7 +41,10 @@ class ResponseByteBudgetTest {
         admitted.close();
 
         assertEquals(0L, budget.reservedBytes());
-        assertNotNull(budget.tryAcquire(1L));
+        ResponseByteBudget.Lease afterRejection = budget.tryAcquire(1L);
+        assertNotNull(afterRejection);
+        afterRejection.close();
+        assertEquals(0L, budget.reservedBytes());
     }
 
     @Test
