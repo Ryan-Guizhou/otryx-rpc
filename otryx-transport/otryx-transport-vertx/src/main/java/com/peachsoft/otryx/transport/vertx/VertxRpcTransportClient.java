@@ -68,7 +68,7 @@ final class VertxRpcTransportClient implements RpcTransportClient {
     private final AtomicBoolean closed = new AtomicBoolean();
     private final long groupSweepTimerId;
     private volatile long tlsReloadTimerId = -1L;
-    private volatile VertxTlsSupport.FileState tlsFileState;
+    private volatile TlsReloadController<VertxTlsSupport.FileState> tlsReloadController;
 
     VertxRpcTransportClient(RpcTransportOptions options) {
         this.options = options;
@@ -977,51 +977,25 @@ final class VertxRpcTransportClient implements RpcTransportClient {
         if (!options.security().enabled()) {
             return;
         }
-        tlsFileState = VertxTlsSupport.fileState(
-                options.security());
+        TlsReloadController<VertxTlsSupport.FileState> controller =
+                new TlsReloadController<>(
+                        vertx.getOrCreateContext(),
+                        () -> VertxTlsSupport.fileState(
+                                options.security()),
+                        ignored -> VertxTlsSupport.reloadOptions(
+                                options.security(),
+                                true,
+                                options.observer()),
+                        sslOptions -> client.updateSSLOptions(
+                                sslOptions,
+                                true),
+                        this::observeCertificateReload);
+        tlsReloadController = controller;
         tlsReloadTimerId = vertx.setPeriodic(
-                options.security()
-                        .reloadInterval()
-                        .toMillis(),
-                ignored -> reloadTlsIfChanged());
-    }
-
-    private void reloadTlsIfChanged() {
-        if (closed.get()) {
-            return;
-        }
-        VertxTlsSupport.FileState current =
-                VertxTlsSupport.fileState(
-                        options.security());
-        if (current.equals(tlsFileState)) {
-            return;
-        }
-        long startedAtNanos = System.nanoTime();
-        try {
-            var sslOptions = VertxTlsSupport.reloadOptions(
-                    options.security(),
-                    true,
-                    options.observer());
-            client.updateSSLOptions(
-                            sslOptions,
-                            true)
-                    .onComplete(result -> {
-                        Throwable error =
-                                result.failed()
-                                        ? result.cause()
-                                        : null;
-                        if (error == null) {
-                            tlsFileState = current;
-                        }
-                        observeCertificateReload(
-                                startedAtNanos,
-                                error);
-                    });
-        } catch (RuntimeException error) {
-            observeCertificateReload(
-                    startedAtNanos,
-                    error);
-        }
+                options.security().reloadInterval().toMillis(),
+                ignored -> controller.requestReload());
+        // 首次校验同样必须在控制面执行器中执行，不在 EventLoop 读取文件。
+        controller.requestReload();
     }
 
     private void observeCertificateReload(
@@ -1044,6 +1018,12 @@ final class VertxRpcTransportClient implements RpcTransportClient {
         if (tlsReloadTimerId >= 0L) {
             vertx.cancelTimer(tlsReloadTimerId);
             tlsReloadTimerId = -1L;
+        }
+        TlsReloadController<VertxTlsSupport.FileState> controller =
+                tlsReloadController;
+        tlsReloadController = null;
+        if (controller != null) {
+            controller.close();
         }
     }
 
