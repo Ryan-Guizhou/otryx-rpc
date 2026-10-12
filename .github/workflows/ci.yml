@@ -53,10 +53,19 @@ jobs:
       - name: Verify magic-literal policy fixtures
         run: python3 scripts/test_java_magic_literals.py
 
-      - name: Audit semantic magic literals across all production Java modules
+      - name: Enforce semantic magic literals across all production Java modules
         run: >-
           python3 scripts/check_java_magic_literals.py
-          --audit --report target/magic-literal-audit.json
+          --enforce-all --report target/magic-literal-audit.json
+
+      - name: Upload strict semantic magic-literal audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: magic-literal-gate-${{ github.run_id }}
+          path: target/magic-literal-audit.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Verify repository identity checker self-tests
         run: python3 scripts/test_repository_identity.py

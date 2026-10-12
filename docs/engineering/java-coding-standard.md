@@ -44,11 +44,11 @@ OTRYX 尚未 GA，不对历史开发版本承担 Java API、SPI、配置、Wire�
 python3 scripts/test_java_magic_literals.py
 python3 scripts/check_java_magic_literals.py --audit --report target/magic-literal-audit.json
 python3 scripts/check_java_magic_literals.py --changed --base <base-commit-sha>
-# 全仓整改完成并验证零发现后启用：
-python3 scripts/check_java_magic_literals.py --enforce-all
+# 强制执行全仓高置信度检测（当前 CI 使用此模式）：
+python3 scripts/check_java_magic_literals.py --enforce-all --report target/magic-literal-audit.json
 ```
 
-该工具只检查 Java 生产源码的八类高置信度字面量位置（`@Extension`、`providerOption`、`Map.entry`/`Map.of`、`JsonNode.path`、`Metric.tag`、JVM/ENV 与 HTTP Header），不假装分析所有 Java 字符串或数值表达式。全仓整改过程中，audit 可输出报告但暂不阻断；最后必须开启 enforce-all CI 门禁，并对指标名称、容量/时序魔法数、状态映射等未能由词法规则识别的内容保留人工复查记录。不得把业务已知缺陷混入纯常量化 PR。
+该工具只检查 Java 生产源码的八类高置信度字面量位置（`@Extension`、`providerOption`、`Map.entry`/`Map.of`、`JsonNode.path`、`Metric.tag`、JVM/ENV 与 HTTP Header），不假装分析所有 Java 字符串或数值表达式。Issue #76 完成后的主线 CI 使用 --enforce-all 作为阻断门禁，并保留 JSON 审计证据；--audit 可用于开发阶段审计。指标名称、容量/时序魔法数、状态映射等未能由词法规则识别的内容仍需人工复查并记录依据，零发现不表示所有语义字面量已获证明。不得把业务已知缺陷混入纯常量化 PR。
 
 Java 源文件使用 UTF-8 无 BOM、LF、4 空格、行宽 120，禁止通配符 import、行尾空白和无意义空行。建议按 java/javax/jakarta、第三方、项目内包分组；导入顺序全面自动强制前应先评估全仓差异，不造成与行为变更混合的巨大格式化 PR。遵守现有 Checkstyle 零违规门禁。
 
