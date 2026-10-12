@@ -25,6 +25,7 @@ import java.util.Set;
  * @param reconnectMaxBackoff 重连退避最大窗口
  * @param observer 连接生命周期 Observer
  * @param security TLS/mTLS 配置
+ * @param admission Transport 连接、握手和部分帧预算
  *
  * @Author Ryan
  * @Version 1.0.0
@@ -43,7 +44,8 @@ public record RpcTransportOptions(
         Duration reconnectBaseBackoff,
         Duration reconnectMaxBackoff,
         RpcObserver observer,
-        RpcTransportSecurityOptions security) {
+        RpcTransportSecurityOptions security,
+        RpcTransportAdmissionOptions admission) {
 
     private static final Duration DEFAULT_HEARTBEAT_INTERVAL =
             Duration.ofSeconds(30);
@@ -266,6 +268,54 @@ public record RpcTransportOptions(
                 RpcTransportSecurityOptions.PLAINTEXT);
     }
 
+    /**
+     * 将旧版参数表映射到默认 Transport 准入预算。
+     *
+     * @param maxInflightPerConnection 单连接最大并发请求数
+     * @param maxFrameBytes 单帧字节数
+     * @param maxWriteQueueBytes 写队列字节数
+     * @param connectTimeout TCP 建连超时
+     * @param handshakeTimeout RPC 握手超时
+     * @param codecIds Codec 能力
+     * @param connectionsPerEndpoint 每 Endpoint 的连接分片数
+     * @param heartbeatInterval 心跳间隔
+     * @param heartbeatTimeout 心跳超时
+     * @param reconnectBaseBackoff 重连基础退避
+     * @param reconnectMaxBackoff 最大退避
+     * @param observer Observer
+     * @param security TLS/mTLS 配置
+     */
+    public RpcTransportOptions(
+            int maxInflightPerConnection,
+            int maxFrameBytes,
+            int maxWriteQueueBytes,
+            Duration connectTimeout,
+            Duration handshakeTimeout,
+            Set<Byte> codecIds,
+            int connectionsPerEndpoint,
+            Duration heartbeatInterval,
+            Duration heartbeatTimeout,
+            Duration reconnectBaseBackoff,
+            Duration reconnectMaxBackoff,
+            RpcObserver observer,
+            RpcTransportSecurityOptions security) {
+        this(
+                maxInflightPerConnection,
+                maxFrameBytes,
+                maxWriteQueueBytes,
+                connectTimeout,
+                handshakeTimeout,
+                codecIds,
+                connectionsPerEndpoint,
+                heartbeatInterval,
+                heartbeatTimeout,
+                reconnectBaseBackoff,
+                reconnectMaxBackoff,
+                observer,
+                security,
+                RpcTransportAdmissionOptions.DEFAULT);
+    }
+
     /** 校验容量、超时与能力配置。 */
     public RpcTransportOptions {
         if (maxInflightPerConnection <= 0
@@ -290,6 +340,9 @@ public record RpcTransportOptions(
         security = security == null
                 ? RpcTransportSecurityOptions.PLAINTEXT
                 : security;
+        admission = admission == null
+                ? RpcTransportAdmissionOptions.DEFAULT
+                : admission;
         if (codecIds.isEmpty()) {
             throw new IllegalArgumentException(
                     "At least one transport codec id is required");
@@ -316,7 +369,8 @@ public record RpcTransportOptions(
                 reconnectBaseBackoff,
                 reconnectMaxBackoff,
                 value,
-                security);
+                security,
+                admission);
     }
 
     /**
@@ -340,6 +394,31 @@ public record RpcTransportOptions(
                 reconnectBaseBackoff,
                 reconnectMaxBackoff,
                 observer,
+                value,
+                admission);
+    }
+
+    /**
+     * 使用指定的 Transport 准入预算构建等价配置。
+     *
+     * @param value 连接、握手与部分帧准入预算
+     * @return 带新预算的配置
+     */
+    public RpcTransportOptions withAdmission(RpcTransportAdmissionOptions value) {
+        return new RpcTransportOptions(
+                maxInflightPerConnection,
+                maxFrameBytes,
+                maxWriteQueueBytes,
+                connectTimeout,
+                handshakeTimeout,
+                codecIds,
+                connectionsPerEndpoint,
+                heartbeatInterval,
+                heartbeatTimeout,
+                reconnectBaseBackoff,
+                reconnectMaxBackoff,
+                observer,
+                security,
                 value);
     }
 
