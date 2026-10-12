@@ -16,7 +16,7 @@ import java.util.List;
 @Extension(EtcdRegistryFactory.EXTENSION_NAME)
 public final class EtcdRegistryFactory implements RegistryFactory {
 
-    private static final String EXTENSION_NAME = "etcd";
+    static final String EXTENSION_NAME = "etcd";
     private static final String OPTION_LEASE_TTL_SECONDS = "leaseTtlSeconds";
 
     private static final long DEFAULT_LEASE_TTL_SECONDS = 30;
