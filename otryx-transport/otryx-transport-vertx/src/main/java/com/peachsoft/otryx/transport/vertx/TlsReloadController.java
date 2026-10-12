@@ -172,6 +172,11 @@ final class TlsReloadController<S> implements AutoCloseable {
         return lastSuccessfulState;
     }
 
+    /** 返回完整 TLS 准备与发布过程是否仍在途。 */
+    boolean reloadInProgress() {
+        return inFlight.get();
+    }
+
     /**
      * 幂等关闭控制面工作池，不等待不可强制终止的外部文件 IO。
      */
