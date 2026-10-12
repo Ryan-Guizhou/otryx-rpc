@@ -2,12 +2,13 @@
 
 ## 支持版本
 
-当前安全维护分支：
+OTRYX 当前仅有 `1.0.0-SNAPSHOT` 开发源码，尚未发布 GA；以下是公开支持状态，不代表历史稳定分支已被修改。
 
 | Version | Supported |
 |---|---|
-| 1.0.x | Yes |
-| 0.x | No |
+| OTRYX `1.0.0-SNAPSHOT` | Development; no published GA support claim |
+| OTRYX `1.0.x` GA | Not yet published |
+| OTRYX `0.x` | Not supported |
 
 ## 报告安全漏洞
 
@@ -36,6 +37,8 @@ OTRYX RPC 安全边界包括：
 - Retry/Replay 风险；
 - 依赖漏洞；
 - Release Artifact 完整性。
+
+当前代码中，Fory 可信兼容模式与可选 PLAINTEXT 均存在，不能仅因支持 TLS/mTLS 就推断框架默认安全。严格反序列化策略、可信身份与应用授权链属于首发质量改造工作包，详见[实施契约](docs/engineering/plans/2026-10-12-open-source-quality-upgrade.md)。
 
 ## Secret 规则
 
