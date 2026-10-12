@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.peachsoft.otryx.api.OtryxRpcIdempotent;
 import com.peachsoft.otryx.api.RpcEndpoint;
@@ -512,6 +513,45 @@ class OtryxRpcClientResilienceTest {
                 "Closed client must not send new network requests");
     }
 
+    @Test
+    void clientShutdownMustReturnBudgetReportForUncooperativeTransport()
+            throws Exception {
+        UncooperativeCloseTransport transport =
+                new UncooperativeCloseTransport();
+        OtryxRpcClient client = OtryxRpcClient.builder()
+                .serviceDiscovery(new StaticDiscovery())
+                .transportClient(transport)
+                .codecRegistry(RpcCodecRegistry.of(new StringCodec()))
+                .build();
+        try {
+            RetryService service = client.refer(
+                    RetryService.class, "1.0.0", "test");
+            assertEquals("ok", service.find("initial"));
+
+            CompletionStage<RpcClientShutdownReport> first =
+                    client.shutdown(
+                            new RpcShutdownOptions(Duration.ofMillis(120)));
+            assertTrue(transport.closeEntered.await(2, TimeUnit.SECONDS));
+            CompletionStage<RpcClientShutdownReport> duplicate =
+                    client.shutdown(
+                            new RpcShutdownOptions(Duration.ofSeconds(1)));
+            assertSame(first, duplicate);
+
+            RpcClientShutdownReport report = first.toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            assertTrue(report.deadlineExceeded());
+            assertFalse(report.transportClosed());
+            assertTrue(report.executorsTerminated());
+            assertEquals(0, report.remainingLogicalCalls());
+            assertThrows(RpcUnavailableException.class,
+                    () -> client.refer(
+                            RetryService.class, "1.0.0", "test"));
+        } finally {
+            transport.releaseClose.countDown();
+            client.close();
+        }
+    }
+
     private static OtryxRpcClient client(
             RequestFunction request) {
         return client(
@@ -593,6 +633,34 @@ class OtryxRpcClientResilienceTest {
 
         @Override
         public void close() {
+        }
+    }
+
+    private static final class UncooperativeCloseTransport
+            implements RpcTransportClient {
+        private final CountDownLatch closeEntered = new CountDownLatch(1);
+        private final CountDownLatch releaseClose = new CountDownLatch(1);
+
+        @Override
+        public CompletionStage<byte[]> request(
+                RpcEndpoint endpoint,
+                byte[] frame,
+                Duration timeout) {
+            return CompletableFuture.completedFuture(
+                    successResponse(frame, "ok"));
+        }
+
+        @Override
+        public void close() {
+            closeEntered.countDown();
+            for (;;) {
+                try {
+                    releaseClose.await();
+                    return;
+                } catch (InterruptedException ignored) {
+                    // 模拟不配合中断的外部 Transport SPI。
+                }
+            }
         }
     }
 
