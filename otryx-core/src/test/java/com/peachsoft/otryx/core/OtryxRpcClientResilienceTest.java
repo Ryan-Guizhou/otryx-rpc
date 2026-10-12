@@ -2,6 +2,7 @@ package com.peachsoft.otryx.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -448,6 +449,67 @@ class OtryxRpcClientResilienceTest {
 
             assertEquals(0, client.trackedEndpointCount());
         }
+    }
+
+    @Test
+    void closingClientMustSettlePendingCallsAndCancelTransport()
+            throws Exception {
+        CountDownLatch dispatched = new CountDownLatch(1);
+        CompletableFuture<byte[]> pendingTransport = new CompletableFuture<>();
+        OtryxRpcClient client = client((endpoint, frame, timeout) -> {
+            dispatched.countDown();
+            return pendingTransport;
+        });
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        try {
+            RetryService service =
+                    client.refer(RetryService.class, "1.0.0", "test");
+            Thread invocation = Thread.ofVirtual().start(() -> {
+                try {
+                    service.find("pending");
+                } catch (Throwable error) {
+                    failure.set(error);
+                }
+            });
+            assertTrue(dispatched.await(2, TimeUnit.SECONDS));
+
+            client.close();
+            client.close();
+            invocation.join(2_000L);
+            assertFalse(invocation.isAlive(), "Client close must settle pending calls");
+            assertTrue(pendingTransport.isCancelled(),
+                    "Client close must propagate cancellation to the transport");
+            Throwable error = failure.get();
+            assertNotNull(error);
+            if (error instanceof CompletionException wrapped) {
+                error = wrapped.getCause();
+            }
+            assertInstanceOf(RpcUnavailableException.class, error);
+        } finally {
+            client.close();
+        }
+    }
+
+    @Test
+    void closedClientMustRejectNewReferencesAndCalls() {
+        AtomicInteger requests = new AtomicInteger();
+        OtryxRpcClient client = client((endpoint, frame, timeout) -> {
+            requests.incrementAndGet();
+            return CompletableFuture.completedFuture(
+                    successResponse(frame, "ok"));
+        });
+        RetryService service =
+                client.refer(RetryService.class, "1.0.0", "test");
+        client.close();
+        client.close();
+
+        assertThrows(RpcUnavailableException.class,
+                () -> client.refer(RetryService.class, "1.0.0", "test"));
+        CompletionException rejected = assertThrows(
+                CompletionException.class, () -> service.find("after-close"));
+        assertInstanceOf(RpcUnavailableException.class, rejected.getCause());
+        assertEquals(0, requests.get(),
+                "Closed client must not send new network requests");
     }
 
     private static OtryxRpcClient client(

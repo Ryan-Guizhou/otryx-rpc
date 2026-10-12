@@ -53,6 +53,9 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * OTRYX RPC Consumer 运行时，负责从本地服务目录选取端点并执行请求。
@@ -69,6 +72,8 @@ import java.util.concurrent.TimeUnit;
  * @CreateTime 2026/9/23 10:51
  */
 public final class OtryxRpcClient implements AutoCloseable {
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(OtryxRpcClient.class);
     private final ServiceDiscovery discovery;
     private final RpcTransportClient transport;
     private final RpcCodecRegistry codecs;
@@ -86,6 +91,9 @@ public final class OtryxRpcClient implements AutoCloseable {
     private final RpcTracingBridge tracingBridge;
     private final ConcurrentMap<ServiceKey, ServiceDirectory> directories =
             new ConcurrentHashMap<>();
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final Set<CompletableFuture<Object>> pendingCalls =
+            ConcurrentHashMap.newKeySet();
     private final ConcurrentMap<RpcEndpoint, EndpointStats> stats =
             new ConcurrentHashMap<>();
     private final LoadBalanceMetrics loadMetrics =
@@ -188,6 +196,9 @@ public final class OtryxRpcClient implements AutoCloseable {
      */
     public <T> T refer(Class<T> api, String version, String group) {
         Objects.requireNonNull(api, "api");
+        if (closed.get()) {
+            throw new RpcUnavailableException("RPC client is closed");
+        }
         ServiceKey key = new ServiceKey(api.getName(), version, group);
         String schemaFingerprint =
                 RpcSchemaFingerprint.serviceFingerprint(
@@ -222,6 +233,9 @@ public final class OtryxRpcClient implements AutoCloseable {
             ClientReference reference,
             ClientMethodBinding method) {
         long startedAtNanos = System.nanoTime();
+        if (closed.get()) {
+            return clientClosed();
+        }
         if (!responseCompletionPermits.tryAcquire()) {
             return capacityExceeded();
         }
@@ -241,6 +255,9 @@ public final class OtryxRpcClient implements AutoCloseable {
             ClientMethodBinding method,
             Object argument0) {
         long startedAtNanos = System.nanoTime();
+        if (closed.get()) {
+            return clientClosed();
+        }
         if (!responseCompletionPermits.tryAcquire()) {
             return capacityExceeded();
         }
@@ -261,6 +278,9 @@ public final class OtryxRpcClient implements AutoCloseable {
             Object argument0,
             Object argument1) {
         long startedAtNanos = System.nanoTime();
+        if (closed.get()) {
+            return clientClosed();
+        }
         if (!responseCompletionPermits.tryAcquire()) {
             return capacityExceeded();
         }
@@ -282,6 +302,9 @@ public final class OtryxRpcClient implements AutoCloseable {
             Object argument1,
             Object argument2) {
         long startedAtNanos = System.nanoTime();
+        if (closed.get()) {
+            return clientClosed();
+        }
         if (!responseCompletionPermits.tryAcquire()) {
             return capacityExceeded();
         }
@@ -307,6 +330,9 @@ public final class OtryxRpcClient implements AutoCloseable {
             Object argument2,
             Object argument3) {
         long startedAtNanos = System.nanoTime();
+        if (closed.get()) {
+            return clientClosed();
+        }
         if (!responseCompletionPermits.tryAcquire()) {
             return capacityExceeded();
         }
@@ -330,6 +356,9 @@ public final class OtryxRpcClient implements AutoCloseable {
             ClientMethodBinding method,
             Object[] arguments) {
         long startedAtNanos = System.nanoTime();
+        if (closed.get()) {
+            return clientClosed();
+        }
         if (!responseCompletionPermits.tryAcquire()) {
             return capacityExceeded();
         }
@@ -342,6 +371,11 @@ public final class OtryxRpcClient implements AutoCloseable {
         }
         return invokeEncoded(
                 reference, method, encodedArguments, startedAtNanos);
+    }
+
+    private static CompletionStage<Object> clientClosed() {
+        return CompletableFuture.failedFuture(
+                new RpcUnavailableException("RPC client is closed"));
     }
 
     private static CompletionStage<Object> capacityExceeded() {
@@ -358,8 +392,17 @@ public final class OtryxRpcClient implements AutoCloseable {
         CompletableFuture<Object> result =
                 new CompletableFuture<>();
         long[] circuitGeneration = {RpcCircuitBreaker.REJECTED};
-        result.whenComplete((ignoredValue, error) ->
-                responseCompletionPermits.release());
+        result.whenComplete((ignoredValue, error) -> {
+            pendingCalls.remove(result);
+            responseCompletionPermits.release();
+        });
+        pendingCalls.add(result);
+        // 与 close() 的关闭标记和快照遍历协同；编码与关闭并发时也必须结算 Future。
+        if (closed.get()) {
+            result.completeExceptionally(
+                    new RpcUnavailableException("RPC client is closed"));
+            return result;
+        }
         try {
             retryBudget.onRequest();
             RpcTraceContext trace = tracingBridge.enabled()
@@ -493,6 +536,11 @@ public final class OtryxRpcClient implements AutoCloseable {
         if (result.isDone()) {
             return;
         }
+        if (closed.get()) {
+            result.completeExceptionally(
+                    new RpcUnavailableException("RPC client is closed"));
+            return;
+        }
         long remainingNanos = deadlineNanos - System.nanoTime();
         if (remainingNanos <= 0L) {
             var timeoutError = new com.peachsoft.otryx.api.RpcTimeoutException(
@@ -568,7 +616,8 @@ public final class OtryxRpcClient implements AutoCloseable {
                         Duration.ofNanos(remainingNanos))
                 .toCompletableFuture();
         result.whenComplete((ignoredValue, completionError) -> {
-            if (result.isCancelled()
+            if (closed.get()
+                    || result.isCancelled()
                     || unwrap(completionError) instanceof RpcTimeoutException) {
                 transportFuture.cancel(true);
             }
@@ -806,17 +855,26 @@ public final class OtryxRpcClient implements AutoCloseable {
                     delayMillis,
                     failure);
         }
-        CompletableFuture.delayedExecutor(
-                        delayMillis,
-                        TimeUnit.MILLISECONDS)
-                .execute(() -> attempt(
-                        reference,
-                        method,
-                        encodedArguments,
-                        propagatedMetadata,
-                        deadlineNanos,
-                        attempt + 1,
-                        result));
+        try {
+            ScheduledFuture<?> nextAttempt = deadlineScheduler.schedule(
+                    () -> attempt(
+                            reference,
+                            method,
+                            encodedArguments,
+                            propagatedMetadata,
+                            deadlineNanos,
+                            attempt + 1,
+                            result),
+                    delayMillis,
+                    TimeUnit.MILLISECONDS);
+            result.whenComplete((ignoredValue, error) ->
+                    nextAttempt.cancel(false));
+        } catch (RejectedExecutionException closedScheduler) {
+            result.completeExceptionally(
+                    new RpcUnavailableException(
+                            "RPC client retry scheduler is unavailable",
+                            closedScheduler));
+        }
     }
 
     private void observeRetryExhausted(
@@ -978,10 +1036,33 @@ public final class OtryxRpcClient implements AutoCloseable {
 
     @Override
     public void close() {
-        directories.values().forEach(ServiceDirectory::close);
-        transport.close();
-        responseCompletionExecutor.shutdown();
-        deadlineScheduler.shutdownNow();
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        // 先结算全部逻辑调用，避免关闭调度器后延迟重试永远无法完成。
+        pendingCalls.forEach(call -> call.completeExceptionally(
+                new RpcUnavailableException("RPC client is closed")));
+        try {
+            directories.values().forEach(directory -> {
+                try {
+                    directory.close();
+                } catch (RuntimeException error) {
+                    LOGGER.warn(
+                            "RPC service directory close failed: errorType={}",
+                            error.getClass().getName());
+                }
+            });
+            try {
+                transport.close();
+            } catch (RuntimeException error) {
+                LOGGER.warn(
+                        "RPC transport close failed: errorType={}",
+                        error.getClass().getName());
+            }
+        } finally {
+            responseCompletionExecutor.shutdownNow();
+            deadlineScheduler.shutdownNow();
+        }
     }
 
     private record ClientReference(
