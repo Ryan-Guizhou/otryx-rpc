@@ -163,7 +163,7 @@ Wire v1 分离：
 - Schema Fingerprint；
 - ServiceKey Version。
 
-Schema Fingerprint 放在 Registry Metadata，而不是每连接 HELLO 中。Consumer 在 Snapshot 更新时把明确不兼容实例从本地目录剔除。
+Schema Fingerprint 放在 Registry Metadata，而不是每连接 HELLO 中。当前 Consumer 在 Snapshot 更新时剔除 INCOMPATIBLE 实例，缺失 Fingerprint 仍可能按 LEGACY 进入候选；U06 将收敛为首发严格契约，不再默许缺失契约信息。
 
 ## 7. 连接与生命周期
 
@@ -190,7 +190,7 @@ stateDiagram-v2
 
 ### Timeout
 
-Consumer 维护整体 logical Deadline。新 Provider 优先使用相对 `timeoutBudgetMillis`，旧节点仍可以使用绝对 Deadline，支持滚动升级。
+Consumer 当前维护整体 logical Deadline，Provider 支持相对 `timeoutBudgetMillis` 与绝对截止字段的解析路径。当前尚未 GA，不将历史节点的绝对时间戳路径解释为旧快照滚动升级保证；U08 将明确本地单调时钟、父级剩余预算与取消传播契约。
 
 ### Retry
 
