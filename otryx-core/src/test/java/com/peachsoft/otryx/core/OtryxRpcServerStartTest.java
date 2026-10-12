@@ -2,6 +2,9 @@ package com.peachsoft.otryx.core;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.peachsoft.otryx.api.OtryxRpcExecution;
@@ -17,6 +20,8 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -103,6 +108,112 @@ public class OtryxRpcServerStartTest {
 
         org.junit.jupiter.api.Assertions.assertTrue(
                 elapsedMillis < 1_000L);
+    }
+
+    @Test
+    void concurrentCloseMustBeIdempotent() throws Exception {
+        BlockingUnregisterRegistry registry = new BlockingUnregisterRegistry();
+        TestTransportServer transport = new TestTransportServer();
+        OtryxRpcServer server = OtryxRpcServer.builder()
+                .serviceRegistrar(registry)
+                .transportServer(transport)
+                .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
+                .bindEndpoint(new RpcEndpoint("127.0.0.1", 19103))
+                .build()
+                .registerService(
+                        ServiceOne.class, new ServiceOneImpl(), "1.0.0", "default");
+        try {
+            server.start().toCompletableFuture().join();
+            CompletionStage<RpcShutdownReport> first =
+                    server.shutdown(new RpcShutdownOptions(Duration.ofSeconds(2)));
+            assertTrue(registry.entered.await(1, TimeUnit.SECONDS));
+            CompletionStage<RpcShutdownReport> duplicate =
+                    server.shutdown(new RpcShutdownOptions(Duration.ofSeconds(1)));
+            assertSame(first, duplicate);
+            server.close();
+            registry.release.complete(null);
+            RpcShutdownReport report = first.toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            assertTrue(report.registrationsRemoved());
+            assertTrue(report.transportClosed());
+            assertTrue(report.executorsTerminated());
+            assertEquals(1, registry.unregisters.get());
+            assertEquals(1, transport.closeCount.get());
+        } finally {
+            registry.release.complete(null);
+            server.close();
+        }
+    }
+
+    @Test
+    void shutdownMustReturnWithinTotalBudgetWhenUnregisterNeverCompletes()
+            throws Exception {
+        TestTransportServer transport = new TestTransportServer();
+        OtryxRpcServer server = OtryxRpcServer.builder()
+                .serviceRegistrar(new HangingUnregisterRegistry())
+                .transportServer(transport)
+                .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
+                .bindEndpoint(new RpcEndpoint("127.0.0.1", 19104))
+                .build()
+                .registerService(
+                        ServiceOne.class, new ServiceOneImpl(), "1.0.0", "default");
+        try {
+            server.start().toCompletableFuture().join();
+            long started = System.nanoTime();
+            RpcShutdownReport report = server.shutdown(
+                            new RpcShutdownOptions(Duration.ofMillis(120)))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime() - started) < 1000L);
+            assertFalse(report.registrationsRemoved());
+            assertTrue(report.deadlineExceeded());
+        } finally {
+            server.close();
+        }
+    }
+
+    @Test
+    void closeFailureMustNotSkipOtherResources() throws Exception {
+        FailingCloseTransport transport = new FailingCloseTransport();
+        OtryxRpcServer server = OtryxRpcServer.builder()
+                .serviceRegistrar(new NoopRegistry())
+                .transportServer(transport)
+                .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
+                .bindEndpoint(new RpcEndpoint("127.0.0.1", 19105))
+                .build()
+                .registerService(
+                        ServiceOne.class, new ServiceOneImpl(), "1.0.0", "default");
+        server.start().toCompletableFuture().join();
+        RpcShutdownReport report = server.shutdown(
+                        new RpcShutdownOptions(Duration.ofSeconds(1)))
+                .toCompletableFuture().get(2, TimeUnit.SECONDS);
+        assertFalse(report.transportClosed());
+        assertTrue(report.executorsTerminated());
+        assertTrue(report.cleanupFailures() >= 1);
+        assertEquals(1, transport.closeCalls.get());
+    }
+
+    @Test
+    void shutdownWhileStartingMustPreventLateReadyState()
+            throws Exception {
+        DeferredStartTransport transport = new DeferredStartTransport();
+        OtryxRpcServer server = OtryxRpcServer.builder()
+                .serviceRegistrar(new NoopRegistry())
+                .transportServer(transport)
+                .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
+                .bindEndpoint(new RpcEndpoint("127.0.0.1", 19106))
+                .build();
+        CompletionStage<RpcEndpoint> starting = server.start();
+        CompletionStage<RpcShutdownReport> closing =
+                server.shutdown(new RpcShutdownOptions(Duration.ofSeconds(1)));
+        transport.started.complete(new RpcEndpoint("127.0.0.1", 19106));
+        assertThrows(CompletionException.class,
+                () -> starting.toCompletableFuture().join());
+        RpcShutdownReport report = closing.toCompletableFuture()
+                .get(2, TimeUnit.SECONDS);
+        assertTrue(report.executorsTerminated());
+        assertThrows(CompletionException.class,
+                () -> server.start().toCompletableFuture().join());
     }
 
     @Test
@@ -314,6 +425,60 @@ public class OtryxRpcServerStartTest {
             return CompletableFuture.completedFuture(null);
         }
 
+    }
+
+    private static final class BlockingUnregisterRegistry
+            implements ServiceRegistrar {
+        private final CountDownLatch entered = new CountDownLatch(1);
+        private final CompletableFuture<Void> release = new CompletableFuture<>();
+        private final AtomicInteger unregisters = new AtomicInteger();
+
+        @Override
+        public CompletionStage<Void> register(ServiceInstance instance) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> unregister(ServiceInstance instance) {
+            unregisters.incrementAndGet();
+            entered.countDown();
+            return release;
+        }
+    }
+
+    private static final class FailingCloseTransport
+            implements RpcTransportServer {
+        private final AtomicInteger closeCalls = new AtomicInteger();
+
+        @Override
+        public CompletionStage<RpcEndpoint> start(
+                RpcEndpoint bind,
+                RpcRequestHandler handler) {
+            return CompletableFuture.completedFuture(bind);
+        }
+
+        @Override
+        public void close() {
+            closeCalls.incrementAndGet();
+            throw new IllegalStateException("synthetic close failure");
+        }
+    }
+
+    private static final class DeferredStartTransport
+            implements RpcTransportServer {
+        private final CompletableFuture<RpcEndpoint> started =
+                new CompletableFuture<>();
+
+        @Override
+        public CompletionStage<RpcEndpoint> start(
+                RpcEndpoint bind,
+                RpcRequestHandler handler) {
+            return started;
+        }
+
+        @Override
+        public void close() {
+        }
     }
 
     private static final class TestTransportServer implements RpcTransportServer {
