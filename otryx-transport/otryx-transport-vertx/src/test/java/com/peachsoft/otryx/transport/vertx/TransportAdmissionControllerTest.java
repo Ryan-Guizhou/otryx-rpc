@@ -62,6 +62,26 @@ class TransportAdmissionControllerTest {
     }
 
     @Test
+    void partialFrameBudgetMustRejectOverflowAndRecover() {
+        TransportAdmissionController controller =
+                new TransportAdmissionController(
+                        new RpcTransportAdmissionOptions(
+                                2, 1, 32L, Duration.ofSeconds(1)));
+        assertTrue(controller.tryReservePartialBytes(20));
+        assertEquals(20L, controller.bufferedPartialBytes());
+        assertEquals(false, controller.tryReservePartialBytes(13));
+        assertTrue(controller.tryReservePartialBytes(12));
+        assertEquals(32L, controller.bufferedPartialBytes());
+
+        controller.releasePartialBytes(12);
+        controller.releasePartialBytes(20);
+        assertEquals(0L, controller.bufferedPartialBytes());
+        assertTrue(controller.tryReservePartialBytes(32));
+        controller.releasePartialBytes(32);
+        assertEquals(0L, controller.bufferedPartialBytes());
+    }
+
+    @Test
     void concurrentAcquisitionsMustNotExceedConfiguredCapacity()
             throws Exception {
         TransportAdmissionController controller =

@@ -164,7 +164,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         private final Context context;
         private final RpcEndpoint remote;
         private final FrameAccumulator accumulator =
-                new FrameAccumulator(options.maxFrameBytes());
+                new FrameAccumulator(options.maxFrameBytes(), admission);
         private final Map<Long, CompletableFuture<byte[]>> inflight =
                 new HashMap<>();
 
@@ -173,6 +173,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         private boolean connectionDraining;
         private long handshakeTimerId = -1L;
         private long heartbeatTimerId = -1L;
+        private long partialFrameTimerId = -1L;
         private final long createdAtNanos = System.nanoTime();
         private long lastReadNanos = createdAtNanos;
         private long pingSentAtNanos;
@@ -209,6 +210,8 @@ final class VertxRpcTransportServer implements RpcTransportServer {
             socket.closeHandler(ignored -> {
                 cancelHandshakeTimer();
                 cancelHeartbeatTimer();
+                cancelPartialFrameTimer();
+                accumulator.clear();
                 open = false;
                 inflight.values().forEach(future ->
                         future.cancel(true));
@@ -228,9 +231,39 @@ final class VertxRpcTransportServer implements RpcTransportServer {
 
         private void onBuffer(Buffer buffer) {
             try {
-                accumulator.accept(buffer, this::onFrame);
+                boolean consumedFrame =
+                        accumulator.accept(buffer, this::onFrame);
+                if (accumulator.bufferedBytes() == 0) {
+                    cancelPartialFrameTimer();
+                } else if (consumedFrame || partialFrameTimerId < 0L) {
+                    // 追加少量碎片不重置时限，避免慢速发送攻击无限续命。
+                    cancelPartialFrameTimer();
+                    partialFrameTimerId = vertx.setTimer(
+                            Math.max(1L, options.admission()
+                                    .partialFrameTimeout().toMillis()),
+                            ignored -> expirePartialFrame());
+                }
             } catch (RuntimeException error) {
+                cancelPartialFrameTimer();
+                accumulator.clear();
                 closeMalformed(error);
+            }
+        }
+
+        private void expirePartialFrame() {
+            partialFrameTimerId = -1L;
+            if (!open || accumulator.bufferedBytes() == 0) {
+                return;
+            }
+            accumulator.clear();
+            closeMalformed(new RpcProtocolException(
+                    "Incomplete RPC frame exceeded configured timeout"));
+        }
+
+        private void cancelPartialFrameTimer() {
+            if (partialFrameTimerId >= 0L) {
+                vertx.cancelTimer(partialFrameTimerId);
+                partialFrameTimerId = -1L;
             }
         }
 
@@ -804,6 +837,11 @@ final class VertxRpcTransportServer implements RpcTransportServer {
     /** 供受控网络测试观察协议握手租约数量。 */
     int admittedHandshakes() {
         return admission.activeHandshakes();
+    }
+
+    /** 供受控网络测试观察当前不完整帧实际占用的逻辑字节。 */
+    long bufferedPartialBytes() {
+        return admission.bufferedPartialBytes();
     }
 
     @Override

@@ -9,7 +9,9 @@ import com.peachsoft.otryx.protocol.RpcFrame;
 import com.peachsoft.otryx.protocol.RpcMessageType;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import com.peachsoft.otryx.protocol.RpcProtocolException;
+import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import io.vertx.core.buffer.Buffer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -295,6 +297,68 @@ class FrameAccumulatorTest {
                         Buffer.buffer(new byte[RpcProtocolCodec.HEADER_LENGTH]),
                         received::add));
         assertEquals(0, received.size());
+    }
+
+    @Test
+    void partialFrameBudgetMustReleaseOnDisconnect() {
+        TransportAdmissionController budget = new TransportAdmissionController(
+                new RpcTransportAdmissionOptions(
+                        2, 1, 16L, Duration.ofSeconds(1)));
+        FrameAccumulator first = new FrameAccumulator(512, budget);
+        FrameAccumulator second = new FrameAccumulator(512, budget);
+
+        first.accept(Buffer.buffer(new byte[12]), ignored -> { });
+        assertEquals(12L, budget.bufferedPartialBytes());
+        assertThrows(RpcProtocolException.class,
+                () -> second.accept(
+                        Buffer.buffer(new byte[8]), ignored -> { }));
+        assertEquals(12L, budget.bufferedPartialBytes());
+
+        first.clear();
+        first.clear();
+        assertEquals(0L, budget.bufferedPartialBytes());
+        second.accept(Buffer.buffer(new byte[8]), ignored -> { });
+        assertEquals(8L, budget.bufferedPartialBytes());
+        second.clear();
+        assertEquals(0L, budget.bufferedPartialBytes());
+    }
+
+    @Test
+    void completeFrameFastPathMustNotChargeGlobalPartialBudget() {
+        TransportAdmissionController budget = new TransportAdmissionController(
+                new RpcTransportAdmissionOptions(
+                        2, 1, 4L, Duration.ofSeconds(1)));
+        FrameAccumulator accumulator = new FrameAccumulator(512, budget);
+        List<byte[]> emitted = new ArrayList<>();
+        byte[] full = frame(91L, new byte[] {1, 2, 3});
+
+        accumulator.accept(Buffer.buffer(full), emitted::add);
+
+        assertEquals(1, emitted.size());
+        assertArrayEquals(full, emitted.get(0));
+        assertEquals(0L, budget.bufferedPartialBytes());
+        accumulator.clear();
+    }
+
+    @Test
+    void completedFragmentMustReleaseEveryReservedByte() {
+        byte[] full = frame(92L, new byte[128]);
+        TransportAdmissionController budget = new TransportAdmissionController(
+                new RpcTransportAdmissionOptions(
+                        2, 1, full.length, Duration.ofSeconds(1)));
+        FrameAccumulator accumulator = new FrameAccumulator(full.length, budget);
+        List<byte[]> emitted = new ArrayList<>();
+        accumulator.accept(Buffer.buffer(
+                        java.util.Arrays.copyOfRange(full, 0, 14)),
+                emitted::add);
+        assertEquals(14L, budget.bufferedPartialBytes());
+        accumulator.accept(Buffer.buffer(
+                        java.util.Arrays.copyOfRange(full, 14, full.length)),
+                emitted::add);
+
+        assertEquals(1, emitted.size());
+        assertArrayEquals(full, emitted.get(0));
+        assertEquals(0L, budget.bufferedPartialBytes());
     }
 
     private static byte[] frame(long requestId, byte[] payload) {
