@@ -4,6 +4,7 @@ import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
+import com.peachsoft.otryx.core.RpcShutdownOptions;
 import com.peachsoft.otryx.core.RpcProviderAdmissionOptions;
 import com.peachsoft.otryx.core.RpcClientResilienceOptions;
 import com.peachsoft.otryx.core.RpcProviderExecutionOptions;
@@ -259,15 +260,29 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .orElseGet(RpcTracingBridge::noop);
     }
 
+    /**
+     * 获取 Spring Provider 的总关闭预算，供 SmartLifecycle 和销毁阶段复用。
+     *
+     * @return 验证后的关闭预算
+     */
+    public RpcShutdownOptions serverShutdownOptions() {
+        return new RpcShutdownOptions(
+                properties.getServer().getShutdownTimeout());
+    }
+
     @Override
     public void close() {
         OtryxRpcClient currentClient = client;
-        if (currentClient != null) {
-            currentClient.close();
-        }
-        OtryxRpcServer currentServer = server;
-        if (currentServer != null) {
-            currentServer.close();
+        try {
+            if (currentClient != null) {
+                currentClient.close();
+            }
+        } finally {
+            OtryxRpcServer currentServer = server;
+            if (currentServer != null) {
+                // 关闭 Stage 自带总预算，销毁线程不会同步等待业务任务退出。
+                currentServer.shutdown(serverShutdownOptions());
+            }
         }
     }
 }

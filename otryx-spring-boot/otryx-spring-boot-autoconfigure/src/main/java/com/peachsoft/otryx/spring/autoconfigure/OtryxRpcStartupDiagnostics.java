@@ -111,6 +111,12 @@ final class OtryxRpcStartupDiagnostics {
             positive("server.drain-timeout", server.getDrainTimeout());
             positive("server.control-plane-timeout",
                     server.getControlPlaneTimeout());
+            positive("server.shutdown-timeout", server.getShutdownTimeout());
+            if (server.getShutdownTimeout().compareTo(
+                    Duration.ofDays(1)) > 0) {
+                throw new IllegalArgumentException(
+                        "server.shutdown-timeout must be no more than one day");
+            }
             OtryxRpcProperties.Admission admission = server.getAdmission();
             positive("server.admission.max-inflight-bytes",
                     admission.getMaxInflightBytes());

@@ -70,6 +70,30 @@ public class OtryxRpcAutoConfigurationTest {
     }
 
     @Test
+    void invalidProviderShutdownTimeoutShouldFailFast() {
+        contextRunner
+                .withPropertyValues("otryx.rpc.server.shutdown-timeout=0s")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining(
+                                    "server.shutdown-timeout");
+                });
+    }
+
+    @Test
+    void providerShutdownTimeoutShouldBind() {
+        contextRunner
+                .withPropertyValues("otryx.rpc.server.shutdown-timeout=18s")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(OtryxRpcProperties.class)
+                            .getServer().getShutdownTimeout())
+                            .isEqualTo(java.time.Duration.ofSeconds(18));
+                });
+    }
+
+    @Test
     void consulAndEurekaRegistryOptionsShouldBind() {
         contextRunner
                 .withPropertyValues(
