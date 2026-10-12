@@ -29,6 +29,43 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TlsReloadControllerTest {
 
     @Test
+    void unchangedInitialMaterialMustNotInterruptActiveTlsConnections()
+            throws Exception {
+        Vertx vertx = Vertx.vertx();
+        AtomicReference<String> material = new AtomicReference<>("v1");
+        AtomicInteger publications = new AtomicInteger();
+        CountDownLatch publishedChanged = new CountDownLatch(1);
+        TlsReloadController<String> controller =
+                new TlsReloadController<>(
+                        vertx.getOrCreateContext(),
+                        "v1",
+                        material::get,
+                        ignored -> new SSLOptions(),
+                        ignored -> {
+                            publications.incrementAndGet();
+                            publishedChanged.countDown();
+                            return Future.succeededFuture();
+                        },
+                        (start, error) -> {
+                        });
+        try {
+            controller.requestReload();
+            awaitIdle(controller);
+            assertEquals(0, publications.get());
+
+            material.set("v2");
+            controller.requestReload();
+            assertTrue(publishedChanged.await(2, TimeUnit.SECONDS));
+            awaitIdle(controller);
+            assertEquals(1, publications.get());
+            assertEquals("v2", controller.lastSuccessfulState());
+        } finally {
+            controller.close();
+            close(vertx);
+        }
+    }
+
+    @Test
     void slowMaterialReadMustNotBlockConnectionContext()
             throws Exception {
         Vertx vertx = Vertx.vertx();
