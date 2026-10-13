@@ -89,9 +89,12 @@ mvn -B -ntp clean verify -Pquality
 otryx:
   rpc:
     enabled: true
+    security-profile: TRUSTED_DEVELOPMENT # 仅隔离开发演示
     registry:
       type: memory
 ~~~
+
+实际网络部署必须显式选择 `NETWORK_MTLS`，同时配置双向 TLS、Fory 严格 DTO 白名单；可注入 `RpcAuthorizer` 对已验证证书身份按 ServiceKey/MethodId 授权。未指定安全意图会在 Spring 启动阶段失败；开发示例的 `TRUSTED_DEVELOPMENT` 不适用于不可信网络，详见[安全指南](docs/security.md)。
 
 Consul / Eureka 采用按需依赖与轮询式订阅，见 [Consul](docs/reference/registry-consul.md) 与 [Eureka](docs/reference/registry-eureka.md) 适配指南。
 

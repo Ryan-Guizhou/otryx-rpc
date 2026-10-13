@@ -131,3 +131,12 @@ java -jar otryx-examples/otryx-example-consumer/target/*-exec.jar --spring.profi
 ```
 
 将上面的 `consul` 改为 `eureka`，可测试 Eureka；Provider 和 Consumer 分别在独立终端启动，不要同时占用 shell。Consul Token 用环境变量 `CONSUL_HTTP_TOKEN`，Eureka Basic Auth 用 `EUREKA_USERNAME`、`EUREKA_PASSWORD`；切勿把密钥写进配置仓库。以上是**外部服务启动后**的独立进程示例，普通 CI 的 Mock HTTP 单元测试不等于已通过真实 Consul/Eureka Server 集成测试。详细参见 [Consul](../docs/reference/registry-consul.md) 和 [Eureka](../docs/reference/registry-eureka.md)。
+
+## 安全运行方式（U05）
+
+默认示例的 `application.yml` 显式使用 `TRUSTED_DEVELOPMENT`，
+**只能运行在隔离、可信的测试网络**。双向 TLS 示例配置
+`application-mtls.yml` 覆盖为 `NETWORK_MTLS`，并提供严格 Fory DTO
+白名单（`com.peachsoft.otryx.examples.api.*`）。部署真实网络时必须配置
+真实 CA/客户端证书和业务的 `RpcAuthorizer`；运行示例不代表已授予
+应用级权限，详见 [安全指南](../docs/security.md)。

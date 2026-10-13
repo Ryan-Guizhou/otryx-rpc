@@ -201,3 +201,24 @@ TLS/mTLS
 - invalid reload keeps old material；
 - TLS + Heartbeat + reconnect；
 - plaintext Transport regression 由原有 Transport suite 持续覆盖。
+
+## U05：网络身份与授权接入（1.0.0-SNAPSHOT）
+
+- **Spring 显式配置**：`otryx.rpc.security-profile` 不允许省略。
+  `TRUSTED_DEVELOPMENT` 仅在受隔离的开发/可信环境使用，
+  `NETWORK_MTLS` 强制 Transport mTLS 与 Fory STRICT_ALLOWLIST。
+- **可信身份来源**：Vert.x 只在 mTLS 客户端证书经 TLS 信任链验证后提取
+  Subject 和证书 SHA-256 指纹；明文/单向 TLS 均视为匿名，
+  即使 Metadata 声称用户名或管理员权限也不可信。
+- **解码前授权**：Core `RpcAuthorizer` 异步接受
+  `RpcAuthorizationContext(peer, serviceKey, methodId, remote)`；
+  除 mTLS 身份之外，需要按业务边界注入 ServiceKey/MethodId 权限策略。
+  拒绝不会反序列化请求 DTO，也不会运行业务方法。
+- **容量与关闭**：`server.authorization.max-pending` 默认 1024，
+  `server.authorization.timeout` 默认 3s；逻辑超时不会中止正在
+  执行的第三方授权 Stage，实际完成前仍占槽位。不要阻塞 EventLoop。
+- **程序化 API 尚有过渡入口**：无参 Fory 和未显式加策略的 Core Builder
+  保留可信兼容行为；新程序化生产接入须显式传入 STRICT_ALLOWLIST、
+  mTLS 和 `RpcAuthorizer`，不能将其理解为已经默认 fail-closed。
+
+详细白名单规则、Wire 限制见 [Fory 安全说明](reference/fory-security.md)。
