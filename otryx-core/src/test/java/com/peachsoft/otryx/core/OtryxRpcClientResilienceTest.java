@@ -53,6 +53,69 @@ import org.junit.jupiter.api.Test;
 class OtryxRpcClientResilienceTest {
 
     @Test
+    void downstreamBudgetMustNotExceedRemainingParentBudget() throws Exception {
+        AtomicReference<Long> wireBudget = new AtomicReference<>();
+        var method = RetryService.class.getMethod("find", String.class);
+        try (OtryxRpcClient client = OtryxRpcClient.builder()
+                .serviceDiscovery(new StaticDiscovery())
+                .transportClient(new TestTransport((endpoint, frame, duration) -> {
+                    wireBudget.set(RpcProtocolCodec.view(frame).timeoutBudgetMillis());
+                    return CompletableFuture.completedFuture(successResponse(frame, "ok"));
+                }))
+                .codecRegistry(RpcCodecRegistry.of(new StringCodec()))
+                .timeout(Duration.ofSeconds(3))
+                .methodTimeouts(Map.of(method.toGenericString(), Duration.ofMillis(1_500)))
+                .build()) {
+            RetryService service = client.refer(RetryService.class, "1.0.0", "test");
+            assertEquals("ok", service.find("method"));
+            assertTrue(wireBudget.get() > 0L && wireBudget.get() <= 1_500L);
+            try (RpcCallScope ignored = RpcCallContext.open(
+                    new RpcCallOptions(Duration.ofMillis(700), Map.of("tenant", "a")))) {
+                assertEquals("ok", service.find("override"));
+                assertTrue(wireBudget.get() > 0L && wireBudget.get() <= 700L,
+                        "A call override must never enlarge its parent deadline");
+            }
+        }
+    }
+
+    @Test
+    void retryMustConsumeSameLogicalBudgetAndRestoreCapturedContext() {
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicReference<Long> firstBudget = new AtomicReference<>();
+        AtomicReference<Long> secondBudget = new AtomicReference<>();
+        AtomicInteger propagated = new AtomicInteger();
+        try (OtryxRpcClient client = client((endpoint, frame, timeout) -> {
+            int attempt = attempts.incrementAndGet();
+            long budget = RpcProtocolCodec.view(frame).timeoutBudgetMillis();
+            if (RpcCallContext.current() != null) {
+                propagated.incrementAndGet();
+            }
+            if (attempt == 1) {
+                firstBudget.set(budget);
+                try {
+                    Thread.sleep(50L);
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    return CompletableFuture.failedFuture(error);
+                }
+                return CompletableFuture.failedFuture(new RpcUnavailableException("retry"));
+            }
+            secondBudget.set(budget);
+            return CompletableFuture.completedFuture(successResponse(frame, "ok"));
+        })) {
+            RetryService service = client.refer(RetryService.class, "1.0.0", "test");
+            try (RpcCallScope ignored = RpcCallContext.open(
+                    new RpcCallOptions(Duration.ofMillis(800), Map.of("tenant", "alpha")))) {
+                assertEquals("ok", service.find("retry"));
+            }
+            assertEquals(2, attempts.get());
+            assertEquals(2, propagated.get());
+            assertTrue(secondBudget.get() < firstBudget.get(),
+                    "A retry must use the original deadline rather than refreshing it");
+        }
+    }
+
+    @Test
     void shouldRetryOnlyIdempotentMethodWithinBudget() {
         AtomicInteger attempts = new AtomicInteger();
         try (OtryxRpcClient client = client((endpoint, frame, timeout) -> {

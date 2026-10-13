@@ -19,7 +19,7 @@
 **GitHub 仓库：** [Ryan-Guizhou/otryx-rpc](https://github.com/Ryan-Guizhou/otryx-rpc)。品牌商标、图片来源及 Maven Central Namespace 尚有外部验收条件，参见 [发布前核查](docs/publication-readiness.md)。
 · **Java：21** · **Spring Boot：3.5.4** · **Wire：v1** · **License：MIT**
 
-项目目前尚未正式发布，不对历史开发版提供 Java API、SPI、Wire、Schema 或配置兼容承诺；当前版本必须通过协议正确性、Consumer/Provider 互操作和安全验证。当前网络默认可使用 PLAINTEXT，Fory 直接构造及 Starter 的默认策略仍为可信兼容模式；在不可信网络部署前须显式配置适当的 TLS/mTLS 与反序列化限制。工程规范参见[Java 编码规范](docs/engineering/java-coding-standard.md)。
+项目目前尚未正式发布，不对历史开发版提供 Java API、SPI、Wire、Schema 或配置兼容承诺；当前版本必须通过协议正确性、Consumer/Provider 互操作和安全验证。Spring Starter 必须显式选择安全部署意图：隔离开发选择 `TRUSTED_DEVELOPMENT`，网络环境选择 `NETWORK_MTLS`（mTLS、严格 Fory 白名单与方法授权）。Core 程序化入口仍须由使用者显式建立相应安全边界。工程规范参见[Java 编码规范](docs/engineering/java-coding-standard.md)。
 
 <!-- doc-section:capabilities -->
 ## 核心能力
@@ -29,7 +29,7 @@
 - **Security**：PLAINTEXT / TLS / mTLS、证书校验、Hostname Verification 与证书 Reload。
 - **Registry**：Memory、Etcd、Nacos、Consul、Eureka；Consumer 热路径读取本地服务目录。
 - **Load Balancing**：P2C + EWMA、inflight 与静态权重。
-- **Resilience**：整体 Deadline、显式幂等 Retry、Retry Budget、Circuit Breaker、Outlier Ejection、Provider Admission。
+- **Resilience**：方法级/单次超时、父级单调 Deadline 预算传播、显式幂等 Retry、Retry Budget、Circuit Breaker、Outlier Ejection、Provider Admission。
 - **Execution**：Virtual Thread、CPU 有界资源；Fory Codec 与 Stable Type ID。
 - **Observability**：Micrometer、OpenTelemetry、JFR、Grafana 和 Prometheus 示例配置。
 - **Engineering**：JMH、10k logical-concurrency soak harness、Chaos、独立 JVM E2E 与兼容性验证。
@@ -98,7 +98,7 @@ otryx:
 
 Consul / Eureka 采用按需依赖与轮询式订阅，见 [Consul](docs/reference/registry-consul.md) 与 [Eureka](docs/reference/registry-eureka.md) 适配指南。
 
-完整配置约束和 TLS/Nacos/Etcd 示例见 [Starter 文档](docs/reference/starter.md)、[生产配置](docs/configuration.md)。
+完整配置约束和 TLS/Nacos/Etcd 示例见 [Starter 文档](docs/reference/starter.md)、[生产配置](docs/configuration.md)。调用超时覆盖、作用域传播及 A→B→C 预算规则参见 [Deadline 与调用上下文](docs/reference/deadline-context.md)。
 
 <!-- doc-section:operations -->
 ## 生产与性能

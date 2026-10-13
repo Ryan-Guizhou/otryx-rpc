@@ -132,7 +132,8 @@ PING/PONG 已接入真实连接生命周期。
 约束：
 
 - 保留键 `deadlineEpochMillis` / `timeoutBudgetMillis` 不允许扩展覆盖；
-- Metadata key/value 有长度限制；
+- Metadata key/value 有长度限制；业务扩展上下文还受到最多 64 条、总 8 KiB UTF-8 限制，超出立即拒绝；
+- `rpc-peer-*`、`rpc-auth-*` 和 `peerIdentity` 等认证声明键不得来自用户 Metadata；
 - key 不允许 `=` 或换行；
 - value 不允许换行；
 - Metadata 总长度受 16-bit Metadata Length 限制；

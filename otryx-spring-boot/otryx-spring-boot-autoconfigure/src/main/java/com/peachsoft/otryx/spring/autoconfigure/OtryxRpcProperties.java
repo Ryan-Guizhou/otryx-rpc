@@ -4,6 +4,7 @@ import com.peachsoft.otryx.observability.RpcSecurityMode;
 import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.time.Duration;
 import org.springframework.beans.factory.InitializingBean;
@@ -1198,6 +1199,7 @@ public class OtryxRpcProperties implements InitializingBean {
         }
         private boolean enabled = true;
         private Duration timeout = Duration.ofSeconds(3);
+        private Map<String, Duration> methodTimeouts = Map.of();
         private String loadBalancer = "p2c-ewma";
         private String proxy = "jdk";
         private final Resilience resilience = new Resilience();
@@ -1236,6 +1238,24 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public void setTimeout(Duration timeout) {
             this.timeout = timeout;
+        }
+
+        /**
+         * 返回以 Method.toGenericString() 为键的方法超时覆盖。
+         *
+         * @return 方法超时映射
+         */
+        public Map<String, Duration> getMethodTimeouts() {
+            return methodTimeouts;
+        }
+
+        /**
+         * 设置方法级默认超时。
+         *
+         * @param methodTimeouts 方法签名与 Duration 映射
+         */
+        public void setMethodTimeouts(Map<String, Duration> methodTimeouts) {
+            this.methodTimeouts = Map.copyOf(methodTimeouts);
         }
 
         /**

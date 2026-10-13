@@ -33,6 +33,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerArray;
@@ -524,16 +525,19 @@ final class VertxRpcTransportClient implements RpcTransportClient {
                 byte[] bytes,
                 Duration timeout) {
             CompletableFuture<byte[]> result = new CompletableFuture<>();
+            // Capture the deadline before queuing onto the owning EventLoop.
+            // Enqueue time must reduce the budget, never refresh it.
+            long deadlineNanos = System.nanoTime() + timeout.toNanos();
             if (Vertx.currentContext() == context) {
                 requestOnEventLoop(
                         bytes,
-                        timeout,
+                        deadlineNanos,
                         result);
             } else {
                 context.runOnContext(ignored ->
                         requestOnEventLoop(
                                 bytes,
-                                timeout,
+                                deadlineNanos,
                                 result));
             }
             return result;
@@ -541,7 +545,7 @@ final class VertxRpcTransportClient implements RpcTransportClient {
 
         private void requestOnEventLoop(
                 byte[] bytes,
-                Duration timeout,
+                long deadlineNanos,
                 CompletableFuture<byte[]> result) {
             if (result.isDone()) {
                 return;
@@ -581,15 +585,22 @@ final class VertxRpcTransportClient implements RpcTransportClient {
                                         + endpoint.authority()));
                 return;
             }
+            // Wire v1 has millisecond precision. A sub-millisecond deadline
+            // must fail, not be rounded up and silently extended to 1 ms.
+            long wireBudgetMillis =
+                    TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime());
+            if (wireBudgetMillis <= 0L) {
+                result.completeExceptionally(new RpcTimeoutException(
+                        "RPC remaining transport budget exhausted before send"));
+                return;
+            }
             long requestId = nextRequestId();
             RpcProtocolCodec.writeRequestId(bytes, requestId);
-            RpcProtocolCodec.rewriteTimeoutBudgetMillis(
-                    bytes,
-                    Math.max(1L, timeout.toMillis()));
+            RpcProtocolCodec.rewriteTimeoutBudgetMillis(bytes, wireBudgetMillis);
 
             inflight++;
             long timerId = vertx.setTimer(
-                    Math.max(1L, timeout.toMillis()),
+                    wireBudgetMillis,
                     ignored -> timeout(requestId));
             pending.put(
                     requestId,

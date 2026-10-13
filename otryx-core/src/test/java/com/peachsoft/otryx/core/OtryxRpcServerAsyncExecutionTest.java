@@ -45,6 +45,112 @@ import org.slf4j.LoggerFactory;
 public class OtryxRpcServerAsyncExecutionTest {
 
     @Test
+    void providerDeadlineMustNotReleaseLeaseBeforeBusinessStops() throws Exception {
+        CapturingTransportServer transport = new CapturingTransportServer();
+        UncooperativeServiceImpl business = new UncooperativeServiceImpl();
+        CountDownLatch leaseReleased = new CountDownLatch(1);
+        RpcObserver observer = new RpcObserver() {
+            @Override
+            public void onServerInflightChanged(int delta) {
+                if (delta < 0) {
+                    leaseReleased.countDown();
+                }
+            }
+        };
+        OtryxRpcServer server = OtryxRpcServer.builder()
+                .serviceRegistrar(new NoopRegistry())
+                .transportServer(transport)
+                .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
+                .bindEndpoint(new RpcEndpoint("127.0.0.1", 19109))
+                .maxConcurrent(1)
+                .executionOptions(new RpcProviderExecutionOptions(false, 1, 1))
+                .observer(observer)
+                .build()
+                .registerService(UncooperativeService.class, business, "1.0.0", "default");
+        try {
+            server.start().toCompletableFuture().join();
+            byte[] request = requestWithBudget(
+                    UncooperativeService.class, "stall", 500L, Map.of("tenant", "alpha"));
+            CompletableFuture<byte[]> response = transport.handle(request).toCompletableFuture();
+            assertTrue(business.entered.await(2, TimeUnit.SECONDS));
+            assertEquals(RpcStatus.DEADLINE_EXCEEDED,
+                    RpcProtocolCodec.view(response.get(3, TimeUnit.SECONDS)).status());
+            assertEquals(1L, leaseReleased.getCount(),
+                    "An expired response cannot release a running business lease");
+            assertEquals(RpcStatus.OVERLOADED,
+                    RpcProtocolCodec.view(transport.handle(
+                            requestFor(UncooperativeService.class, "fast"))
+                            .toCompletableFuture().get(2, TimeUnit.SECONDS)).status());
+            business.release.countDown();
+            assertTrue(leaseReleased.await(2, TimeUnit.SECONDS));
+        } finally {
+            business.release.countDown();
+            server.close();
+        }
+    }
+
+    @Test
+    void providerMustRestoreInboundDeadlineAndRejectForgedPeerMetadata() throws Exception {
+        CapturingTransportServer transport = new CapturingTransportServer();
+        ContextServiceImpl service = new ContextServiceImpl();
+        OtryxRpcServer server = OtryxRpcServer.builder()
+                .serviceRegistrar(new NoopRegistry())
+                .transportServer(transport)
+                .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
+                .bindEndpoint(new RpcEndpoint("127.0.0.1", 19110))
+                .maxConcurrent(1)
+                .build()
+                .registerService(ContextService.class, service, "1.0.0", "default");
+        try {
+            server.start().toCompletableFuture().join();
+            byte[] valid = requestWithBudget(
+                    ContextService.class, "read", 2_000L, Map.of("tenant", "alpha"));
+            assertEquals(RpcStatus.OK, RpcProtocolCodec.view(
+                    transport.handle(valid).toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS)).status());
+            assertEquals("alpha", service.context.get().metadata().get("tenant"));
+            assertTrue(service.context.get().remainingNanos()
+                    <= TimeUnit.SECONDS.toNanos(2L));
+            byte[] forged = requestWithBudget(
+                    ContextService.class, "read", 2_000L, Map.of("rpc-peer-id", "admin"));
+            assertEquals(RpcStatus.BAD_REQUEST, RpcProtocolCodec.view(
+                    transport.handle(forged).toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS)).status());
+            assertEquals(1, service.invocations.get());
+        } finally {
+            server.close();
+        }
+    }
+
+    private static byte[] requestWithBudget(
+            Class<?> api, String methodName, long budgetMillis,
+            Map<String, String> metadata) throws Exception {
+        ServiceKey key = new ServiceKey(api.getName(), "1.0.0", "default");
+        Method method = api.getMethod(methodName);
+        return RpcProtocolCodec.encodeRequest(
+                (byte) 1, RpcIds.serviceId(key), RpcIds.methodId(method),
+                System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1L), budgetMillis,
+                metadata, new byte[0]);
+    }
+
+    public interface ContextService {
+        @OtryxRpcExecution(RpcExecutionMode.CPU)
+        String read();
+    }
+
+    public static final class ContextServiceImpl implements ContextService {
+        private final AtomicReference<RpcCallContext> context = new AtomicReference<>();
+        private final AtomicInteger invocations = new AtomicInteger();
+
+        @Override
+        public String read() {
+            context.set(RpcCallContext.current());
+            invocations.incrementAndGet();
+            return "ok";
+        }
+    }
+
+    @Test
     void failingProviderObserverMustNotLeakAdmissionOrMaskOverload()
             throws Exception {
         CapturingTransportServer transport = new CapturingTransportServer();

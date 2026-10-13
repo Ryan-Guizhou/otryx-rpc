@@ -144,3 +144,6 @@ jobs:
 
       - name: Verify independent JVM examples
         run: bash scripts/run_example_process_e2e.sh
+
+      - name: Verify A-B-C deadline chain across three independent JVMs
+        run: bash scripts/run_three_process_deadline_e2e.sh

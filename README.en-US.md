@@ -19,7 +19,7 @@ Meet Otti, the engineering otter: **Simple to Call. Built to Scale.**
 **GitHub:** [Ryan-Guizhou/otryx-rpc](https://github.com/Ryan-Guizhou/otryx-rpc). Trademark use, original artwork provenance and Maven Central namespace ownership still need external clearance; see [Publication readiness](docs/publication-readiness.md).
 · **Java 21** · **Spring Boot 3.5.4** · **Wire v1** · **MIT**
 
-The project has not yet reached GA and makes no backward-compatibility promise to unpublished development snapshots for Java APIs, SPI, Wire, Schema or configuration. Current-version protocol correctness, consumer/provider interoperability and security still require verification. The transport can default to PLAINTEXT, and directly constructed Fory codecs and the Starter currently use trusted compatibility mode by default; configure appropriate TLS/mTLS and deserialization restrictions before use on untrusted networks. See the [Java coding standard](docs/engineering/java-coding-standard.md).
+The project has not yet reached GA and makes no backward-compatibility promise to unpublished development snapshots for Java APIs, SPI, Wire, Schema or configuration. Current-version protocol correctness, interoperability and security still require verification. Spring Starter requires an explicit security profile: `TRUSTED_DEVELOPMENT` for isolated demos or `NETWORK_MTLS` (mTLS, strict Fory allowlist and per-method authorization) for network deployments. Directly constructed Core runtimes still require an explicit security boundary. See the [Java coding standard](docs/engineering/java-coding-standard.md).
 
 <!-- doc-section:capabilities -->
 ## Core capabilities
@@ -29,7 +29,7 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 - **Security**: PLAINTEXT / TLS / mTLS, hostname verification and certificate reload.
 - **Registry**: Memory, Etcd, Nacos, Consul, Eureka; the consumer hot path reads a local service directory.
 - **Load balancing**: P2C + EWMA, inflight count and static weights.
-- **Resilience**: end-to-end deadline, explicitly idempotent retries, retry budget, circuit breaker, outlier ejection and provider admission.
+- **Resilience**: method/per-call timeouts, inherited monotonic deadline budgets, explicitly idempotent retries, retry budget, circuit breaker, outlier ejection and provider admission.
 - **Execution**: virtual threads, bounded CPU resources, Fory and stable type IDs.
 - **Observability**: Micrometer, OpenTelemetry, JFR and Grafana / Prometheus examples.
 - **Engineering**: JMH, 10k logical-concurrency soak harness, chaos and independent-process tests.
@@ -98,7 +98,7 @@ Real network deployments must explicitly choose `NETWORK_MTLS` with mutual TLS a
 
 Consul and Eureka are opt-in adapters with polling-based subscriptions. See [Consul](docs/reference/registry-consul.md) and [Eureka](docs/reference/registry-eureka.md).
 
-See [Starter guide](docs/reference/starter.md) and [Production configuration](docs/configuration.md) for validated options, TLS and registry setup.
+See [Starter guide](docs/reference/starter.md) and [Production configuration](docs/configuration.md) for validated options, TLS and registry setup. The [Deadline and call-context reference](docs/reference/deadline-context.md) covers precedence, explicit scope propagation and A→B→C budget semantics (Chinese).
 
 <!-- doc-section:operations -->
 ## Performance and operations
