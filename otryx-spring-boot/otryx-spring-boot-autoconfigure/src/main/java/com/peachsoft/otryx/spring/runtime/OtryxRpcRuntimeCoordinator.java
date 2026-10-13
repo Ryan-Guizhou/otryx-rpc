@@ -249,6 +249,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .loadBalancer(loadBalancer)
                 .proxyFactory(proxyFactory)
                 .timeout(clientProperties.getTimeout())
+                .methodTimeouts(clientProperties.getMethodTimeouts())
                 .resilienceOptions(resilienceOptions)
                 .observer(observer())
                 .metadataPropagator(metadataPropagator())
