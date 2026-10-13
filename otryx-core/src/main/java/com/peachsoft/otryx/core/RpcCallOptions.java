@@ -25,6 +25,12 @@ public record RpcCallOptions(Duration timeout, Map<String, String> metadata) {
     public static final int MAX_METADATA_ENTRIES = 64;
     /** 用户 Metadata 以 UTF-8 编码后的最大总长度。 */
     public static final int MAX_METADATA_BYTES = 8 * 1024;
+    /** Metadata 键的最大字符数。 */
+    private static final int MAX_METADATA_KEY_CHARS = 256;
+    /** Metadata 单个值的最大字符数。 */
+    private static final int MAX_METADATA_VALUE_CHARS = 16 * 1024;
+    /** Metadata 单项的 Wire 分隔符长度（= 和换行）。 */
+    private static final int METADATA_DELIMITER_BYTES = 2;
     /** 无显式覆盖选项。 */
     public static final RpcCallOptions DEFAULT = new RpcCallOptions(null, Map.of());
 
@@ -62,7 +68,8 @@ public record RpcCallOptions(Duration timeout, Map<String, String> metadata) {
             String key = entry.getKey();
             String value = entry.getValue();
             if (key == null || key.isEmpty() || value == null || value.isEmpty()
-                    || key.length() > 256 || value.length() > 16 * 1024
+                    || key.length() > MAX_METADATA_KEY_CHARS
+                    || value.length() > MAX_METADATA_VALUE_CHARS
                     || key.indexOf('=') >= 0 || key.indexOf('\n') >= 0
                     || key.indexOf('\r') >= 0 || value.indexOf('\n') >= 0
                     || value.indexOf('\r') >= 0) {
@@ -77,7 +84,7 @@ public record RpcCallOptions(Duration timeout, Map<String, String> metadata) {
                 throw new IllegalArgumentException("Reserved RPC metadata key");
             }
             bytes += key.getBytes(StandardCharsets.UTF_8).length
-                    + value.getBytes(StandardCharsets.UTF_8).length + 2L;
+                    + value.getBytes(StandardCharsets.UTF_8).length + METADATA_DELIMITER_BYTES;
             if (bytes > MAX_METADATA_BYTES) {
                 throw new IllegalArgumentException("RPC metadata byte budget exceeded");
             }
