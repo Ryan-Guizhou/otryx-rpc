@@ -488,7 +488,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                 return result;
             }
 
-            RpcCallContext parent = RpcCallContext.current();
+            RpcCallContext parent = currentCall;
             Duration selectedTimeout = parent != null && parent.options().timeout() != null
                     ? parent.options().timeout()
                     : methodTimeouts.getOrDefault(method.methodKey(), timeout);
@@ -516,6 +516,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                     method,
                     encodedArguments,
                     propagatedMetadata,
+                    currentCall,
                     deadlineNanos,
                     1,
                     result);
@@ -553,6 +554,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             ClientMethodBinding method,
             byte[] encodedArguments,
             Map<String, String> propagatedMetadata,
+            RpcCallContext callContext,
             long deadlineNanos,
             int attempt,
             CompletableFuture<Object> result) {
@@ -602,6 +604,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                     method,
                     encodedArguments,
                     propagatedMetadata,
+                    callContext,
                     deadlineNanos,
                     attempt,
                     result,
@@ -652,12 +655,14 @@ public final class OtryxRpcClient implements AutoCloseable {
                 return;
             }
             try {
-                responseCompletionExecutor.execute(() ->
-                        completeTransportResponse(
+                responseCompletionExecutor.execute(
+                        RpcCallContext.wrap(callContext, () ->
+                                completeTransportResponse(
                                 reference,
                                 method,
                                 encodedArguments,
                                 propagatedMetadata,
+                                callContext,
                                 deadlineNanos,
                                 attempt,
                                 result,
@@ -665,7 +670,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                                 endpointStats,
                                 startedAtNanos,
                                 rawResponse,
-                                transportError));
+                                transportError)));
             } catch (RejectedExecutionException rejected) {
                 // 容量在发起请求前预留。只有执行器关闭或竞争才可能触发这里。
                 endpointStats.endCancelled(
@@ -682,6 +687,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             ClientMethodBinding method,
             byte[] encodedArguments,
             Map<String, String> propagatedMetadata,
+            RpcCallContext callContext,
             long deadlineNanos,
             int attempt,
             CompletableFuture<Object> result,
@@ -719,6 +725,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                         method,
                         encodedArguments,
                         propagatedMetadata,
+                        callContext,
                         deadlineNanos,
                         attempt,
                         result,
@@ -758,6 +765,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                             method,
                             encodedArguments,
                             propagatedMetadata,
+                            callContext,
                             deadlineNanos,
                             attempt,
                             result,
@@ -793,6 +801,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                         method,
                         encodedArguments,
                         propagatedMetadata,
+                        callContext,
                         deadlineNanos,
                         attempt,
                         result,
@@ -824,6 +833,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             ClientMethodBinding method,
             byte[] encodedArguments,
             Map<String, String> propagatedMetadata,
+            RpcCallContext callContext,
             long deadlineNanos,
             int attempt,
             CompletableFuture<Object> result,
@@ -880,14 +890,15 @@ public final class OtryxRpcClient implements AutoCloseable {
         }
         try {
             ScheduledFuture<?> nextAttempt = deadlineScheduler.schedule(
-                    () -> attempt(
+                    RpcCallContext.wrap(callContext, () -> attempt(
                             reference,
                             method,
                             encodedArguments,
                             propagatedMetadata,
+                            callContext,
                             deadlineNanos,
                             attempt + 1,
-                            result),
+                            result)),
                     delayMillis,
                     TimeUnit.MILLISECONDS);
             result.whenComplete((ignoredValue, error) ->
