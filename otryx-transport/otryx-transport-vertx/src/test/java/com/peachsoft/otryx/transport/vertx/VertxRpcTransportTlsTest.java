@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.observability.RpcCertificateReloadOutcome;
@@ -15,13 +16,16 @@ import com.peachsoft.otryx.observability.RpcSecurityMode;
 import com.peachsoft.otryx.protocol.RpcFrame;
 import com.peachsoft.otryx.protocol.RpcMessageType;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
+import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
 import com.peachsoft.otryx.transport.RpcTransportSecurityOptions;
 import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -453,6 +457,98 @@ class VertxRpcTransportTlsTest {
                 }
             } finally {
                 first.close();
+                server.close();
+            }
+        }
+    }
+
+    @Test
+    void mtlsMustDeliverVerifiedCertificateIdentity() throws Exception {
+        try (TlsTestCertificates certs = TlsTestCertificates.create()) {
+            int port = findFreePort();
+            RpcTransportOptions serverOptions = baseOptions().withSecurity(
+                    serverSecurity(certs, RpcSecurityMode.MTLS));
+            RpcTransportOptions clientOptions = baseOptions().withSecurity(
+                    clientSecurity(
+                            certs,
+                            RpcSecurityMode.MTLS,
+                            certs.caCertificate.toString(),
+                            true));
+            AtomicReference<RpcPeerIdentity> observed = new AtomicReference<>();
+            VertxRpcTransportServer server = new VertxRpcTransportServer(serverOptions);
+            VertxRpcTransportClient client = new VertxRpcTransportClient(clientOptions);
+            try {
+                server.start(new RpcEndpoint("0.0.0.0", port), new RpcRequestHandler() {
+                    @Override
+                    public CompletionStage<byte[]> handle(
+                            RpcEndpoint remote, byte[] frame) {
+                        throw new AssertionError("Peer-aware callback was not used");
+                    }
+
+                    @Override
+                    public CompletionStage<byte[]> handle(
+                            RpcEndpoint remote, RpcPeerIdentity peer, byte[] frame) {
+                        observed.set(peer);
+                        return CompletableFuture.completedFuture(
+                                response(frame, new byte[] {7}));
+                    }
+                }).toCompletableFuture().join();
+                byte[] reply = client.request(
+                                new RpcEndpoint("localhost", port),
+                                request(),
+                                Duration.ofSeconds(2))
+                        .toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertArrayEquals(new byte[] {7}, RpcProtocolCodec.decode(reply).payload());
+                RpcPeerIdentity peer = observed.get();
+                assertTrue(peer != null && peer.authenticated());
+                assertTrue(peer.certificateSha256().matches("[0-9a-f]{64}"));
+                assertTrue(peer.principal().contains("CN="));
+            } finally {
+                client.close();
+                server.close();
+            }
+        }
+    }
+
+    @Test
+    void tlsWithoutClientCertificateMustRemainAnonymous() throws Exception {
+        try (TlsTestCertificates certs = TlsTestCertificates.create()) {
+            int port = findFreePort();
+            RpcTransportOptions serverOptions = baseOptions().withSecurity(
+                    serverSecurity(certs, RpcSecurityMode.TLS));
+            RpcTransportOptions clientOptions = baseOptions().withSecurity(
+                    clientSecurity(
+                            certs,
+                            RpcSecurityMode.TLS,
+                            certs.caCertificate.toString(),
+                            true));
+            AtomicReference<RpcPeerIdentity> observed = new AtomicReference<>();
+            VertxRpcTransportServer server = new VertxRpcTransportServer(serverOptions);
+            VertxRpcTransportClient client = new VertxRpcTransportClient(clientOptions);
+            try {
+                server.start(new RpcEndpoint("0.0.0.0", port), new RpcRequestHandler() {
+                    @Override
+                    public CompletionStage<byte[]> handle(
+                            RpcEndpoint remote, byte[] frame) {
+                        throw new AssertionError("Peer-aware callback was not used");
+                    }
+
+                    @Override
+                    public CompletionStage<byte[]> handle(
+                            RpcEndpoint remote, RpcPeerIdentity peer, byte[] frame) {
+                        observed.set(peer);
+                        return CompletableFuture.completedFuture(
+                                response(frame, new byte[] {7}));
+                    }
+                }).toCompletableFuture().join();
+                client.request(
+                                new RpcEndpoint("localhost", port),
+                                request(),
+                                Duration.ofSeconds(2))
+                        .toCompletableFuture().get(3, TimeUnit.SECONDS);
+                assertEquals(RpcPeerIdentity.anonymous(), observed.get());
+            } finally {
+                client.close();
                 server.close();
             }
         }
