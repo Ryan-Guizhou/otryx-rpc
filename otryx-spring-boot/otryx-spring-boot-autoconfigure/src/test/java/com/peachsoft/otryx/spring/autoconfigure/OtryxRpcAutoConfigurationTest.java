@@ -31,8 +31,62 @@ public class OtryxRpcAutoConfigurationTest {
             new ApplicationContextRunner()
                     .withConfiguration(
                             AutoConfigurations.of(
-                                    OtryxRpcAutoConfiguration.class));
+                                    OtryxRpcAutoConfiguration.class))
+                    .withPropertyValues(
+                            "otryx.rpc.security-profile=TRUSTED_DEVELOPMENT");
 
+
+    @Test
+    void unspecifiedSecurityPolicyMustFailWithActionableMessage() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OtryxRpcAutoConfiguration.class))
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("otryx.rpc.security-profile")
+                            .hasStackTraceContaining("NETWORK_MTLS");
+                });
+    }
+
+    @Test
+    void explicitDevelopmentPolicyMustWork() {
+        contextRunner.run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void networkPolicyMustRequireMutualTlsAndStrictAllowlist() {
+        contextRunner.withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("transport.security.mode");
+                });
+        contextRunner.withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("codec.fory.mode");
+                });
+        contextRunner.withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS",
+                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
+                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void invalidAuthorizationCapacityMustFailFast() {
+        contextRunner.withPropertyValues("otryx.rpc.server.authorization.max-pending=0")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("server.authorization.max-pending");
+                });
+    }
 
     @Test
     void invalidClientDeadlineShouldFailAtConfigurationBinding() {

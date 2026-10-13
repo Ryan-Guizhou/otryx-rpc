@@ -37,7 +37,18 @@ public class OtryxRpcProperties implements InitializingBean {
         OtryxRpcStartupDiagnostics.validateAndReport(this);
     }
 
+    /** RPC 安全部署意图，默认不允许隐式使用不安全连接。 */
+    public enum SecurityProfile {
+        /** 未指定安全意图。 */
+        UNSPECIFIED,
+        /** 明确隔离的开发或可信内网。 */
+        TRUSTED_DEVELOPMENT,
+        /** 需要双向 TLS 和严格 DTO 白名单的网络部署。 */
+        NETWORK_MTLS
+    }
+
     private boolean enabled = true;
+    private SecurityProfile securityProfile = SecurityProfile.UNSPECIFIED;
     private final Registry registry = new Registry();
     private final Transport transport = new Transport();
     private final Client client = new Client();
@@ -60,6 +71,24 @@ public class OtryxRpcProperties implements InitializingBean {
      */
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    /**
+     * 返回显式安全意图。
+     *
+     * @return 部署安全模式
+     */
+    public SecurityProfile getSecurityProfile() {
+        return securityProfile;
+    }
+
+    /**
+     * 设置 RPC 部署安全意图。
+     *
+     * @param value 部署安全模式
+     */
+    public void setSecurityProfile(SecurityProfile value) {
+        securityProfile = value;
     }
 
     /**
@@ -1426,6 +1455,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private Duration shutdownTimeout = Duration.ofSeconds(25);
         private final Execution execution = new Execution();
         private final Admission admission = new Admission();
+        private final Authorization authorization = new Authorization();
 
         /**
          * 返回是否启用 Provider。
@@ -1605,6 +1635,67 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public Admission getAdmission() {
             return admission;
+        }
+
+        /**
+         * 返回非阻塞认证授权的资源预算。
+         *
+         * @return Provider 授权设置
+         */
+        public Authorization getAuthorization() {
+            return authorization;
+        }
+    }
+
+    /**
+     * Provider 解码前认证授权的容量和逻辑超时。
+     *
+     * @Author OpenAI
+     * @Version 1.0.0-SNAPSHOT
+     * @CreateTime 2026/10/13 13:43
+     */
+    public static class Authorization {
+        private int maxPending = 1024;
+        private Duration timeout = Duration.ofSeconds(3);
+
+        /** 创建 Provider 授权配置。 */
+        public Authorization() {
+        }
+
+        /**
+         * 返回最大未完成授权数。
+         *
+         * @return 同时授权并发数
+         */
+        public int getMaxPending() {
+            return maxPending;
+        }
+
+        /**
+         * 设置最大未完成授权数。
+         *
+         * @param value 授权容量
+         */
+        public void setMaxPending(int value) {
+            maxPending = value;
+        }
+
+        /**
+         * 返回授权逻辑超时。
+         *
+         * @return 授权超时
+         */
+        public Duration getTimeout() {
+            return timeout;
+        }
+
+        /**
+         * 设置授权逻辑超时。
+         *
+         * @param value 授权超时
+         */
+        public void setTimeout(Duration value) {
+            timeout = value;
         }
     }
 

@@ -112,6 +112,10 @@ final class OtryxRpcStartupDiagnostics {
             throw invalid("codec.fory", error.getMessage());
         }
 
+        if (properties.isEnabled()) {
+            validateSecurityProfile(properties, fory, security);
+        }
+
         OtryxRpcProperties.Client client = properties.getClient();
         if (client.isEnabled()) {
             positive("client.timeout", client.getTimeout());
@@ -145,6 +149,12 @@ final class OtryxRpcStartupDiagnostics {
                     admission.getMaxInflightBytesPerService());
             nonNegative("server.admission.max-inflight-bytes-per-method",
                     admission.getMaxInflightBytesPerMethod());
+            OtryxRpcProperties.Authorization authorization = server.getAuthorization();
+            positive("server.authorization.max-pending", authorization.getMaxPending());
+            positive("server.authorization.timeout", authorization.getTimeout());
+            if (authorization.getTimeout().compareTo(Duration.ofDays(1)) > 0) {
+                throw invalid("server.authorization.timeout", "must not exceed one day");
+            }
             OtryxRpcProperties.Execution execution = server.getExecution();
             positive("server.execution.cpu-parallelism",
                     execution.getCpuParallelism());
@@ -173,6 +183,26 @@ final class OtryxRpcStartupDiagnostics {
             LOGGER.warn(
                     "OTRYX RPC Fory uses TRUSTED_COMPATIBILITY; enable STRICT_ALLOWLIST "
                             + "when peers are not fully trusted");
+        }
+    }
+
+    private static void validateSecurityProfile(
+            OtryxRpcProperties properties,
+            OtryxRpcProperties.ForySecurity fory,
+            OtryxRpcProperties.Security security) {
+        OtryxRpcProperties.SecurityProfile profile = properties.getSecurityProfile();
+        if (profile == null || profile == OtryxRpcProperties.SecurityProfile.UNSPECIFIED) {
+            throw invalid("security-profile",
+                    "choose TRUSTED_DEVELOPMENT for isolated networks "
+                            + "or NETWORK_MTLS for verified peers");
+        }
+        if (profile == OtryxRpcProperties.SecurityProfile.NETWORK_MTLS) {
+            if (security.getMode() != RpcSecurityMode.MTLS) {
+                throw invalid("transport.security.mode", "NETWORK_MTLS requires mutual TLS");
+            }
+            if (fory.getMode() != ForyRpcSecurityOptions.Mode.STRICT_ALLOWLIST) {
+                throw invalid("codec.fory.mode", "NETWORK_MTLS requires STRICT_ALLOWLIST");
+            }
         }
     }
 
