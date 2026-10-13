@@ -323,3 +323,9 @@ ServiceKey/MethodId 生成 `RpcAuthorizationContext`；若容器中声明
 `otryx.rpc.server.authorization.max-buffered-request-bytes` 默认
 67108864，限制异步安全策略等待期间持有的原始请求 Frame 总字节数；
 与 `max-pending` 一起组成授权阶段双维度容量限制，超额立即拒绝。
+
+
+安全 Profile 对自定义 `RpcCodecRegistry` 与 `RpcTransportOptions` Bean 进行运行时
+验证：`NETWORK_MTLS` 的最终 Codec 必须是严格白名单 Fory，最终 Transport
+必须启用 mTLS。授权失败使用已有 `BAD_REQUEST`，不应重试；
+授权等待截止时间为客户端剩余预算与服务端策略超时的较短者。

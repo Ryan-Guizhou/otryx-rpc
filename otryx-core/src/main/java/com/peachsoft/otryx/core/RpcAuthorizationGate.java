@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 final class RpcAuthorizationGate implements AutoCloseable {
     enum Decision {
-        ALLOW, DENY, OVERLOADED
+        ALLOW, DENY, OVERLOADED, DEADLINE_EXCEEDED
     }
 
     private final RpcAuthorizer authorizer;
@@ -60,11 +60,17 @@ final class RpcAuthorizationGate implements AutoCloseable {
      *
      * @param context 连接身份及服务方法
      * @param requestFrameBytes 等待策略结束期间持有的完整原始请求帧字节数
+     * @param remainingRequestNanos 调用方的剩余单调时间预算，Long.MAX_VALUE 表示未指定
      * @return 授权结果
      */
     CompletionStage<Decision> authorize(
-            RpcAuthorizationContext context, int requestFrameBytes) {
+            RpcAuthorizationContext context,
+            int requestFrameBytes,
+            long remainingRequestNanos) {
         Objects.requireNonNull(context, "context");
+        if (remainingRequestNanos <= 0L) {
+            return CompletableFuture.completedFuture(Decision.DEADLINE_EXCEEDED);
+        }
         ResponseByteBudget.Lease frameLease =
                 pendingRequestBytes.tryAcquire(requestFrameBytes);
         if (frameLease == null) {
@@ -105,10 +111,15 @@ final class RpcAuthorizationGate implements AutoCloseable {
         if (result.isDone()) {
             return result;
         }
+        long configuredTimeoutNanos = timeout.toNanos();
+        boolean deadlineFirst = remainingRequestNanos <= configuredTimeoutNanos;
+        long waitNanos = Math.min(remainingRequestNanos, configuredTimeoutNanos);
         try {
             ScheduledFuture<?> timer = timeoutExecutor.schedule(
-                    () -> result.complete(Decision.DENY),
-                    Math.max(1L, timeout.toMillis()), TimeUnit.MILLISECONDS);
+                    () -> result.complete(deadlineFirst
+                            ? Decision.DEADLINE_EXCEEDED
+                            : Decision.DENY),
+                    waitNanos, TimeUnit.NANOSECONDS);
             result.whenComplete((ignored, error) -> timer.cancel(false));
         } catch (RejectedExecutionException error) {
             result.complete(Decision.DENY);

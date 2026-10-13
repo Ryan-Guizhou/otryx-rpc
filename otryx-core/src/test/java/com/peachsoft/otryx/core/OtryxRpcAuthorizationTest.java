@@ -53,7 +53,7 @@ class OtryxRpcAuthorizationTest {
                             request(Map.of("x-claimed-identity", "CN=admin")))
                     .toCompletableFuture().get(3, TimeUnit.SECONDS);
 
-            assertEquals(RpcStatus.UNAVAILABLE, RpcProtocolCodec.view(reply).status());
+            assertEquals(RpcStatus.BAD_REQUEST, RpcProtocolCodec.view(reply).status());
             assertEquals(0, codec.decodes.get());
             assertEquals(0, service.invocations.get());
         } finally {
@@ -90,7 +90,7 @@ class OtryxRpcAuthorizationTest {
 
             byte[] rejected = transport.call(RpcPeerIdentity.anonymous(), request(Map.of()))
                     .toCompletableFuture().get(3, TimeUnit.SECONDS);
-            assertEquals(RpcStatus.UNAVAILABLE, RpcProtocolCodec.view(rejected).status());
+            assertEquals(RpcStatus.BAD_REQUEST, RpcProtocolCodec.view(rejected).status());
             assertEquals(1, codec.decodes.get());
             assertEquals(1, service.invocations.get());
         } finally {
@@ -276,6 +276,46 @@ class OtryxRpcAuthorizationTest {
     }
 
     @Test
+    void requestBudgetMustInterruptAuthorizationWaitBeforePolicyTimeout()
+            throws Exception {
+        TestTransport transport = new TestTransport();
+        TestCodec codec = new TestCodec();
+        CountingService service = new CountingService();
+        CompletableFuture<Boolean> unfinished = new CompletableFuture<>();
+        OtryxRpcServer server = server(transport, codec, service)
+                .authorizer(context -> unfinished)
+                .authorizationTimeout(Duration.ofSeconds(2))
+                .maxPendingAuthorizations(1)
+                .build();
+        try {
+            server.registerService(Api.class, service, "1.0.0", "default");
+            server.start().toCompletableFuture().join();
+            byte[] shortRequest = RpcProtocolCodec.encodeRequest(
+                    (byte) 1, RpcIds.serviceId(serviceKey()),
+                    RpcIds.methodId(Api.class.getMethod("call")),
+                    System.currentTimeMillis() + 5000L, 25L,
+                    Map.of(), new byte[] {1});
+            long startedAt = System.nanoTime();
+            byte[] expired = transport.call(
+                            RpcPeerIdentity.anonymous(), shortRequest)
+                    .toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertEquals(RpcStatus.DEADLINE_EXCEEDED,
+                    RpcProtocolCodec.view(expired).status());
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt) < 500L);
+            byte[] full = transport.call(RpcPeerIdentity.anonymous(), request(Map.of()))
+                    .toCompletableFuture().get(1, TimeUnit.SECONDS);
+            assertEquals(RpcStatus.OVERLOADED,
+                    RpcProtocolCodec.view(full).status());
+            assertEquals(0, codec.decodes.get());
+            assertEquals(0, service.invocations.get());
+        } finally {
+            unfinished.complete(false);
+            server.close();
+        }
+    }
+
+    @Test
     void exceptionalAuthorizerMustFailClosedWithoutBusinessExecution()
             throws Exception {
         TestTransport transport = new TestTransport();
@@ -290,7 +330,7 @@ class OtryxRpcAuthorizationTest {
             server.start().toCompletableFuture().join();
             byte[] response = transport.call(RpcPeerIdentity.anonymous(), request(Map.of()))
                     .toCompletableFuture().get(3, TimeUnit.SECONDS);
-            assertEquals(RpcStatus.UNAVAILABLE, RpcProtocolCodec.view(response).status());
+            assertEquals(RpcStatus.BAD_REQUEST, RpcProtocolCodec.view(response).status());
             assertEquals(0, codec.decodes.get());
             assertEquals(0, service.invocations.get());
         } finally {

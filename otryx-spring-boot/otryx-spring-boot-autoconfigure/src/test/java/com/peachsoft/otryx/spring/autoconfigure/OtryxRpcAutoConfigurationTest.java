@@ -2,6 +2,9 @@ package com.peachsoft.otryx.spring.autoconfigure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.peachsoft.otryx.codec.RpcCodecRegistry;
+import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
+import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.observability.RpcSecurityMode;
@@ -71,6 +74,52 @@ public class OtryxRpcAutoConfigurationTest {
                             .hasStackTraceContaining("codec.fory.mode");
                 });
         contextRunner.withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS",
+                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
+                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void networkProfileMustValidateEffectiveCustomCodecRegistry() {
+        contextRunner.withBean(RpcCodecRegistry.class,
+                        () -> RpcCodecRegistry.of(new ForyRpcCodec()))
+                .withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS",
+                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
+                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("effective Fory codec");
+                });
+    }
+
+    @Test
+    void networkProfileMustValidateEffectiveCustomTransportOptions() {
+        contextRunner.withBean(RpcTransportOptions.class,
+                        () -> RpcTransportOptions.DEFAULT)
+                .withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS",
+                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
+                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("effective transport must use MTLS");
+                });
+    }
+
+    @Test
+    void networkProfileMustAllowVerifiedStrictCustomCodec() {
+        contextRunner.withBean(RpcCodecRegistry.class,
+                        () -> RpcCodecRegistry.of(new ForyRpcCodec(
+                                ForyRpcSecurityOptions.strictAllowlist(
+                                        java.util.Set.of("com.peachsoft.otryx.demo.*")))))
+                .withPropertyValues(
                         "otryx.rpc.security-profile=NETWORK_MTLS",
                         "otryx.rpc.transport.security.mode=MTLS",
                         "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",

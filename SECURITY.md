@@ -51,3 +51,10 @@ Spring Boot 接入要求明确设置 `otryx.rpc.security-profile`：`TRUSTED_DEV
 ## Release 修复
 
 安全修复遵循最小兼容改动原则。若 Wire/API 必须发生不兼容变化，将使用新的兼容边界并在 Release Notes 中明确说明。
+
+
+.NETWORK_MTLS: custom `RpcCodecRegistry` and `RpcTransportOptions` beans are
+validated against **effective** strict Fory and mTLS settings at startup. Denied
+requests use existing Wire v1 `BAD_REQUEST` (non-retryable); client deadlines
+end pending authorization with `DEADLINE_EXCEEDED`, without assuming that a
+third-party authorization task has actually stopped.

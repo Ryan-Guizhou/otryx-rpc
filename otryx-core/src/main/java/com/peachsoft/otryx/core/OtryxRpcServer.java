@@ -401,6 +401,7 @@ public final class OtryxRpcServer implements AutoCloseable {
             RpcEndpoint remote,
             RpcPeerIdentity peer,
             byte[] rawFrame) {
+        long receivedAtNanos = System.nanoTime();
         RpcFrameView request;
         try {
             request = RpcProtocolCodec.view(rawFrame);
@@ -432,13 +433,19 @@ public final class OtryxRpcServer implements AutoCloseable {
                             RpcStatus.BAD_REQUEST,
                             "Invalid deadline"));
         }
-        if (timeoutBudgetMillis <= 0L
-                && deadline > 0L
-                && System.currentTimeMillis() > deadline) {
+        // 新节点优先采用相对时限；历史 Epoch-only 客户端在接收时
+        // 折算为本机的单调时间预算，避免授权队列重获完整超时。
+        long initialRequestNanos = Long.MAX_VALUE;
+        if (timeoutBudgetMillis > 0L) {
+            initialRequestNanos = TimeUnit.MILLISECONDS.toNanos(timeoutBudgetMillis);
+        } else if (deadline > 0L) {
+            initialRequestNanos = TimeUnit.MILLISECONDS.toNanos(
+                    deadline - System.currentTimeMillis());
+        }
+        if (initialRequestNanos != Long.MAX_VALUE
+                && initialRequestNanos <= System.nanoTime() - receivedAtNanos) {
             return CompletableFuture.completedFuture(
-                    frameworkError(
-                            request,
-                            RpcStatus.DEADLINE_EXCEEDED,
+                    frameworkError(request, RpcStatus.DEADLINE_EXCEEDED,
                             "Deadline exceeded"));
         }
 
@@ -473,28 +480,36 @@ public final class OtryxRpcServer implements AutoCloseable {
         RpcAuthorizationContext context = new RpcAuthorizationContext(
                 peer, binding.serviceKey(), request.methodId(), remote);
         long authorizationStartedNanos = System.nanoTime();
-        return authorizationGate.authorize(context, request.bytes().length)
+        final long authorizationRemainingNanos =
+                initialRequestNanos == Long.MAX_VALUE
+                        ? Long.MAX_VALUE
+                        : initialRequestNanos
+                                - (authorizationStartedNanos - receivedAtNanos);
+        return authorizationGate.authorize(
+                        context, request.bytes().length,
+                        authorizationRemainingNanos)
                 .thenCompose(outcome -> {
             if (outcome == RpcAuthorizationGate.Decision.OVERLOADED) {
                 return CompletableFuture.completedFuture(errorResponse(
                         request, RpcStatus.OVERLOADED,
                         RpcException.class.getName(), "Authorization capacity exhausted"));
             }
-            if (outcome != RpcAuthorizationGate.Decision.ALLOW) {
-                return CompletableFuture.completedFuture(errorResponse(
-                        request, RpcStatus.UNAVAILABLE,
-                        RpcException.class.getName(), "RPC authorization denied"));
-            }
-            // Epoch only is for legacy clients; relative duration takes precedence
-            // when both are present to avoid cross-host clock-skew expansion.
-            boolean expired = timeoutBudgetMillis > 0L
-                    ? TimeUnit.NANOSECONDS.toMillis(
-                            System.nanoTime() - authorizationStartedNanos)
-                            >= timeoutBudgetMillis
-                    : deadline > 0L && System.currentTimeMillis() > deadline;
+            // 授权拒绝属于确定性请求失败，不能被 Client 当作
+            // UNAVAILABLE 重试/熔断或误记为 Provider 健康故障。
+            boolean expired = outcome
+                    == RpcAuthorizationGate.Decision.DEADLINE_EXCEEDED
+                    || (authorizationRemainingNanos != Long.MAX_VALUE
+                            && System.nanoTime() - authorizationStartedNanos
+                                    >= authorizationRemainingNanos);
             if (expired) {
                 return CompletableFuture.completedFuture(frameworkError(
                         request, RpcStatus.DEADLINE_EXCEEDED, "Deadline exceeded during authorization"));
+            }
+            if (outcome != RpcAuthorizationGate.Decision.ALLOW) {
+                return CompletableFuture.completedFuture(errorResponse(
+                        request, RpcStatus.BAD_REQUEST,
+                        RpcException.class.getName(),
+                        "RPC authorization denied"));
             }
             return executeAuthorized(request, binding, methodCodec);
         });

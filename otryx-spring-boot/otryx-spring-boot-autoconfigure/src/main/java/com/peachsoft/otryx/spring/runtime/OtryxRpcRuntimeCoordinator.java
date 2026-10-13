@@ -1,7 +1,11 @@
 package com.peachsoft.otryx.spring.runtime;
 
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.codec.RpcCodec;
+import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
+import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
+import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.core.RpcAuthorizer;
@@ -109,6 +113,38 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
         this.properties = Objects.requireNonNull(
                 properties,
                 "properties");
+        validateEffectiveNetworkSecurity();
+    }
+
+    /**
+     * 检查最终注入的安全运行对象，防止自定义 Spring Bean 绕过 Profile。
+     */
+    private void validateEffectiveNetworkSecurity() {
+        if (!properties.isEnabled()
+                || properties.getSecurityProfile()
+                != OtryxRpcProperties.SecurityProfile.NETWORK_MTLS) {
+            return;
+        }
+        if (!transportOptions.security().mutualTls()) {
+            throw new IllegalStateException(
+                    "Invalid otryx.rpc.transport.security.mode: "
+                            + "effective transport must use MTLS");
+        }
+        RpcCodec effective;
+        try {
+            effective = codecRegistry.require(RpcCodecIds.FORY_NATIVE);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalStateException(
+                    "Invalid otryx.rpc.codec.fory.mode: "
+                            + "effective registry must contain Fory codec", error);
+        }
+        if (!(effective instanceof ForyRpcCodec fory)
+                || fory.securityOptions().mode()
+                != ForyRpcSecurityOptions.Mode.STRICT_ALLOWLIST) {
+            throw new IllegalStateException(
+                    "Invalid otryx.rpc.codec.fory.mode: "
+                            + "effective Fory codec must use STRICT_ALLOWLIST");
+        }
     }
 
     /**

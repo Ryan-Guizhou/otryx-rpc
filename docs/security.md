@@ -229,3 +229,17 @@ TLS/mTLS
 第三方授权真正完成之前仍持有独立的并发槽位。授权等待结束再次
 检查发送方提供的剩余时间预算（优先于可能跨机器偏差的 Epoch Deadline）。
 此预算不是 JVM 堆上限，也不替代业务执行和 Transport 已有预算。
+
+
+### 当前网络安全策略的运行时校验
+
+`NETWORK_MTLS` 不只检查配置字段。Spring Runtime Coordinator 在创建时还检查**最终生效**
+`RpcCodecRegistry` 内的 Fory Native Codec 是否为 `STRICT_ALLOWLIST`，以及最终
+`RpcTransportOptions` 是否真实为 mTLS。自定义 Spring Bean 不得通过绕过 AutoConfiguration
+使声明的安全 Profile 失效。
+
+授权拒绝当前使用 Wire v1 已有的 `BAD_REQUEST`（客户端不重试、不计入端点可用性故障），
+而非表示网络不可用的 `UNAVAILABLE`。这是一项明确的 Wire v1 兼容取舍，未来独立协议
+升级可考虑专用 Permission Denied 状态。请求截止时间优先于策略的独立超时时间；
+授权排队在相对预算或旧版 Epoch Deadline 到期时以 `DEADLINE_EXCEEDED` 结束，
+但已挂起的第三方授权任务仍在实际结束前占用并发许可。
