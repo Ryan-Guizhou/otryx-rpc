@@ -92,6 +92,38 @@ class VertxRpcTransportTest {
     }
 
     @Test
+    void subMillisecondBudgetMustNeverBeRoundedUpOnWire() throws Exception {
+        int port = findFreePort();
+        RpcTransportOptions options = new RpcTransportOptions(
+                32, 1024 * 1024, 1024 * 1024, Duration.ofSeconds(2));
+        VertxRpcTransportServer server = new VertxRpcTransportServer(options);
+        VertxRpcTransportClient client = new VertxRpcTransportClient(options);
+        RpcEndpoint endpoint = new RpcEndpoint("127.0.0.1", port);
+        AtomicInteger executions = new AtomicInteger();
+        try {
+            server.start(endpoint, (remote, bytes) -> {
+                executions.incrementAndGet();
+                return CompletableFuture.completedFuture(
+                        response(bytes, new byte[] {1}));
+            }).toCompletableFuture().join();
+            client.request(endpoint, request(), Duration.ofSeconds(2))
+                    .toCompletableFuture().join();
+            assertEquals(1, executions.get());
+
+            CompletionException failed = assertThrows(
+                    CompletionException.class,
+                    () -> client.request(endpoint, request(), Duration.ofNanos(1L))
+                            .toCompletableFuture().join());
+            assertInstanceOf(RpcTimeoutException.class, failed.getCause());
+            assertEquals(1, executions.get(),
+                    "Submillisecond budgets cannot dispatch a request with refreshed 1ms");
+        } finally {
+            client.close();
+            server.close();
+        }
+    }
+
+    @Test
     void requestTimeoutMustFinishWhileHandshakeIsStillPending()
             throws Exception {
         RpcTransportOptions options = new RpcTransportOptions(
