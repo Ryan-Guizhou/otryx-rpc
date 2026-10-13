@@ -4,6 +4,7 @@ import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
+import com.peachsoft.otryx.core.RpcAuthorizer;
 import com.peachsoft.otryx.core.RpcShutdownOptions;
 import com.peachsoft.otryx.core.RpcProviderAdmissionOptions;
 import com.peachsoft.otryx.core.RpcClientResilienceOptions;
@@ -43,6 +44,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
             metadataPropagatorProvider;
     private final ObjectProvider<RpcTracingBridge>
             tracingBridgeProvider;
+    private final ObjectProvider<RpcAuthorizer> authorizerProvider;
     private final OtryxRpcProperties properties;
     private volatile OtryxRpcClient client;
     private volatile OtryxRpcServer server;
@@ -62,6 +64,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
      * @param observerProvider 可观测性 Observer 提供器
      * @param metadataPropagatorProvider Metadata 传播器提供器
      * @param tracingBridgeProvider 分布式 Trace Bridge 提供器
+     * @param authorizerProvider 非阻塞安全授权策略提供器
      * @param properties OTRYX RPC 配置
      */
     public OtryxRpcRuntimeCoordinator(
@@ -76,6 +79,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
             ObjectProvider<RpcObserver> observerProvider,
             ObjectProvider<RpcMetadataPropagator> metadataPropagatorProvider,
             ObjectProvider<RpcTracingBridge> tracingBridgeProvider,
+            ObjectProvider<RpcAuthorizer> authorizerProvider,
             OtryxRpcProperties properties) {
         this.registry = Objects.requireNonNull(registry, "registry");
         this.codecRegistry = Objects.requireNonNull(codecRegistry, "codecRegistry");
@@ -100,6 +104,8 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 Objects.requireNonNull(
                         tracingBridgeProvider,
                         "tracingBridgeProvider");
+        this.authorizerProvider = Objects.requireNonNull(
+                authorizerProvider, "authorizerProvider");
         this.properties = Objects.requireNonNull(
                 properties,
                 "properties");
@@ -225,10 +231,30 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .drainTimeout(serverProperties.getDrainTimeout())
                 .controlPlaneTimeout(serverProperties.getControlPlaneTimeout())
                 .executionOptions(executionOptions)
+                .authorizer(authorizer())
+                .maxPendingAuthorizations(serverProperties.getAuthorization().getMaxPending())
+                .authorizationTimeout(serverProperties.getAuthorization().getTimeout())
                 .observer(observer())
                 .metadataPropagator(metadataPropagator())
                 .tracingBridge(tracingBridge())
                 .build();
+    }
+
+    /**
+     * Spring 注入的业务授权不能绕过 NETWORK_MTLS 的认证前置条件。
+     *
+     * @return 网络身份强制校验后组合的非阻塞策略
+     */
+    private RpcAuthorizer authorizer() {
+        RpcAuthorizer configured = authorizerProvider.getIfAvailable(
+                RpcAuthorizer::allowTrustedDevelopment);
+        if (properties.getSecurityProfile()
+                != OtryxRpcProperties.SecurityProfile.NETWORK_MTLS) {
+            return configured;
+        }
+        return context -> context.peer().authenticated()
+                ? configured.authorize(context)
+                : java.util.concurrent.CompletableFuture.completedFuture(false);
     }
 
     private static RpcProviderAdmissionOptions providerAdmissionOptions(
