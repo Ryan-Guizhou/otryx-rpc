@@ -1,9 +1,12 @@
 package com.peachsoft.otryx.examples.provider;
 
+import com.peachsoft.otryx.core.RpcCallContext;
 import com.peachsoft.otryx.examples.api.GreetingReply;
 import com.peachsoft.otryx.examples.api.GreetingRequest;
 import com.peachsoft.otryx.examples.api.GreetingService;
 import com.peachsoft.otryx.spring.annotation.OtryxRpcService;
+import java.util.concurrent.TimeUnit;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 /**
  * 示例问候服务实现。
@@ -15,6 +18,8 @@ import com.peachsoft.otryx.spring.annotation.OtryxRpcService;
 @OtryxRpcService(
         interfaceClass = GreetingService.class,
         version = "1.0.0")
+@ConditionalOnProperty(prefix = "otryx.rpc.example", name = "role",
+        havingValue = "leaf", matchIfMissing = true)
 public class GreetingServiceImpl implements GreetingService {
 
     /** 创建示例服务实现。 */
@@ -23,6 +28,18 @@ public class GreetingServiceImpl implements GreetingService {
 
     @Override
     public GreetingReply hello(GreetingRequest request) {
+        RpcCallContext context = RpcCallContext.current();
+        if (context != null && "true".equals(context.metadata().get("otryx-e2e"))) {
+            if (!"B".equals(context.metadata().get("relay"))
+                    || !"alpha".equals(context.metadata().get("tenant"))) {
+                throw new IllegalStateException("Relay context metadata was not preserved");
+            }
+            long remainingMillis = TimeUnit.NANOSECONDS.toMillis(context.remainingNanos());
+            if (remainingMillis <= 0L || remainingMillis >= 1_800L) {
+                throw new IllegalStateException("Downstream budget was not reduced");
+            }
+            return new GreetingReply("CHAIN_OK remainingMillis=" + remainingMillis);
+        }
         return new GreetingReply(
                 "Hello, " + request.name() + "!");
     }
