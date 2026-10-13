@@ -204,6 +204,29 @@ public final class RpcFrameView {
     }
 
     /**
+     * 无需解析 Map 即可检测是否存在非框架字段的用户 Metadata。
+     *
+     * @return 是否含业务自定义 Metadata
+     */
+    public boolean hasUserMetadata() {
+        int end = metadataOffset + metadataLength;
+        int start = metadataOffset;
+        while (start < end) {
+            int lineEnd = start;
+            while (lineEnd < end && bytes[lineEnd] != '\n') {
+                lineEnd++;
+            }
+            if (lineEnd > start
+                    && !matchesKey(DEADLINE_KEY, start, lineEnd)
+                    && !matchesKey(TIMEOUT_BUDGET_KEY, start, lineEnd)) {
+                return true;
+            }
+            start = lineEnd + 1;
+        }
+        return false;
+    }
+
+    /**
      * 直接解析 deadlineEpochMillis Metadata，不构建 Map/String。
      *
      * @return 未携带 Deadline 时返回 0

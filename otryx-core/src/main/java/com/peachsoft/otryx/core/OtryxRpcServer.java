@@ -1,6 +1,8 @@
 package com.peachsoft.otryx.core;
 
 import com.peachsoft.otryx.api.RpcAuthorizationContext;
+import com.peachsoft.otryx.api.RpcCallContext;
+import com.peachsoft.otryx.api.RpcCallScope;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcCompatibilityMetadata;
 import com.peachsoft.otryx.api.RpcEndpoint;
@@ -487,6 +489,15 @@ public final class OtryxRpcServer implements AutoCloseable {
                             "Unsupported codec"));
         }
 
+        RpcCallContext inboundContext;
+        try {
+            inboundContext = RpcCallContext.inbound(
+                    receivedAtNanos, initialRequestNanos,
+                    request.hasUserMetadata() ? request.metadataCopy() : Map.of());
+        } catch (RpcProtocolException error) {
+            return CompletableFuture.completedFuture(frameworkError(
+                    request, RpcStatus.BAD_REQUEST, "Invalid request metadata"));
+        }
         RpcAuthorizationContext context = new RpcAuthorizationContext(
                 peer, binding.serviceKey(), request.methodId(), remote);
         long authorizationStartedNanos = System.nanoTime();
@@ -528,7 +539,7 @@ public final class OtryxRpcServer implements AutoCloseable {
             }
             if (!authorizedInline && requestExecutor != null) {
                 return dispatchAuthorizedOnRequestExecutor(
-                        requestExecutor, request, binding, methodCodec,
+                        requestExecutor, request, binding, methodCodec, inboundContext,
                         authorizationStartedNanos, authorizationRemainingNanos);
             }
             if (!authorizedInline && requestExecutor == null) {
@@ -544,7 +555,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                             request, RpcStatus.METHOD_NOT_FOUND, "Method not found"));
                 }
             }
-            return executeAuthorized(request, binding, methodCodec);
+            return executeAuthorized(request, binding, methodCodec, inboundContext);
         });
     }
 
@@ -555,6 +566,7 @@ public final class OtryxRpcServer implements AutoCloseable {
      * @param request 请求帧
      * @param binding 绑定服务
      * @param codec 方法 Codec
+     * @param inboundContext 入站单调 Deadline 和用户 Metadata 快照
      * @param authorizedAtNanos 授权等待开始时的单调时间
      * @param remainingNanos 授权开始时的客户端剩余预算
      * @return 最终响应
@@ -564,6 +576,7 @@ public final class OtryxRpcServer implements AutoCloseable {
             RpcFrameView request,
             ServiceBinding binding,
             RpcMethodCodec codec,
+            RpcCallContext inboundContext,
             long authorizedAtNanos,
             long remainingNanos) {
         CompletableFuture<byte[]> reply = new CompletableFuture<>();
@@ -577,7 +590,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     return;
                 }
                 try {
-                    executeAuthorized(request, binding, codec)
+                    executeAuthorized(request, binding, codec, inboundContext)
                             .whenComplete((bytes, error) -> {
                                 if (error != null) {
                                     reply.completeExceptionally(error);
@@ -600,7 +613,13 @@ public final class OtryxRpcServer implements AutoCloseable {
     private CompletionStage<byte[]> executeAuthorized(
             RpcFrameView request,
             ServiceBinding binding,
-            RpcMethodCodec methodCodec) {
+            RpcMethodCodec methodCodec,
+            RpcCallContext inboundContext) {
+        if (inboundContext.remainingNanos() == 0L) {
+            return CompletableFuture.completedFuture(frameworkError(
+                    request, RpcStatus.DEADLINE_EXCEEDED,
+                    "Deadline exceeded before provider dispatch"));
+        }
         if (state.get() != State.STARTED) {
             return CompletableFuture.completedFuture(
                     frameworkError(request, RpcStatus.UNAVAILABLE, "Server is not ready"));
