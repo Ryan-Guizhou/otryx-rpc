@@ -130,6 +130,15 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                     "Invalid otryx.rpc.transport.security.mode: "
                             + "effective transport must use MTLS");
         }
+        // 未声明统一安全策略的第三方 Codec 不可在网络 Profile 中协商。
+        if (!codecRegistry.supportedCodecIds()
+                .equals(java.util.Set.of(RpcCodecIds.FORY_NATIVE))
+                || !transportOptions.codecIds()
+                        .equals(java.util.Set.of(RpcCodecIds.FORY_NATIVE))) {
+            throw new IllegalStateException(
+                    "Invalid otryx.rpc.codec.fory.mode: "
+                            + "NETWORK_MTLS supports only audited Fory Native codec");
+        }
         RpcCodec effective;
         try {
             effective = codecRegistry.require(RpcCodecIds.FORY_NATIVE);

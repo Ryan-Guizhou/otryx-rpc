@@ -243,3 +243,5 @@ TLS/mTLS
 升级可考虑专用 Permission Denied 状态。请求截止时间优先于策略的独立超时时间；
 授权排队在相对预算或旧版 Epoch Deadline 到期时以 `DEADLINE_EXCEEDED` 结束，
 但已挂起的第三方授权任务仍在实际结束前占用并发许可。
+
+在该版本中 `NETWORK_MTLS` 只允许实际运行中的 Fory Native Codec ID 1；附加的第三方 Codec 尚无统一的反序列化安全证明时，不允许进入该网络配置。后续若接入其他序列化方式，须建立独立安全证明与准入检查，而不能仅依赖 Fory 配置字段。

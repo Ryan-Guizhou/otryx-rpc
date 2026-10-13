@@ -128,6 +128,43 @@ public class OtryxRpcAutoConfigurationTest {
     }
 
     @Test
+    void networkProfileMustRejectAdditionalUnauditedCodec() {
+        contextRunner.withBean(RpcCodecRegistry.class, () -> {
+                    ForyRpcCodec strict = new ForyRpcCodec(
+                            ForyRpcSecurityOptions.strictAllowlist(
+                                    java.util.Set.of("com.peachsoft.otryx.demo.*")));
+                    com.peachsoft.otryx.codec.RpcCodec unsafe =
+                            new com.peachsoft.otryx.codec.RpcCodec() {
+                                @Override
+                                public byte code() {
+                                    return com.peachsoft.otryx.codec.RpcCodecIds.JSON;
+                                }
+
+                                @Override
+                                public byte[] encode(Object value) {
+                                    return new byte[0];
+                                }
+
+                                @Override
+                                public <T> T decode(byte[] encoded, Class<T> type) {
+                                    return null;
+                                }
+                            };
+                    return RpcCodecRegistry.of(strict, unsafe);
+                })
+                .withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS",
+                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
+                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("only audited Fory Native codec");
+                });
+    }
+
+    @Test
     void invalidAuthorizationCapacityMustFailFast() {
         contextRunner.withPropertyValues("otryx.rpc.server.authorization.max-pending=0")
                 .run(context -> {

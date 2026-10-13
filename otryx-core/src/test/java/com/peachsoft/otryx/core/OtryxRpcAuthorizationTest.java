@@ -117,7 +117,7 @@ class OtryxRpcAuthorizationTest {
             CompletionStage<byte[]> first = transport.call(
                     RpcPeerIdentity.anonymous(), request(Map.of()));
             byte[] expired = first.toCompletableFuture().get(3, TimeUnit.SECONDS);
-            assertEquals(RpcStatus.UNAVAILABLE, RpcProtocolCodec.view(expired).status());
+            assertEquals(RpcStatus.BAD_REQUEST, RpcProtocolCodec.view(expired).status());
 
             byte[] full = transport.call(RpcPeerIdentity.anonymous(), request(Map.of()))
                     .toCompletableFuture().get(3, TimeUnit.SECONDS);
