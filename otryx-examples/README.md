@@ -44,6 +44,29 @@ RPC demo completed successfully: Hello, OTRYX RPC!
 Consumer 在启动阶段允许等待短暂的注册中心传播时间，但真实业务调用仍遵循 OTRYX RPC 的超时、重试、熔断和端点剔除规则。
 
 
+## A→B→C 三独立 JVM Deadline E2E（U08）
+
+在本地启动官方示例 Nacos 后，先构建全部示例，再从仓库根目录运行：
+
+```bash
+mvn -B -ntp -pl otryx-examples -am clean package
+bash scripts/run_three_process_deadline_e2e.sh
+```
+
+脚本启动三个独立 Java 进程：Consumer A、Relay Provider B（端口 19091）和 Leaf Provider C（端口 19090）。
+A 将 5 秒单次覆盖超时及 `tenant` Metadata 发给 B；B 延迟 250ms，
+带着 `relay=B` 元数据继续调用 C。B 的 Client 默认超时为 10 秒，
+但不能覆盖 A 已剩余的更短预算。C 在实际业务线程中验证到达的 Metadata
+以及剩余 Deadline 小于 5 秒，Consumer 输出：
+
+```text
+RPC deadline chain completed: CHAIN_OK remainingMillis=...
+```
+
+这个场景使用真实 Nacos 注册中心和 Vert.x TCP；`scripts/run_three_process_deadline_e2e.sh`
+已列入 CI 门禁。额外的绝对 Epoch 时钟偏移与剩余预算校验在 Core
+`OtryxRpcServerAsyncExecutionTest` 中执行。E2E 通过状态应以 Actions 的执行结果为准。
+
 ## TLS / mTLS 可选 Profile
 
 默认示例仍使用 PLAINTEXT，保证本地和 CI 的 Nacos 恢复 E2E 不需要证书准备。
