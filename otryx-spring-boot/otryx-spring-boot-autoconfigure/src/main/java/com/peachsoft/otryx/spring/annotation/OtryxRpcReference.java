@@ -31,4 +31,13 @@ public @interface OtryxRpcReference {
      * @return 服务分组
      */
     String group() default "default";
+
+    /**
+     * 该 Consumer 引用默认调用超时；0 表示沿用全局 Client 默认值。
+     *
+     * <p>单次 RpcCallOptions 和契约方法 OtryxRpcTimeout 优先于本设置。
+     *
+     * @return 正数超时毫秒数或 0
+     */
+    long timeoutMillis() default 0L;
 }

@@ -4,6 +4,7 @@ import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.spring.annotation.OtryxRpcReference;
 import com.peachsoft.otryx.spring.runtime.OtryxRpcRuntimeCoordinator;
 import java.lang.reflect.Field;
+import java.time.Duration;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.InstantiationAwareBeanPostProcessor;
@@ -73,10 +74,20 @@ public final class OtryxRpcReferenceBeanPostProcessor
                             + field.getType().getName(),
                     error);
         }
+        if (reference.timeoutMillis() < 0L
+                || reference.timeoutMillis() > Duration.ofDays(1).toMillis()) {
+            throw new IllegalStateException(
+                    "Invalid @OtryxRpcReference.timeoutMillis: field="
+                            + field.getName());
+        }
+        Duration referenceTimeout = reference.timeoutMillis() == 0L
+                ? null
+                : Duration.ofMillis(reference.timeoutMillis());
         Object proxy = client.refer(
                 field.getType(),
                 reference.version(),
-                reference.group());
+                reference.group(),
+                referenceTimeout);
         ReflectionUtils.makeAccessible(field);
         ReflectionUtils.setField(field, bean, proxy);
     }

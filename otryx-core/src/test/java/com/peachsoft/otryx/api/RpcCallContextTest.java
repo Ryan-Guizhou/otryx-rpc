@@ -60,8 +60,9 @@ class RpcCallContextTest {
             CompletableFuture<String> plain = CompletableFuture.supplyAsync(() ->
                     RpcCallContext.current() == null ? "none" : "leaked");
             CompletableFuture<String> captured = CompletableFuture.supplyAsync(
-                    RpcCallContext.wrap(() ->
-                            RpcCallContext.current().metadata().get("x-trace")));
+                    RpcCallContext.wrap(
+                            (java.util.function.Supplier<String>) () ->
+                                    RpcCallContext.current().metadata().get("x-trace")));
             assertEquals("none", plain.get(2, TimeUnit.SECONDS));
             assertEquals("demo", captured.get(2, TimeUnit.SECONDS));
             assertEquals("demo", RpcCallContext.current().metadata().get("x-trace"));
