@@ -376,7 +376,10 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 return;
             }
             CompletableFuture<byte[]> requestFuture =
-                    handler.handle(remote, peerIdentity, frame).toCompletableFuture();
+                    handler.handle(
+                            remote, peerIdentity, frame,
+                            task -> context.runOnContext(ignored -> task.run()))
+                            .toCompletableFuture();
             // 只有返回 Future 并取得所有权之后才计入连接级协议槽位。
             inflight.put(requestId, requestFuture);
             requestFuture.whenComplete((response, error) ->

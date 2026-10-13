@@ -251,3 +251,14 @@ TLS/mTLS
 为了接通实际业务，必须注册执行相应授权策略的 Bean。Provider 关闭时，
 授权 Gate 会将仍在等待的逻辑结果结算为拒绝并释放原始 Frame 字节预算，
 即使第三方授权 Stage 无法停止；真实并发许可仍直到第三方 Stage 完成才释放。
+
+当异步授权由外部执行器完成时，Core 必须先将 Provider 请求重新提交到
+Transport 提供的原事件循环，再执行 `DIRECT` 业务方法。官方 Vert.x
+Transport 实现使用连接所绑定的 `Context.runOnContext`；自定义
+Transport 若启用 DIRECT 与异步授权，则应实现
+`RpcRequestHandler.handle(remote, peer, frame, requestExecutor)` 并提交回原
+事件循环，否则不得声称维持 DIRECT 线程亲和性。
+
+部分 mTLS 证书仅包含 SAN 而没有 Subject DN，此时仍可用已验证的叶子
+证书 SHA-256 指纹做身份与权限映射，`RpcPeerIdentity.authenticated()`
+只以已验证指纹非空为条件，不依赖 Subject DN 必填。

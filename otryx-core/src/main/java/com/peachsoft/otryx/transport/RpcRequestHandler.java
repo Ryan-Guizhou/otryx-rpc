@@ -3,6 +3,7 @@ package com.peachsoft.otryx.transport;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 
 /**
  * Provider 收到完整协议帧后的异步处理器。
@@ -37,5 +38,26 @@ public interface RpcRequestHandler {
     default CompletionStage<byte[]> handle(
             RpcEndpoint remote, RpcPeerIdentity peer, byte[] frame) {
         return handle(remote, frame);
+    }
+
+    /**
+     * 传递请求所属 Transport EventLoop 的安全派发执行器。
+     *
+     * <p>若 Provider 使用异步认证和 DIRECT 执行模式，Transport 必须提供
+     * 原始请求事件循环的执行器。默认的兼容实现不提供调度能力；
+     * Core 会拒绝无法保证线程亲和性的异步 DIRECT 调用。
+     *
+     * @param remote 对端地址
+     * @param peer 可信对端身份
+     * @param frame 完整请求帧
+     * @param requestExecutor 将任务提交回原请求 EventLoop 的执行器
+     * @return 异步响应
+     */
+    default CompletionStage<byte[]> handle(
+            RpcEndpoint remote,
+            RpcPeerIdentity peer,
+            byte[] frame,
+            Executor requestExecutor) {
+        return handle(remote, peer, frame);
     }
 }

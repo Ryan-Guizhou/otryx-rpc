@@ -89,7 +89,7 @@ SHA-256 指纹。TLS 单向模式与明文连接一律为匿名；Metadata（包
 
 `otryx.rpc.server.authorization.max-pending`（默认 1024）限制真实未完成授权；
 `otryx.rpc.server.authorization.timeout`（默认 3s）控制逻辑超时。
-拒绝返回 Wire v1 现有 `UNAVAILABLE`，容量耗尽返回 `OVERLOADED`，
+拒绝返回 Wire v1 现有的非重试状态 `BAD_REQUEST`，容量耗尽返回 `OVERLOADED`，
 不添加新 Wire 状态。超时不意味着第三方策略停止，因此槽位在实际 Stage
 完成时才归还。授权代码不得在 EventLoop 上阻塞，若访问数据库/外部服务
 必须使用自带容量治理的异步客户端或有界执行器。

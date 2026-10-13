@@ -2,8 +2,11 @@ package com.peachsoft.otryx.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.peachsoft.otryx.api.OtryxRpcExecution;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcExecutionMode;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcStatus;
@@ -21,6 +24,10 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -316,6 +323,64 @@ class OtryxRpcAuthorizationTest {
     }
 
     @Test
+    void asyncAuthorizationMustRestoreDirectExecutionToRequestEventLoop()
+            throws Exception {
+        TestTransport transport = new TestTransport();
+        TestCodec codec = new TestCodec();
+        AtomicReference<String> executedThread = new AtomicReference<>();
+        CompletableFuture<Boolean> authorization = new CompletableFuture<>();
+        DirectService implementation = () -> {
+            executedThread.set(Thread.currentThread().getName());
+            return "ok";
+        };
+        OtryxRpcServer server = OtryxRpcServer.builder()
+                .serviceRegistrar(new NoopRegistrar())
+                .transportServer(transport)
+                .codecRegistry(RpcCodecRegistry.of(codec))
+                .bindEndpoint(new RpcEndpoint("127.0.0.1", 19091))
+                .executionOptions(new RpcProviderExecutionOptions(true, 1, 1))
+                .authorizer(context -> authorization)
+                .build()
+                .registerService(DirectService.class, implementation, "1.0.0", "default");
+        ExecutorService eventLoop = Executors.newSingleThreadExecutor(
+                Thread.ofPlatform().name("otryx-test-eventloop").factory());
+        try {
+            server.start().toCompletableFuture().join();
+            ServiceKey key = new ServiceKey(
+                    DirectService.class.getName(), "1.0.0", "default");
+            byte[] request = RpcProtocolCodec.encodeRequest(
+                    (byte) 1, RpcIds.serviceId(key),
+                    RpcIds.methodId(DirectService.class.getMethod("direct")),
+                    0L, 0L, Map.of(), new byte[0]);
+            CompletionStage<byte[]> response = eventLoop.submit(() ->
+                    transport.callWithDispatcher(
+                            RpcPeerIdentity.anonymous(), request, eventLoop))
+                    .get(2, TimeUnit.SECONDS);
+            Thread completionThread = Thread.ofPlatform()
+                    .name("foreign-auth-worker")
+                    .start(() -> authorization.complete(true));
+            completionThread.join(1000L);
+            byte[] accepted = response.toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            assertEquals(RpcStatus.OK, RpcProtocolCodec.view(accepted).status());
+            assertEquals("otryx-test-eventloop", executedThread.get());
+        } finally {
+            authorization.complete(false);
+            server.close();
+            eventLoop.shutdownNow();
+        }
+    }
+
+    @Test
+    void subjectlessCertificateMustRemainAuthenticatedByFingerprint() {
+        RpcPeerIdentity sanOnly = RpcPeerIdentity
+                .verifiedClientCertificate("", "ab12cd34");
+        assertTrue(sanOnly.authenticated());
+        assertEquals("", sanOnly.principal());
+        assertEquals("ab12cd34", sanOnly.certificateSha256());
+    }
+
+    @Test
     void exceptionalAuthorizerMustFailClosedWithoutBusinessExecution()
             throws Exception {
         TestTransport transport = new TestTransport();
@@ -365,6 +430,11 @@ class OtryxRpcAuthorizationTest {
 
     public interface Api {
         String call();
+    }
+
+    public interface DirectService {
+        @OtryxRpcExecution(RpcExecutionMode.DIRECT)
+        String direct();
     }
 
     public static final class CountingService implements Api {
@@ -424,6 +494,11 @@ class OtryxRpcAuthorizationTest {
 
         CompletionStage<byte[]> call(RpcPeerIdentity peer, byte[] frame) {
             return handler.handle(REMOTE, peer, frame);
+        }
+
+        CompletionStage<byte[]> callWithDispatcher(
+                RpcPeerIdentity peer, byte[] frame, Executor requestExecutor) {
+            return handler.handle(REMOTE, peer, frame, requestExecutor);
         }
 
         @Override

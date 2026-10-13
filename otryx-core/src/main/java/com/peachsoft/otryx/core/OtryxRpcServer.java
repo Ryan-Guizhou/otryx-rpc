@@ -41,6 +41,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -258,13 +259,21 @@ public final class OtryxRpcServer implements AutoCloseable {
                     @Override
                     public CompletionStage<byte[]> handle(RpcEndpoint remote, byte[] frame) {
                         return OtryxRpcServer.this.handle(
-                                remote, RpcPeerIdentity.anonymous(), frame);
+                                remote, RpcPeerIdentity.anonymous(), frame, null);
                     }
 
                     @Override
                     public CompletionStage<byte[]> handle(
                             RpcEndpoint remote, RpcPeerIdentity peer, byte[] frame) {
-                        return OtryxRpcServer.this.handle(remote, peer, frame);
+                        return OtryxRpcServer.this.handle(remote, peer, frame, null);
+                    }
+
+                    @Override
+                    public CompletionStage<byte[]> handle(
+                            RpcEndpoint remote, RpcPeerIdentity peer,
+                            byte[] frame, Executor requestExecutor) {
+                        return OtryxRpcServer.this.handle(
+                                remote, peer, frame, requestExecutor);
                     }
                 })
                 .whenComplete((endpoint, transportError) -> {
@@ -400,7 +409,8 @@ public final class OtryxRpcServer implements AutoCloseable {
     private CompletionStage<byte[]> handle(
             RpcEndpoint remote,
             RpcPeerIdentity peer,
-            byte[] rawFrame) {
+            byte[] rawFrame,
+            Executor requestExecutor) {
         long receivedAtNanos = System.nanoTime();
         RpcFrameView request;
         try {
@@ -485,10 +495,15 @@ public final class OtryxRpcServer implements AutoCloseable {
                         ? Long.MAX_VALUE
                         : initialRequestNanos
                                 - (authorizationStartedNanos - receivedAtNanos);
-        return authorizationGate.authorize(
+        CompletionStage<RpcAuthorizationGate.Decision> pendingAuthorization =
+                authorizationGate.authorize(
                         context, request.bytes().length,
-                        authorizationRemainingNanos)
-                .thenCompose(outcome -> {
+                        authorizationRemainingNanos);
+        // 若授权在调用线程内结束，保持 DIRECT 模式的原有内联行为。
+        // 异步结束必须返回原 Transport EventLoop 后再开始业务准入。
+        boolean authorizedInline =
+                pendingAuthorization.toCompletableFuture().isDone();
+        return pendingAuthorization.thenCompose(outcome -> {
             if (outcome == RpcAuthorizationGate.Decision.OVERLOADED) {
                 return CompletableFuture.completedFuture(errorResponse(
                         request, RpcStatus.OVERLOADED,
@@ -511,8 +526,75 @@ public final class OtryxRpcServer implements AutoCloseable {
                         RpcException.class.getName(),
                         "RPC authorization denied"));
             }
+            if (!authorizedInline && requestExecutor != null) {
+                return dispatchAuthorizedOnRequestExecutor(
+                        requestExecutor, request, binding, methodCodec,
+                        authorizationStartedNanos, authorizationRemainingNanos);
+            }
+            if (!authorizedInline && requestExecutor == null) {
+                try {
+                    if (binding.executionMode(request.methodId())
+                            == RpcExecutionMode.DIRECT) {
+                        return CompletableFuture.completedFuture(frameworkError(
+                                request, RpcStatus.UNAVAILABLE,
+                                "DIRECT execution requires a transport request dispatcher"));
+                    }
+                } catch (NoSuchMethodException error) {
+                    return CompletableFuture.completedFuture(frameworkError(
+                            request, RpcStatus.METHOD_NOT_FOUND, "Method not found"));
+                }
+            }
             return executeAuthorized(request, binding, methodCodec);
         });
+    }
+
+    /**
+     * 异步授权后的业务分派回到请求所属的原始 Transport EventLoop。
+     *
+     * @param dispatcher 可信传输层提供的 EventLoop 调度入口
+     * @param request 请求帧
+     * @param binding 绑定服务
+     * @param codec 方法 Codec
+     * @param authorizedAtNanos 授权等待开始时的单调时间
+     * @param remainingNanos 授权开始时的客户端剩余预算
+     * @return 最终响应
+     */
+    private CompletionStage<byte[]> dispatchAuthorizedOnRequestExecutor(
+            Executor dispatcher,
+            RpcFrameView request,
+            ServiceBinding binding,
+            RpcMethodCodec codec,
+            long authorizedAtNanos,
+            long remainingNanos) {
+        CompletableFuture<byte[]> reply = new CompletableFuture<>();
+        try {
+            dispatcher.execute(() -> {
+                if (remainingNanos != Long.MAX_VALUE
+                        && System.nanoTime() - authorizedAtNanos >= remainingNanos) {
+                    reply.complete(frameworkError(
+                            request, RpcStatus.DEADLINE_EXCEEDED,
+                            "Deadline exceeded during request dispatch"));
+                    return;
+                }
+                try {
+                    executeAuthorized(request, binding, codec)
+                            .whenComplete((bytes, error) -> {
+                                if (error != null) {
+                                    reply.completeExceptionally(error);
+                                } else {
+                                    reply.complete(bytes);
+                                }
+                            });
+                } catch (Throwable error) {
+                    reply.completeExceptionally(error);
+                }
+            });
+        } catch (RuntimeException error) {
+            reply.complete(frameworkError(
+                    request, RpcStatus.UNAVAILABLE,
+                    "Request dispatcher is unavailable"));
+        }
+        return reply;
     }
 
     private CompletionStage<byte[]> executeAuthorized(
