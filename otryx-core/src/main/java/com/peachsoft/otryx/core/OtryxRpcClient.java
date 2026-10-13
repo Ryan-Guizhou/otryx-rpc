@@ -1492,12 +1492,6 @@ public final class OtryxRpcClient implements AutoCloseable {
         }
 
         /**
-         * 设置 Consumer 容错参数。
-         *
-         * @param value 容错参数
-         * @return Consumer Builder
-         */
-        /**
          * 设置通过 Method.toGenericString() 标识的服务方法默认超时。
          *
          * @param value 方法签名与正数超时映射
@@ -1521,6 +1515,12 @@ public final class OtryxRpcClient implements AutoCloseable {
             return this;
         }
 
+        /**
+         * 设置 Consumer 容错参数。
+         *
+         * @param value 容错参数
+         * @return Consumer Builder
+         */
         public Builder resilienceOptions(RpcClientResilienceOptions value) {
             this.resilienceOptions = Objects.requireNonNull(
                     value,

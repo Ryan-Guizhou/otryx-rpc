@@ -1,6 +1,7 @@
 package com.peachsoft.otryx.examples.provider;
 
 import com.peachsoft.otryx.core.RpcCallContext;
+import com.peachsoft.otryx.examples.api.ExampleDeadlineMetadata;
 import com.peachsoft.otryx.examples.api.GreetingReply;
 import com.peachsoft.otryx.examples.api.GreetingRequest;
 import com.peachsoft.otryx.examples.api.GreetingService;
@@ -29,9 +30,12 @@ public class GreetingServiceImpl implements GreetingService {
     @Override
     public GreetingReply hello(GreetingRequest request) {
         RpcCallContext context = RpcCallContext.current();
-        if (context != null && "true".equals(context.metadata().get("otryx-e2e"))) {
-            if (!"B".equals(context.metadata().get("relay"))
-                    || !"alpha".equals(context.metadata().get("tenant"))) {
+        if (context != null && ExampleDeadlineMetadata.E2E_VALUE.equals(
+                context.metadata().get(ExampleDeadlineMetadata.E2E_KEY))) {
+            if (!ExampleDeadlineMetadata.RELAY_VALUE.equals(
+                    context.metadata().get(ExampleDeadlineMetadata.RELAY_KEY))
+                    || !ExampleDeadlineMetadata.TENANT_VALUE.equals(
+                    context.metadata().get(ExampleDeadlineMetadata.TENANT_KEY))) {
                 throw new IllegalStateException("Relay context metadata was not preserved");
             }
             long remainingMillis = TimeUnit.NANOSECONDS.toMillis(context.remainingNanos());

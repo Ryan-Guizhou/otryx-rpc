@@ -3,6 +3,7 @@ package com.peachsoft.otryx.examples.provider;
 import com.peachsoft.otryx.core.RpcCallContext;
 import com.peachsoft.otryx.core.RpcCallOptions;
 import com.peachsoft.otryx.core.RpcCallScope;
+import com.peachsoft.otryx.examples.api.ExampleDeadlineMetadata;
 import com.peachsoft.otryx.examples.api.GreetingReply;
 import com.peachsoft.otryx.examples.api.GreetingRequest;
 import com.peachsoft.otryx.examples.api.GreetingService;
@@ -55,7 +56,7 @@ public class RelayGreetingServiceImpl implements RelayGreetingService {
             }
         }
         try (RpcCallScope ignored = RpcCallContext.open(
-                new RpcCallOptions(null, Map.of("relay", "B")))) {
+                new RpcCallOptions(null, Map.of(ExampleDeadlineMetadata.RELAY_KEY, ExampleDeadlineMetadata.RELAY_VALUE)))) {
             return downstream.hello(request);
         }
     }

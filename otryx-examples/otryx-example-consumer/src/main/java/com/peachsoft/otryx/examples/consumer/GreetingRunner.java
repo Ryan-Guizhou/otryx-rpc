@@ -6,6 +6,7 @@ import com.peachsoft.otryx.core.RpcCallScope;
 import com.peachsoft.otryx.api.RpcRemoteException;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcUnavailableException;
+import com.peachsoft.otryx.examples.api.ExampleDeadlineMetadata;
 import com.peachsoft.otryx.examples.api.GreetingReply;
 import com.peachsoft.otryx.examples.api.GreetingRequest;
 import com.peachsoft.otryx.examples.api.GreetingService;
@@ -73,7 +74,9 @@ public class GreetingRunner implements ApplicationRunner {
                     GreetingReply reply;
                     try (RpcCallScope ignored = RpcCallContext.open(
                             new RpcCallOptions(Duration.ofSeconds(5L),
-                                    Map.of("otryx-e2e", "true", "tenant", "alpha")))) {
+                                    Map.of(ExampleDeadlineMetadata.E2E_KEY, ExampleDeadlineMetadata.E2E_VALUE,
+                                            ExampleDeadlineMetadata.TENANT_KEY,
+                                            ExampleDeadlineMetadata.TENANT_VALUE)))) {
                         reply = relayGreetingService.hello(new GreetingRequest("OTRYX RPC"));
                     }
                     if (!reply.message().startsWith("CHAIN_OK ")) {
