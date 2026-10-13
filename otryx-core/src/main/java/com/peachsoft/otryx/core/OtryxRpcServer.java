@@ -742,6 +742,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     methodCodec,
                     propagatedMetadata,
                     trace,
+                    inboundContext,
                     result,
                     cpuExecutor,
                     markWorkFinished);
@@ -763,6 +764,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                             methodCodec,
                             propagatedMetadata,
                             trace,
+                            inboundContext,
                             result,
                             selectedExecutor,
                             markWorkFinished);
@@ -838,11 +840,13 @@ public final class OtryxRpcServer implements AutoCloseable {
             RpcMethodCodec methodCodec,
             Map<String, String> propagatedMetadata,
             RpcTraceContext trace,
+            RpcCallContext inboundContext,
             CompletableFuture<byte[]> result,
             ExecutorService asyncCompletionExecutor,
             Runnable markWorkFinished) {
         boolean deferredCompletion = false;
-        try (RpcMetadataScope traceScope =
+        try (RpcCallScope requestScope = inboundContext.activate();
+             RpcMetadataScope traceScope =
                      trace.makeCurrent();
              RpcMetadataScope propagationScope =
                      metadataPropagator.enabled()
@@ -850,6 +854,12 @@ public final class OtryxRpcServer implements AutoCloseable {
                                      propagatedMetadata)
                              : RpcMetadataScope.noop()) {
             if (result.isCancelled()) {
+                return;
+            }
+            if (inboundContext.remainingNanos() == 0L) {
+                result.complete(frameworkError(
+                        request, RpcStatus.DEADLINE_EXCEEDED,
+                        "Deadline exceeded before provider invocation"));
                 return;
             }
             Object[] arguments = methodCodec.decodeArguments(
@@ -869,6 +879,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                         asyncCompletionExecutor,
                         propagatedMetadata,
                         trace,
+                        inboundContext,
                         markWorkFinished);
                 return;
             }
@@ -895,6 +906,7 @@ public final class OtryxRpcServer implements AutoCloseable {
             ExecutorService completionExecutor,
             Map<String, String> propagatedMetadata,
             RpcTraceContext trace,
+            RpcCallContext inboundContext,
             Runnable markWorkFinished) {
         try {
             CompletableFuture<?> asyncFuture = stage.toCompletableFuture();
@@ -914,6 +926,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                                 result,
                                 propagatedMetadata,
                                 trace,
+                                inboundContext,
                                 value,
                                 error);
                     } finally {
@@ -928,6 +941,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                         completionExecutor,
                         propagatedMetadata,
                         trace,
+                        inboundContext,
                         value,
                         error,
                         markWorkFinished);
@@ -948,6 +962,7 @@ public final class OtryxRpcServer implements AutoCloseable {
             ExecutorService completionExecutor,
             Map<String, String> propagatedMetadata,
             RpcTraceContext trace,
+            RpcCallContext inboundContext,
             Object value,
             Throwable error,
             Runnable markWorkFinished) {
@@ -964,6 +979,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                             result,
                             propagatedMetadata,
                             trace,
+                            inboundContext,
                             value,
                             error);
                 } finally {
@@ -1000,9 +1016,11 @@ public final class OtryxRpcServer implements AutoCloseable {
             CompletableFuture<byte[]> result,
             Map<String, String> propagatedMetadata,
             RpcTraceContext trace,
+            RpcCallContext inboundContext,
             Object value,
             Throwable error) {
-        try (RpcMetadataScope traceScope =
+        try (RpcCallScope requestScope = inboundContext.activate();
+             RpcMetadataScope traceScope =
                      trace.makeCurrent();
              RpcMetadataScope propagationScope =
                      metadataPropagator.enabled()
@@ -1010,6 +1028,12 @@ public final class OtryxRpcServer implements AutoCloseable {
                                      propagatedMetadata)
                              : RpcMetadataScope.noop()) {
             if (result.isCancelled()) {
+                return;
+            }
+            if (inboundContext.remainingNanos() == 0L) {
+                result.complete(frameworkError(
+                        request, RpcStatus.DEADLINE_EXCEEDED,
+                        "Deadline exceeded during provider completion"));
                 return;
             }
             if (error != null) {
