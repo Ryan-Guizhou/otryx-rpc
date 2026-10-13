@@ -27,6 +27,10 @@ public class RelayGreetingServiceImpl implements RelayGreetingService {
 
     private static final long MAX_RELAY_DELAY_MILLIS = 1_000L;
 
+    /** 创建用于独立 JVM 截止时间链路验证的中间节点服务。 */
+    public RelayGreetingServiceImpl() {
+    }
+
     @OtryxRpcReference(version = "1.0.0")
     private GreetingService downstream;
 
