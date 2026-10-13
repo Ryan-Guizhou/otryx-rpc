@@ -130,7 +130,7 @@ DIRECT 默认禁止。只有配置 `otryx.rpc.server.execution.allow-direct=true
 private OrderService orderService;
 ```
 
-默认调用超时为 3 秒，可通过 `otryx.rpc.client.timeout` 修改。调用的逻辑 Deadline 从参数编码**开始前**计算，覆盖编码耗时、连接建立、HELLO/ACK 握手、排队、重试和响应完成；超过 Deadline 的逻辑调用由独立调度器终止并尽可能取消下游请求。同步参数编码属于用户调用线程运行的代码，框架无法安全地强行中断任意阻塞的编码器；编码返回后会检查剩余预算。请求同时携带旧 `deadlineEpochMillis` 与新 `timeoutBudgetMillis`，新 Provider 优先使用相对预算语义避免跨节点 wall-clock 偏差，旧 Provider 仍可使用绝对 Deadline，支持滚动升级。
+默认调用超时为 3 秒，可通过 `otryx.rpc.client.timeout` 修改。本轮增加 `otryx.rpc.client.method-timeouts` 方法级映射（键为 `Method.toGenericString()`，值为 `Duration`），以及 `RpcCallContext.open(RpcCallOptions)` 单次作用域；优先级：单次 > 方法 > Consumer 默认，始终受父调用剩余时限约束。使用自定义线程池时需要 `RpcCallContext.wrap(task)`，详见 [Deadline 与调用上下文](deadline-context.md)。调用的逻辑 Deadline 从参数编码**开始前**计算，覆盖编码耗时、连接建立、HELLO/ACK 握手、排队、重试和响应完成；超过 Deadline 的逻辑调用由独立调度器终止并尽可能取消下游请求。同步参数编码属于用户调用线程运行的代码，框架无法安全地强行中断任意阻塞的编码器；编码返回后会检查剩余预算。请求同时携带旧 `deadlineEpochMillis` 与新 `timeoutBudgetMillis`，新 Provider 优先使用相对预算语义避免跨节点 wall-clock 偏差，旧 Provider 仍可使用绝对 Deadline，支持滚动升级。
 
 Consumer 在请求编码之前预留有界响应完成容量，容量不足时**不执行参数序列化**，直接返回 `RpcOverloadedException`；同步编码失败则立即归还预留容量。
 
