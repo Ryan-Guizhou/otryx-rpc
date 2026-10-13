@@ -492,10 +492,10 @@ public final class OtryxRpcClient implements AutoCloseable {
             Duration selectedTimeout = parent != null && parent.options().timeout() != null
                     ? parent.options().timeout()
                     : methodTimeouts.getOrDefault(method.methodKey(), timeout);
-            long deadlineNanos = callStartedAtNanos + selectedTimeout.toNanos();
+            long selectedBudgetNanos = selectedTimeout.toNanos();
+            long deadlineNanos = callStartedAtNanos + selectedBudgetNanos;
             if (parent != null && parent.deadlineNanos() != Long.MAX_VALUE
-                    && parent.remainingNanos()
-                            < Math.max(0L, deadlineNanos - System.nanoTime())) {
+                    && parent.deadlineNanos() - callStartedAtNanos <= selectedBudgetNanos) {
                 deadlineNanos = parent.deadlineNanos();
             }
             long remainingDeadlineNanos = deadlineNanos - System.nanoTime();

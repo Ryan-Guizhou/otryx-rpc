@@ -53,10 +53,10 @@ public final class RpcCallContext {
         RpcCallOptions actual = new RpcCallOptions(options.timeout(), merged);
         long deadline = parent == null ? Long.MAX_VALUE : parent.deadlineNanos;
         if (options.timeout() != null) {
-            long localDeadline = System.nanoTime() + options.timeout().toNanos();
-            if (deadline == Long.MAX_VALUE
-                    || localDeadline - System.nanoTime() < deadline - System.nanoTime()) {
-                deadline = localDeadline;
+            long nowNanos = System.nanoTime();
+            long timeoutNanos = options.timeout().toNanos();
+            if (deadline == Long.MAX_VALUE || timeoutNanos < deadline - nowNanos) {
+                deadline = nowNanos + timeoutNanos;
             }
         }
         return attach(new RpcCallContext(actual, deadline));

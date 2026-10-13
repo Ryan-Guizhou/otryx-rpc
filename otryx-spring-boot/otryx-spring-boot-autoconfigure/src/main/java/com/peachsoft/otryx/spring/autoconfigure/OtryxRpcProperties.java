@@ -1241,11 +1241,6 @@ public class OtryxRpcProperties implements InitializingBean {
         }
 
         /**
-         * 返回负载均衡 SPI 名称。
-         *
-         * @return 负载均衡 SPI 名称
-         */
-        /**
          * 返回以 Method.toGenericString() 为键的方法超时覆盖。
          *
          * @return 方法超时映射
@@ -1263,6 +1258,11 @@ public class OtryxRpcProperties implements InitializingBean {
             this.methodTimeouts = Map.copyOf(methodTimeouts);
         }
 
+        /**
+         * 返回负载均衡 SPI 名称。
+         *
+         * @return 负载均衡 SPI 名称
+         */
         public String getLoadBalancer() {
             return loadBalancer;
         }

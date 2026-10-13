@@ -581,15 +581,21 @@ final class VertxRpcTransportClient implements RpcTransportClient {
                                         + endpoint.authority()));
                 return;
             }
+            // Wire v1 has millisecond precision. A sub-millisecond deadline
+            // must fail, not be rounded up and silently extended to 1 ms.
+            long wireBudgetMillis = timeout.toMillis();
+            if (wireBudgetMillis <= 0L) {
+                result.completeExceptionally(new RpcTimeoutException(
+                        "RPC remaining transport budget exhausted before send"));
+                return;
+            }
             long requestId = nextRequestId();
             RpcProtocolCodec.writeRequestId(bytes, requestId);
-            RpcProtocolCodec.rewriteTimeoutBudgetMillis(
-                    bytes,
-                    Math.max(1L, timeout.toMillis()));
+            RpcProtocolCodec.rewriteTimeoutBudgetMillis(bytes, wireBudgetMillis);
 
             inflight++;
             long timerId = vertx.setTimer(
-                    Math.max(1L, timeout.toMillis()),
+                    wireBudgetMillis,
                     ignored -> timeout(requestId));
             pending.put(
                     requestId,
