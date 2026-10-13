@@ -1,6 +1,8 @@
 package com.peachsoft.otryx.core;
 
 import com.peachsoft.otryx.api.OtryxRpcIdempotent;
+import com.peachsoft.otryx.api.OtryxRpcTimeout;
+import com.peachsoft.otryx.api.RpcCallContext;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcSchemaFingerprint;
 import com.peachsoft.otryx.api.RpcException;
@@ -202,7 +204,27 @@ public final class OtryxRpcClient implements AutoCloseable {
      * @return RPC 服务代理
      */
     public <T> T refer(Class<T> api, String version, String group) {
+        return refer(api, version, group, null);
+    }
+
+    /**
+     * 使用每个 Consumer 引用的默认预算创建代理，注解方法预算优先于该值。
+     *
+     * @param api 服务接口
+     * @param version 服务版本
+     * @param group 分组
+     * @param referenceTimeout 该引用默认预算，null 使用 Client 默认
+     * @param <T> 服务接口类型
+     * @return Generated 或 ProxyFallback 调用代理
+     */
+    public <T> T refer(
+            Class<T> api, String version, String group, Duration referenceTimeout) {
         Objects.requireNonNull(api, "api");
+        if (referenceTimeout != null
+                && (referenceTimeout.isZero() || referenceTimeout.isNegative()
+                        || referenceTimeout.compareTo(Duration.ofDays(1)) > 0)) {
+            throw new IllegalArgumentException("Invalid RPC reference timeout");
+        }
         if (closed.get()) {
             throw new RpcUnavailableException("RPC client is closed");
         }
@@ -223,7 +245,8 @@ public final class OtryxRpcClient implements AutoCloseable {
                 directory,
                 codecs,
                 defaultCodecId,
-                resilienceOptions);
+                resilienceOptions,
+                referenceTimeout);
 
         return RpcGeneratedClients.find(api)
                 .map(factory -> factory.create(
@@ -464,8 +487,9 @@ public final class OtryxRpcClient implements AutoCloseable {
                         finalStatus,
                         failure);
             });
+            RpcCallContext parentCall = RpcCallContext.current();
             Map<String, String> propagatedMetadata =
-                    propagatedMetadata(trace);
+                    propagatedMetadata(trace, parentCall);
 
             circuitGeneration[0] =
                     method.circuitBreaker().tryAcquire();
@@ -485,8 +509,26 @@ public final class OtryxRpcClient implements AutoCloseable {
                 return result;
             }
 
+            // 一次调用的所有重试共享唯一的单调 Deadline。
+            // 选择：单次 Scope > 方法默认 > Reference 默认 > Client 默认。
+            Duration selectedTimeout = parentCall != null
+                    && parentCall.timeoutOverride() != null
+                    ? parentCall.timeoutOverride()
+                    : method.methodTimeout() != null
+                            ? method.methodTimeout()
+                            : reference.referenceTimeout() != null
+                                    ? reference.referenceTimeout()
+                                    : timeout;
             long deadlineNanos =
-                    callStartedAtNanos + timeout.toNanos();
+                    callStartedAtNanos + selectedTimeout.toNanos();
+            if (parentCall != null) {
+                long now = System.nanoTime();
+                long parentBudget = parentCall.remainingNanos();
+                long parentDeadline = parentBudget == Long.MAX_VALUE
+                        ? Long.MAX_VALUE
+                        : now + parentBudget;
+                deadlineNanos = Math.min(deadlineNanos, parentDeadline);
+            }
             long remainingDeadlineNanos = deadlineNanos - System.nanoTime();
             if (remainingDeadlineNanos <= 0L) {
                 result.completeExceptionally(new RpcTimeoutException(
@@ -516,13 +558,19 @@ public final class OtryxRpcClient implements AutoCloseable {
     }
 
     private Map<String, String> propagatedMetadata(
-            RpcTraceContext trace) {
+            RpcTraceContext trace, RpcCallContext callContext) {
+        boolean hasScopeMetadata = callContext != null
+                && !callContext.metadata().isEmpty();
         if (!tracingBridge.enabled()
-                && !metadataPropagator.enabled()) {
+                && !metadataPropagator.enabled()
+                && !hasScopeMetadata) {
             return Map.of();
         }
         Map<String, String> metadata =
                 new LinkedHashMap<>();
+        if (hasScopeMetadata) {
+            metadata.putAll(callContext.metadata());
+        }
         metadata.putAll(trace.metadata());
         if (metadataPropagator.enabled()) {
             metadataPropagator.inject(metadata);
@@ -1219,7 +1267,8 @@ public final class OtryxRpcClient implements AutoCloseable {
             int serviceId,
             ServiceDirectory directory,
             Map<Method, ClientMethodBinding> methods,
-            Map<Integer, ClientMethodBinding> methodsById) {
+            Map<Integer, ClientMethodBinding> methodsById,
+            Duration referenceTimeout) {
 
         private static ClientReference create(
                 ServiceKey key,
@@ -1227,15 +1276,27 @@ public final class OtryxRpcClient implements AutoCloseable {
                 ServiceDirectory directory,
                 RpcCodecRegistry codecs,
                 byte codecId,
-                RpcClientResilienceOptions resilienceOptions) {
+                RpcClientResilienceOptions resilienceOptions,
+                Duration referenceTimeout) {
             Map<Method, ClientMethodBinding> methods = new HashMap<>();
             Map<Integer, ClientMethodBinding> methodsById = new HashMap<>();
             for (Method method : RpcContractMethods.resolve(api)) {
                 RpcMethodDescriptor descriptor = RpcMethodDescriptor.from(key, method);
+                OtryxRpcTimeout methodBudget = method.getAnnotation(OtryxRpcTimeout.class);
+                Duration methodTimeout = null;
+                if (methodBudget != null) {
+                    if (methodBudget.millis() <= 0L
+                            || methodBudget.millis() > Duration.ofDays(1).toMillis()) {
+                        throw new IllegalArgumentException(
+                                "Invalid RPC method timeout: " + method);
+                    }
+                    methodTimeout = Duration.ofMillis(methodBudget.millis());
+                }
                 ClientMethodBinding binding = new ClientMethodBinding(
                         descriptor.methodId(),
                         codecs.bind(descriptor, codecId),
                         method.isAnnotationPresent(OtryxRpcIdempotent.class),
+                        methodTimeout,
                         new RpcCircuitBreaker(
                                 resilienceOptions.circuitConsecutiveFailureThreshold(),
                                 resilienceOptions.circuitOpenDuration()));
@@ -1256,7 +1317,8 @@ public final class OtryxRpcClient implements AutoCloseable {
                     com.peachsoft.otryx.api.RpcIds.serviceId(key),
                     directory,
                     Map.copyOf(methods),
-                    Map.copyOf(methodsById));
+                    Map.copyOf(methodsById),
+                    referenceTimeout);
         }
 
         private ClientMethodBinding require(Method method) {
@@ -1282,6 +1344,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             int methodId,
             RpcMethodCodec codec,
             boolean idempotent,
+            Duration methodTimeout,
             RpcCircuitBreaker circuitBreaker) {
     }
 
@@ -1447,7 +1510,8 @@ public final class OtryxRpcClient implements AutoCloseable {
          * @return Consumer Builder
          */
         public Builder timeout(Duration value) {
-            if (value == null || value.isZero() || value.isNegative()) {
+            if (value == null || value.isZero() || value.isNegative()
+                    || value.compareTo(Duration.ofDays(1)) > 0) {
                 throw new IllegalArgumentException("timeout must be positive");
             }
             this.timeout = value;
