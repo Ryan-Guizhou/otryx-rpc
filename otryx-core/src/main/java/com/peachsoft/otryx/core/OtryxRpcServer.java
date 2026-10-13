@@ -47,6 +47,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
@@ -92,6 +94,9 @@ public final class OtryxRpcServer implements AutoCloseable {
     private final RpcMetadataPropagator metadataPropagator;
     private final RpcTracingBridge tracingBridge;
     private final RpcAuthorizationGate authorizationGate;
+    private final ScheduledThreadPoolExecutor requestDeadlineScheduler =
+            new ScheduledThreadPoolExecutor(1,
+                    Thread.ofPlatform().daemon().name("otryx-provider-deadline-", 0).factory());
     private final ExecutorService blockingExecutor =
             Executors.newVirtualThreadPerTaskExecutor();
     private final ThreadPoolExecutor cpuExecutor;
@@ -149,6 +154,7 @@ public final class OtryxRpcServer implements AutoCloseable {
         this.tracingBridge = Objects.requireNonNull(
                 builder.tracingBridge,
                 "tracingBridge");
+        this.requestDeadlineScheduler.setRemoveOnCancelPolicy(true);
         this.authorizationGate = new RpcAuthorizationGate(
                 builder.authorizer,
                 builder.maxPendingAuthorizations,
@@ -452,6 +458,8 @@ public final class OtryxRpcServer implements AutoCloseable {
             initialRequestNanos = TimeUnit.MILLISECONDS.toNanos(
                     deadline - System.currentTimeMillis());
         }
+        long requestDeadlineNanos = initialRequestNanos == Long.MAX_VALUE
+                ? Long.MAX_VALUE : receivedAtNanos + initialRequestNanos;
         if (initialRequestNanos != Long.MAX_VALUE
                 && initialRequestNanos <= System.nanoTime() - receivedAtNanos) {
             return CompletableFuture.completedFuture(
@@ -485,6 +493,17 @@ public final class OtryxRpcServer implements AutoCloseable {
                             request,
                             RpcStatus.BAD_REQUEST,
                             "Unsupported codec"));
+        }
+
+        // Validate application metadata even when tracing is disabled. The peer
+        // identity is sourced exclusively from the authenticated transport connection.
+        RpcCallContext callContext;
+        try {
+            callContext = RpcCallContext.inbound(
+                    requestDeadlineNanos, request.metadataCopy());
+        } catch (RuntimeException invalidMetadata) {
+            return CompletableFuture.completedFuture(frameworkError(
+                    request, RpcStatus.BAD_REQUEST, "Invalid request metadata"));
         }
 
         RpcAuthorizationContext context = new RpcAuthorizationContext(
@@ -529,7 +548,8 @@ public final class OtryxRpcServer implements AutoCloseable {
             if (!authorizedInline && requestExecutor != null) {
                 return dispatchAuthorizedOnRequestExecutor(
                         requestExecutor, request, binding, methodCodec,
-                        authorizationStartedNanos, authorizationRemainingNanos);
+                        authorizationStartedNanos, authorizationRemainingNanos,
+                        callContext);
             }
             if (!authorizedInline && requestExecutor == null) {
                 try {
@@ -544,7 +564,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                             request, RpcStatus.METHOD_NOT_FOUND, "Method not found"));
                 }
             }
-            return executeAuthorized(request, binding, methodCodec);
+            return executeAuthorized(request, binding, methodCodec, callContext);
         });
     }
 
@@ -557,6 +577,7 @@ public final class OtryxRpcServer implements AutoCloseable {
      * @param codec 方法 Codec
      * @param authorizedAtNanos 授权等待开始时的单调时间
      * @param remainingNanos 授权开始时的客户端剩余预算
+     * @param callContext 本次请求的单调 Deadline 上下文
      * @return 最终响应
      */
     private CompletionStage<byte[]> dispatchAuthorizedOnRequestExecutor(
@@ -565,7 +586,8 @@ public final class OtryxRpcServer implements AutoCloseable {
             ServiceBinding binding,
             RpcMethodCodec codec,
             long authorizedAtNanos,
-            long remainingNanos) {
+            long remainingNanos,
+            RpcCallContext callContext) {
         CompletableFuture<byte[]> reply = new CompletableFuture<>();
         try {
             dispatcher.execute(() -> {
@@ -577,7 +599,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     return;
                 }
                 try {
-                    executeAuthorized(request, binding, codec)
+                    executeAuthorized(request, binding, codec, callContext)
                             .whenComplete((bytes, error) -> {
                                 if (error != null) {
                                     reply.completeExceptionally(error);
@@ -600,10 +622,15 @@ public final class OtryxRpcServer implements AutoCloseable {
     private CompletionStage<byte[]> executeAuthorized(
             RpcFrameView request,
             ServiceBinding binding,
-            RpcMethodCodec methodCodec) {
+            RpcMethodCodec methodCodec,
+            RpcCallContext callContext) {
         if (state.get() != State.STARTED) {
             return CompletableFuture.completedFuture(
                     frameworkError(request, RpcStatus.UNAVAILABLE, "Server is not ready"));
+        }
+        if (callContext.remainingNanos() == 0L) {
+            return CompletableFuture.completedFuture(frameworkError(
+                    request, RpcStatus.DEADLINE_EXCEEDED, "Deadline exceeded before admission"));
         }
         ProviderAdmissionController.Decision decision =
                 admission.tryAcquire(
@@ -652,6 +679,30 @@ public final class OtryxRpcServer implements AutoCloseable {
             observer.onServerInflightChanged(1);
             observer.onServerInflightBytesChanged(request.bytes().length);
         }
+        // Timeout completes only the response terminal. A running business task
+        // retains its admission lease until it actually finishes.
+        if (callContext.deadlineNanos() != Long.MAX_VALUE) {
+            long remainingBudget = callContext.remainingNanos();
+            try {
+                ScheduledFuture<?> timeoutTask = requestDeadlineScheduler.schedule(
+                        () -> result.complete(frameworkError(
+                                request, RpcStatus.DEADLINE_EXCEEDED,
+                                "RPC request deadline exceeded")),
+                        remainingBudget, TimeUnit.NANOSECONDS);
+                result.whenComplete((ignoredValue, ignoredFailure) ->
+                        timeoutTask.cancel(false));
+            } catch (RejectedExecutionException shutdown) {
+                result.complete(frameworkError(
+                        request, RpcStatus.UNAVAILABLE, "Deadline scheduler unavailable"));
+                markWorkFinished.run();
+                return result;
+            }
+        }
+        if (result.isDone()) {
+            markWorkFinished.run();
+            return result;
+        }
+
         RpcExecutionMode executionMode;
         try {
             executionMode = binding.executionMode(request.methodId());
@@ -723,6 +774,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     methodCodec,
                     propagatedMetadata,
                     trace,
+                    callContext,
                     result,
                     cpuExecutor,
                     markWorkFinished);
@@ -744,6 +796,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                             methodCodec,
                             propagatedMetadata,
                             trace,
+                            callContext,
                             result,
                             selectedExecutor,
                             markWorkFinished);
@@ -819,18 +872,20 @@ public final class OtryxRpcServer implements AutoCloseable {
             RpcMethodCodec methodCodec,
             Map<String, String> propagatedMetadata,
             RpcTraceContext trace,
+            RpcCallContext callContext,
             CompletableFuture<byte[]> result,
             ExecutorService asyncCompletionExecutor,
             Runnable markWorkFinished) {
         boolean deferredCompletion = false;
-        try (RpcMetadataScope traceScope =
+        try (RpcCallScope ignored = RpcCallContext.attach(callContext);
+             RpcMetadataScope traceScope =
                      trace.makeCurrent();
              RpcMetadataScope propagationScope =
                      metadataPropagator.enabled()
                              ? metadataPropagator.extract(
                                      propagatedMetadata)
                              : RpcMetadataScope.noop()) {
-            if (result.isCancelled()) {
+            if (result.isDone()) {
                 return;
             }
             Object[] arguments = methodCodec.decodeArguments(
@@ -850,6 +905,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                         asyncCompletionExecutor,
                         propagatedMetadata,
                         trace,
+                        callContext,
                         markWorkFinished);
                 return;
             }
@@ -876,6 +932,7 @@ public final class OtryxRpcServer implements AutoCloseable {
             ExecutorService completionExecutor,
             Map<String, String> propagatedMetadata,
             RpcTraceContext trace,
+            RpcCallContext callContext,
             Runnable markWorkFinished) {
         try {
             CompletableFuture<?> asyncFuture = stage.toCompletableFuture();
@@ -883,7 +940,7 @@ public final class OtryxRpcServer implements AutoCloseable {
             // 不主动取消业务 Stage：CompletableFuture.cancel 仅保证 Future
             // 逻辑终态，不保证业务的底层 IO 或线程已经结束。
             asyncFuture.whenComplete((value, error) -> {
-                if (result.isCancelled()) {
+                if (result.isDone()) {
                     markWorkFinished.run();
                     return;
                 }
@@ -895,6 +952,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                                 result,
                                 propagatedMetadata,
                                 trace,
+                                callContext,
                                 value,
                                 error);
                     } finally {
@@ -909,6 +967,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                         completionExecutor,
                         propagatedMetadata,
                         trace,
+                        callContext,
                         value,
                         error,
                         markWorkFinished);
@@ -929,10 +988,11 @@ public final class OtryxRpcServer implements AutoCloseable {
             ExecutorService completionExecutor,
             Map<String, String> propagatedMetadata,
             RpcTraceContext trace,
+            RpcCallContext callContext,
             Object value,
             Throwable error,
             Runnable markWorkFinished) {
-        if (result.isCancelled()) {
+        if (result.isDone()) {
             markWorkFinished.run();
             return;
         }
@@ -945,6 +1005,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                             result,
                             propagatedMetadata,
                             trace,
+                            callContext,
                             value,
                             error);
                 } finally {
@@ -981,16 +1042,18 @@ public final class OtryxRpcServer implements AutoCloseable {
             CompletableFuture<byte[]> result,
             Map<String, String> propagatedMetadata,
             RpcTraceContext trace,
+            RpcCallContext callContext,
             Object value,
             Throwable error) {
-        try (RpcMetadataScope traceScope =
+        try (RpcCallScope ignored = RpcCallContext.attach(callContext);
+             RpcMetadataScope traceScope =
                      trace.makeCurrent();
              RpcMetadataScope propagationScope =
                      metadataPropagator.enabled()
                              ? metadataPropagator.extract(
                                      propagatedMetadata)
                              : RpcMetadataScope.noop()) {
-            if (result.isCancelled()) {
+            if (result.isDone()) {
                 return;
             }
             if (error != null) {
@@ -1206,6 +1269,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                         "RPC provider transport close failed: errorType={}",
                         error.getClass().getName());
             }
+            requestDeadlineScheduler.shutdownNow();
             try {
                 authorizationGate.close();
             } catch (RuntimeException error) {
