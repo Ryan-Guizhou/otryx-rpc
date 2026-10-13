@@ -329,10 +329,7 @@ class OtryxRpcAuthorizationTest {
         TestCodec codec = new TestCodec();
         AtomicReference<String> executedThread = new AtomicReference<>();
         CompletableFuture<Boolean> authorization = new CompletableFuture<>();
-        DirectService implementation = () -> {
-            executedThread.set(Thread.currentThread().getName());
-            return "ok";
-        };
+        DirectService implementation = new DirectServiceImpl(executedThread);
         OtryxRpcServer server = OtryxRpcServer.builder()
                 .serviceRegistrar(new NoopRegistrar())
                 .transportServer(transport)
@@ -435,6 +432,22 @@ class OtryxRpcAuthorizationTest {
     public interface DirectService {
         @OtryxRpcExecution(RpcExecutionMode.DIRECT)
         String direct();
+    }
+
+    /** 公共实现类供 MethodHandle.publicLookup 确定性解析。 */
+    public static final class DirectServiceImpl implements DirectService {
+        private final AtomicReference<String> thread;
+
+        /** 创建可记录实际调用线程的测试服务。 */
+        public DirectServiceImpl(AtomicReference<String> thread) {
+            this.thread = thread;
+        }
+
+        @Override
+        public String direct() {
+            thread.set(Thread.currentThread().getName());
+            return "ok";
+        }
     }
 
     public static final class CountingService implements Api {
