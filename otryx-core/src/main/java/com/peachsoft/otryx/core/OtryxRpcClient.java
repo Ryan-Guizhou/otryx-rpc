@@ -622,9 +622,16 @@ public final class OtryxRpcClient implements AutoCloseable {
                 });
         long startedAtNanos = System.nanoTime();
 
-        long remainingMillis = Math.max(
-                1L,
-                TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+        // Wire v1 uses whole milliseconds: never round a sub-millisecond
+        // parent budget up to a new full millisecond.
+        long wireRemainingNanos = deadlineNanos - System.nanoTime();
+        long remainingMillis = TimeUnit.NANOSECONDS.toMillis(wireRemainingNanos);
+        if (remainingMillis <= 0L) {
+            endpointStats.endCancelled(System.nanoTime() - startedAtNanos);
+            result.completeExceptionally(
+                    new RpcTimeoutException("RPC budget exhausted before transport send"));
+            return;
+        }
         long deadlineEpochMillis =
                 System.currentTimeMillis() + remainingMillis;
         byte[] request = RpcProtocolCodec.encodeRequest(
