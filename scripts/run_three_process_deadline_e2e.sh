@@ -37,6 +37,7 @@ start_provider() {
     --otryx.rpc.server.port="$port" \
     --otryx.rpc.server.advertised-port="$port" \
     --otryx.rpc.example.relay-delay-millis=250 \
+    --otryx.rpc.client.timeout=10s \
     >"$log" 2>&1 &
   local pid=$!
   if [[ "$role" == "leaf" ]]; then
