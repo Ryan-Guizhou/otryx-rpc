@@ -330,6 +330,7 @@ public class OtryxRpcAutoConfiguration {
      * @param observerProvider 可观测性 Observer 提供器
      * @param metadataPropagatorProvider Metadata 传播器提供器
      * @param tracingBridgeProvider 分布式 Trace Bridge 提供器
+     * @param authorizerProvider 非阻塞 RPC 授权策略提供器
      * @param properties OTRYX RPC 配置
      * @return 运行时协调器
      */
