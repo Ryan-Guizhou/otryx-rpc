@@ -329,3 +329,7 @@ ServiceKey/MethodId 生成 `RpcAuthorizationContext`；若容器中声明
 验证：`NETWORK_MTLS` 的最终 Codec 必须是严格白名单 Fory，最终 Transport
 必须启用 mTLS。授权失败使用已有 `BAD_REQUEST`，不应重试；
 授权等待截止时间为客户端剩余预算与服务端策略超时的较短者。
+
+`NETWORK_MTLS` Provider 未声明 `RpcAuthorizer` Bean 时默认拒绝所有方法，
+因此示例 mTLS 仅完成传输安全配置，并不自动授予业务访问；需要声明
+按证书身份和 ServiceKey/MethodId 验证的业务授权 Bean。

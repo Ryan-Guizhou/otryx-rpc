@@ -4,6 +4,8 @@ import com.peachsoft.otryx.api.RpcAuthorizationContext;
 import com.peachsoft.otryx.transport.ResponseByteBudget;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.RejectedExecutionException;
@@ -35,6 +37,8 @@ final class RpcAuthorizationGate implements AutoCloseable {
     private final ResponseByteBudget pendingRequestBytes;
     private final AtomicInteger active = new AtomicInteger();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final Set<CompletableFuture<Decision>> pendingResults =
+            ConcurrentHashMap.newKeySet();
     private final ScheduledThreadPoolExecutor timeoutExecutor =
             new ScheduledThreadPoolExecutor(
                     1, Thread.ofPlatform().daemon().name("otryx-auth-timeout-", 0).factory());
@@ -90,8 +94,16 @@ final class RpcAuthorizationGate implements AutoCloseable {
         }
 
         CompletableFuture<Decision> result = new CompletableFuture<>();
+        // 先登记结果，再检查并发关闭：避免 shutdown 丢失刚刚创建的 Future。
+        pendingResults.add(result);
         // 授权逻辑终态后不再持有原始 Frame；策略真实结束才归还并发额度。
-        result.whenComplete((ignored, error) -> frameLease.close());
+        result.whenComplete((ignored, error) -> {
+            frameLease.close();
+            pendingResults.remove(result);
+        });
+        if (closed.get()) {
+            result.complete(Decision.DENY);
+        }
         AtomicBoolean settled = new AtomicBoolean();
         try {
             work.whenComplete((allowed, error) -> {
@@ -144,9 +156,21 @@ final class RpcAuthorizationGate implements AutoCloseable {
         return false;
     }
 
+    /**
+     * 返回正在等待逻辑终态的原始请求帧字节数，供关闭资源回归测试使用。
+     *
+     * @return 尚未释放的授权请求字节数
+     */
+    long pendingFrameBytes() {
+        return pendingRequestBytes.reservedBytes();
+    }
+
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
+            // 完成 Future 使调用方解除对 request/raw frame 的继续持有。
+            // 未配合取消的第三方策略仍占并发额度，直到其 Stage 真实完成。
+            pendingResults.forEach(result -> result.complete(Decision.DENY));
             timeoutExecutor.shutdownNow();
         }
     }

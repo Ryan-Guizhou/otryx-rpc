@@ -293,14 +293,20 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
      * @return 网络身份强制校验后组合的非阻塞策略
      */
     private RpcAuthorizer authorizer() {
-        RpcAuthorizer configured = authorizerProvider.getIfAvailable(
-                RpcAuthorizer::allowTrustedDevelopment);
         if (properties.getSecurityProfile()
                 != OtryxRpcProperties.SecurityProfile.NETWORK_MTLS) {
-            return configured;
+            return authorizerProvider.getIfAvailable(
+                    RpcAuthorizer::allowTrustedDevelopment);
+        }
+        // 仅验证客户端证书的身份不等于得到 ServiceKey/MethodId 授权。
+        // 网络 Profile 未声明业务授权 Bean 时拒绝全部请求，不自动信任 CA 角色。
+        RpcAuthorizer policy = authorizerProvider.getIfAvailable();
+        if (policy == null) {
+            return context -> java.util.concurrent.CompletableFuture
+                    .completedFuture(false);
         }
         return context -> context.peer().authenticated()
-                ? configured.authorize(context)
+                ? policy.authorize(context)
                 : java.util.concurrent.CompletableFuture.completedFuture(false);
     }
 

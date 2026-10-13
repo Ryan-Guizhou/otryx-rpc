@@ -245,3 +245,9 @@ TLS/mTLS
 但已挂起的第三方授权任务仍在实际结束前占用并发许可。
 
 在该版本中 `NETWORK_MTLS` 只允许实际运行中的 Fory Native Codec ID 1；附加的第三方 Codec 尚无统一的反序列化安全证明时，不允许进入该网络配置。后续若接入其他序列化方式，须建立独立安全证明与准入检查，而不能仅依赖 Fory 配置字段。
+
+无业务 `RpcAuthorizer` Bean 的 `NETWORK_MTLS` Provider 默认**拒绝所有方法**：
+客户端证书验证只证明身份，并不默认赋予 ServiceKey/MethodId 权限。
+为了接通实际业务，必须注册执行相应授权策略的 Bean。Provider 关闭时，
+授权 Gate 会将仍在等待的逻辑结果结算为拒绝并释放原始 Frame 字节预算，
+即使第三方授权 Stage 无法停止；真实并发许可仍直到第三方 Stage 完成才释放。
