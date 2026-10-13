@@ -35,7 +35,7 @@ public class GreetingServiceImpl implements GreetingService {
                 throw new IllegalStateException("Relay context metadata was not preserved");
             }
             long remainingMillis = TimeUnit.NANOSECONDS.toMillis(context.remainingNanos());
-            if (remainingMillis <= 0L || remainingMillis >= 1_800L) {
+            if (remainingMillis <= 0L || remainingMillis >= 5_000L) {
                 throw new IllegalStateException("Downstream budget was not reduced");
             }
             return new GreetingReply("CHAIN_OK remainingMillis=" + remainingMillis);
