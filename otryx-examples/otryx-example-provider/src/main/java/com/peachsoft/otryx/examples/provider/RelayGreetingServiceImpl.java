@@ -56,7 +56,9 @@ public class RelayGreetingServiceImpl implements RelayGreetingService {
             }
         }
         try (RpcCallScope ignored = RpcCallContext.open(
-                new RpcCallOptions(null, Map.of(ExampleDeadlineMetadata.RELAY_KEY, ExampleDeadlineMetadata.RELAY_VALUE)))) {
+                new RpcCallOptions(null, Map.of(
+                        ExampleDeadlineMetadata.RELAY_KEY,
+                        ExampleDeadlineMetadata.RELAY_VALUE)))) {
             return downstream.hello(request);
         }
     }
