@@ -121,8 +121,21 @@ public final class RpcCallContext {
      * @return 包装后的任务；每次执行结束恢复目标线程原上下文
      */
     public static Runnable wrap(Runnable task) {
+        return wrap(current(), task);
+    }
+
+    /**
+     * 在框架内部执行边界明确指定需要传播的调用上下文。
+     *
+     * <p>任务可能在 EventLoop、重试线程或受限完成线程运行，不隐式
+     * 继承调用方的线程变量。
+     *
+     * @param captured 显式捕获的上下文；可为 null
+     * @param task 待执行任务
+     * @return 绑定且最终恢复上下文的包装任务
+     */
+    public static Runnable wrap(RpcCallContext captured, Runnable task) {
         Objects.requireNonNull(task, "task");
-        RpcCallContext captured = current();
         return () -> {
             try (RpcCallScope ignored = attach(captured)) {
                 task.run();
