@@ -319,3 +319,7 @@ ServiceKey/MethodId 生成 `RpcAuthorizationContext`；若容器中声明
 `otryx.rpc.server.authorization.max-pending` 默认 1024，
 `otryx.rpc.server.authorization.timeout` 默认 3s；
 已逻辑超时但尚未真实退出的授权仍占据容量，不可认为业务已停止。
+
+`otryx.rpc.server.authorization.max-buffered-request-bytes` 默认
+67108864，限制异步安全策略等待期间持有的原始请求 Frame 总字节数；
+与 `max-pending` 一起组成授权阶段双维度容量限制，超额立即拒绝。

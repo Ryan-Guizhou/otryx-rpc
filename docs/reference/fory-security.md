@@ -97,3 +97,7 @@ SHA-256 指纹。TLS 单向模式与明文连接一律为匿名；Metadata（包
 **程序化边界**：无参 `ForyRpcCodec` 和部分既有 Core Builder 仍以可信开发
 兼容行为启动；非可信网络接入须显式 `new ForyRpcCodec(strictAllowlist(...))`
 和 Provider `authorizer(...)`，不能单独依赖此 Spring 安全 Profile。
+
+授权队列还受 `server.authorization.max-buffered-request-bytes`（默认 64MiB）
+约束，以防多连接大 Frame 在应用层授权等待阶段绕过 Provider 的已准入
+请求字节预算；逻辑授权完成后额外检查剩余 Deadline，再进入业务解码。

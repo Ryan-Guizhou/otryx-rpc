@@ -1656,6 +1656,7 @@ public class OtryxRpcProperties implements InitializingBean {
      */
     public static class Authorization {
         private int maxPending = 1024;
+        private long maxBufferedRequestBytes = 64L * 1024L * 1024L;
         private Duration timeout = Duration.ofSeconds(3);
 
         /** 创建 Provider 授权配置。 */
@@ -1678,6 +1679,24 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public void setMaxPending(int value) {
             maxPending = value;
+        }
+
+        /**
+         * 返回授权阶段允许持有的原始请求 Frame 总字节数。
+         *
+         * @return 待授权 Frame 字节预算
+         */
+        public long getMaxBufferedRequestBytes() {
+            return maxBufferedRequestBytes;
+        }
+
+        /**
+         * 设置授权阶段原始请求 Frame 字节预算。
+         *
+         * @param value 待授权 Frame 字节上限
+         */
+        public void setMaxBufferedRequestBytes(long value) {
+            maxBufferedRequestBytes = value;
         }
 
         /**

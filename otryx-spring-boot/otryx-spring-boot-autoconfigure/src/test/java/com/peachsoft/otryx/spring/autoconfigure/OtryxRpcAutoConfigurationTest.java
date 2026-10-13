@@ -89,6 +89,18 @@ public class OtryxRpcAutoConfigurationTest {
     }
 
     @Test
+    void invalidAuthorizationFrameByteBudgetMustFailFast() {
+        contextRunner.withPropertyValues(
+                        "otryx.rpc.server.authorization.max-buffered-request-bytes=0")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining(
+                                    "server.authorization.max-buffered-request-bytes");
+                });
+    }
+
+    @Test
     void invalidClientDeadlineShouldFailAtConfigurationBinding() {
         contextRunner
                 .withPropertyValues("otryx.rpc.client.timeout=0s")

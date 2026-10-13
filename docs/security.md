@@ -222,3 +222,10 @@ TLS/mTLS
   mTLS 和 `RpcAuthorizer`，不能将其理解为已经默认 fail-closed。
 
 详细白名单规则、Wire 限制见 [Fory 安全说明](reference/fory-security.md)。
+
+授权等待阶段新增 `server.authorization.max-buffered-request-bytes`（默认
+67108864），对尚未通过授权的完整请求 Frame 独立做 CAS 字节准入。
+超过上限直接 OVERLOADED；逻辑超时/取消最终释放该阶段字节额度，
+第三方授权真正完成之前仍持有独立的并发槽位。授权等待结束再次
+检查发送方提供的剩余时间预算（优先于可能跨机器偏差的 Epoch Deadline）。
+此预算不是 JVM 堆上限，也不替代业务执行和 Transport 已有预算。

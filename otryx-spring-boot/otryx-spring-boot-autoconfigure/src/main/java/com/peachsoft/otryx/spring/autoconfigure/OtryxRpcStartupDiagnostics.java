@@ -151,6 +151,8 @@ final class OtryxRpcStartupDiagnostics {
                     admission.getMaxInflightBytesPerMethod());
             OtryxRpcProperties.Authorization authorization = server.getAuthorization();
             positive("server.authorization.max-pending", authorization.getMaxPending());
+            positive("server.authorization.max-buffered-request-bytes",
+                    authorization.getMaxBufferedRequestBytes());
             positive("server.authorization.timeout", authorization.getTimeout());
             if (authorization.getTimeout().compareTo(Duration.ofDays(1)) > 0) {
                 throw invalid("server.authorization.timeout", "must not exceed one day");

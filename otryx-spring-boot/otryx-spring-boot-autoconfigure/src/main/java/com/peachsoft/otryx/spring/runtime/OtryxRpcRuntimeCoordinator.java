@@ -233,6 +233,8 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .executionOptions(executionOptions)
                 .authorizer(authorizer())
                 .maxPendingAuthorizations(serverProperties.getAuthorization().getMaxPending())
+                .maxPendingAuthorizationBytes(
+                        serverProperties.getAuthorization().getMaxBufferedRequestBytes())
                 .authorizationTimeout(serverProperties.getAuthorization().getTimeout())
                 .observer(observer())
                 .metadataPropagator(metadataPropagator())

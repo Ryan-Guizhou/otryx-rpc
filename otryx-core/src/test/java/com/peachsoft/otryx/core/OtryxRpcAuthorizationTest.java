@@ -138,6 +138,144 @@ class OtryxRpcAuthorizationTest {
     }
 
     @Test
+    void pendingAuthorizationFramesMustHaveIndependentGlobalByteLimit()
+            throws Exception {
+        TestTransport transport = new TestTransport();
+        TestCodec codec = new TestCodec();
+        CountingService service = new CountingService();
+        CompletableFuture<Boolean> firstPolicy = new CompletableFuture<>();
+        AtomicInteger decisions = new AtomicInteger();
+        byte[] fullRequest = request(Map.of());
+        OtryxRpcServer server = server(transport, codec, service)
+                .authorizer(context -> decisions.incrementAndGet() == 1
+                        ? firstPolicy
+                        : CompletableFuture.completedFuture(true))
+                .maxPendingAuthorizations(2)
+                .maxPendingAuthorizationBytes(fullRequest.length)
+                .build();
+        try {
+            server.registerService(Api.class, service, "1.0.0", "default");
+            server.start().toCompletableFuture().join();
+
+            CompletionStage<byte[]> first =
+                    transport.call(RpcPeerIdentity.anonymous(), fullRequest);
+            byte[] overBudget = transport.call(
+                            RpcPeerIdentity.anonymous(), fullRequest)
+                    .toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertEquals(
+                    RpcStatus.OVERLOADED,
+                    RpcProtocolCodec.view(overBudget).status());
+            assertEquals(1, decisions.get());
+            assertEquals(0, codec.decodes.get());
+
+            firstPolicy.complete(true);
+            assertEquals(RpcStatus.OK, RpcProtocolCodec.view(
+                    first.toCompletableFuture().get(3, TimeUnit.SECONDS)).status());
+
+            byte[] recovered = transport.call(
+                            RpcPeerIdentity.anonymous(), fullRequest)
+                    .toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertEquals(RpcStatus.OK, RpcProtocolCodec.view(recovered).status());
+            assertEquals(2, service.invocations.get());
+        } finally {
+            firstPolicy.complete(false);
+            server.close();
+        }
+    }
+
+    @Test
+    void canceledAuthorizationMustReleaseFrameBytesAfterLogicalTimeout()
+            throws Exception {
+        TestTransport transport = new TestTransport();
+        TestCodec codec = new TestCodec();
+        CountingService service = new CountingService();
+        CompletableFuture<Boolean> firstPolicy = new CompletableFuture<>();
+        AtomicInteger decisions = new AtomicInteger();
+        byte[] frame = request(Map.of());
+        OtryxRpcServer server = server(transport, codec, service)
+                .authorizer(context -> decisions.incrementAndGet() == 1
+                        ? firstPolicy
+                        : CompletableFuture.completedFuture(true))
+                .maxPendingAuthorizations(2)
+                .maxPendingAuthorizationBytes(frame.length)
+                .authorizationTimeout(Duration.ofMillis(80))
+                .build();
+        try {
+            server.registerService(Api.class, service, "1.0.0", "default");
+            server.start().toCompletableFuture().join();
+            CompletableFuture<byte[]> canceled = transport.call(
+                    RpcPeerIdentity.anonymous(), frame).toCompletableFuture();
+            canceled.cancel(true);
+
+            byte[] initiallyOverloaded = transport.call(
+                            RpcPeerIdentity.anonymous(), frame)
+                    .toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertEquals(RpcStatus.OVERLOADED,
+                    RpcProtocolCodec.view(initiallyOverloaded).status());
+
+            Thread.sleep(200L);
+            byte[] recovered = transport.call(
+                            RpcPeerIdentity.anonymous(), frame)
+                    .toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertEquals(RpcStatus.OK, RpcProtocolCodec.view(recovered).status());
+            assertEquals(1, service.invocations.get());
+        } finally {
+            firstPolicy.complete(false);
+            server.close();
+        }
+    }
+
+    @Test
+    void authorizationMustNotExtendRelativeRequestDeadline()
+            throws Exception {
+        assertAuthorizationDeadlineExpires(
+                System.currentTimeMillis() + 10_000L, 20L);
+    }
+
+    @Test
+    void authorizationMustRecheckLegacyEpochOnlyDeadline()
+            throws Exception {
+        assertAuthorizationDeadlineExpires(
+                System.currentTimeMillis() + 30L, 0L);
+    }
+
+    private static void assertAuthorizationDeadlineExpires(
+            long epochDeadline, long remainingBudgetMillis) throws Exception {
+        TestTransport transport = new TestTransport();
+        TestCodec codec = new TestCodec();
+        CountingService service = new CountingService();
+        CompletableFuture<Boolean> authorization = new CompletableFuture<>();
+        OtryxRpcServer server = server(transport, codec, service)
+                .authorizer(context -> authorization)
+                .authorizationTimeout(Duration.ofSeconds(2))
+                .build();
+        try {
+            server.registerService(Api.class, service, "1.0.0", "default");
+            server.start().toCompletableFuture().join();
+            byte[] request = RpcProtocolCodec.encodeRequest(
+                    (byte) 1,
+                    RpcIds.serviceId(serviceKey()),
+                    RpcIds.methodId(Api.class.getMethod("call")),
+                    epochDeadline,
+                    remainingBudgetMillis,
+                    Map.of(),
+                    new byte[] {1, 2, 3});
+            CompletionStage<byte[]> waiting = transport.call(
+                    RpcPeerIdentity.anonymous(), request);
+            Thread.sleep(100L);
+            authorization.complete(true);
+            byte[] denied = waiting.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertEquals(RpcStatus.DEADLINE_EXCEEDED,
+                    RpcProtocolCodec.view(denied).status());
+            assertEquals(0, codec.decodes.get());
+            assertEquals(0, service.invocations.get());
+        } finally {
+            authorization.complete(false);
+            server.close();
+        }
+    }
+
+    @Test
     void exceptionalAuthorizerMustFailClosedWithoutBusinessExecution()
             throws Exception {
         TestTransport transport = new TestTransport();
