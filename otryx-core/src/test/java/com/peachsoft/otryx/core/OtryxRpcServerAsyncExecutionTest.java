@@ -129,7 +129,7 @@ public class OtryxRpcServerAsyncExecutionTest {
         Method method = api.getMethod(methodName);
         return RpcProtocolCodec.encodeRequest(
                 (byte) 1, RpcIds.serviceId(key), RpcIds.methodId(method),
-                System.currentTimeMillis() + budgetMillis, budgetMillis,
+                System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1L), budgetMillis,
                 metadata, new byte[0]);
     }
 
