@@ -1,5 +1,7 @@
 package com.peachsoft.otryx.core;
 
+import com.peachsoft.otryx.api.RpcAuthorizationContext;
+import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcCompatibilityMetadata;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcException;
@@ -23,6 +25,7 @@ import com.peachsoft.otryx.protocol.RpcMessageType;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import com.peachsoft.otryx.protocol.RpcProtocolException;
 import com.peachsoft.otryx.registry.ServiceRegistrar;
+import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportServer;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -87,6 +90,7 @@ public final class OtryxRpcServer implements AutoCloseable {
     private final RpcObserver observer;
     private final RpcMetadataPropagator metadataPropagator;
     private final RpcTracingBridge tracingBridge;
+    private final RpcAuthorizationGate authorizationGate;
     private final ExecutorService blockingExecutor =
             Executors.newVirtualThreadPerTaskExecutor();
     private final ThreadPoolExecutor cpuExecutor;
@@ -144,6 +148,8 @@ public final class OtryxRpcServer implements AutoCloseable {
         this.tracingBridge = Objects.requireNonNull(
                 builder.tracingBridge,
                 "tracingBridge");
+        this.authorizationGate = new RpcAuthorizationGate(
+                builder.authorizer, builder.maxPendingAuthorizations, builder.authorizationTimeout);
         this.cpuExecutor = new ThreadPoolExecutor(
                 executionOptions.cpuParallelism(),
                 executionOptions.cpuParallelism(),
@@ -245,7 +251,19 @@ public final class OtryxRpcServer implements AutoCloseable {
         }
 
         CompletableFuture<RpcEndpoint> started = new CompletableFuture<>();
-        transport.start(bindEndpoint, this::handle)
+        transport.start(bindEndpoint, new RpcRequestHandler() {
+                    @Override
+                    public CompletionStage<byte[]> handle(RpcEndpoint remote, byte[] frame) {
+                        return OtryxRpcServer.this.handle(
+                                remote, RpcPeerIdentity.anonymous(), frame);
+                    }
+
+                    @Override
+                    public CompletionStage<byte[]> handle(
+                            RpcEndpoint remote, RpcPeerIdentity peer, byte[] frame) {
+                        return OtryxRpcServer.this.handle(remote, peer, frame);
+                    }
+                })
                 .whenComplete((endpoint, transportError) -> {
                     if (transportError != null) {
                         state.compareAndSet(State.STARTING, State.CLOSED);
@@ -378,6 +396,7 @@ public final class OtryxRpcServer implements AutoCloseable {
 
     private CompletionStage<byte[]> handle(
             RpcEndpoint remote,
+            RpcPeerIdentity peer,
             byte[] rawFrame) {
         RpcFrameView request;
         try {
@@ -448,6 +467,31 @@ public final class OtryxRpcServer implements AutoCloseable {
                             "Unsupported codec"));
         }
 
+        RpcAuthorizationContext context = new RpcAuthorizationContext(
+                peer, binding.serviceKey(), request.methodId(), remote);
+        return authorizationGate.authorize(context).thenCompose(outcome -> {
+            if (outcome == RpcAuthorizationGate.Decision.OVERLOADED) {
+                return CompletableFuture.completedFuture(errorResponse(
+                        request, RpcStatus.OVERLOADED,
+                        RpcException.class.getName(), "Authorization capacity exhausted"));
+            }
+            if (outcome != RpcAuthorizationGate.Decision.ALLOW) {
+                return CompletableFuture.completedFuture(errorResponse(
+                        request, RpcStatus.UNAVAILABLE,
+                        RpcException.class.getName(), "RPC authorization denied"));
+            }
+            return executeAuthorized(request, binding, methodCodec);
+        });
+    }
+
+    private CompletionStage<byte[]> executeAuthorized(
+            RpcFrameView request,
+            ServiceBinding binding,
+            RpcMethodCodec methodCodec) {
+        if (state.get() != State.STARTED) {
+            return CompletableFuture.completedFuture(
+                    frameworkError(request, RpcStatus.UNAVAILABLE, "Server is not ready"));
+        }
         ProviderAdmissionController.Decision decision =
                 admission.tryAcquire(
                         request.serviceId(),
@@ -1050,6 +1094,14 @@ public final class OtryxRpcServer implements AutoCloseable {
                         error.getClass().getName());
             }
             try {
+                authorizationGate.close();
+            } catch (RuntimeException error) {
+                progress.failures.incrementAndGet();
+                LOGGER.warn(
+                        "RPC authorization scheduler shutdown failed: errorType={}",
+                        error.getClass().getName());
+            }
+            try {
                 blockingExecutor.shutdownNow();
             } catch (RuntimeException error) {
                 progress.failures.incrementAndGet();
@@ -1223,6 +1275,9 @@ public final class OtryxRpcServer implements AutoCloseable {
                 RpcMetadataPropagator.noop();
         private RpcTracingBridge tracingBridge =
                 RpcTracingBridge.noop();
+        private RpcAuthorizer authorizer = RpcAuthorizer.allowTrustedDevelopment();
+        private int maxPendingAuthorizations = 1024;
+        private Duration authorizationTimeout = Duration.ofSeconds(3);
 
         /** 创建 Provider Builder。 */
         public Builder() {
@@ -1368,6 +1423,46 @@ public final class OtryxRpcServer implements AutoCloseable {
             this.executionOptions = Objects.requireNonNull(
                     value,
                     "executionOptions");
+            return this;
+        }
+
+        /**
+         * 设置服务和方法级非阻塞授权策略。
+         *
+         * @param value 授权策略
+         * @return Provider Builder
+         */
+        public Builder authorizer(RpcAuthorizer value) {
+            this.authorizer = Objects.requireNonNull(value, "authorizer");
+            return this;
+        }
+
+        /**
+         * 设置同时等待真实策略完成的最大授权数。
+         *
+         * @param value 挂起授权容量
+         * @return Provider Builder
+         */
+        public Builder maxPendingAuthorizations(int value) {
+            if (value <= 0) {
+                throw new IllegalArgumentException("maxPendingAuthorizations must be positive");
+            }
+            this.maxPendingAuthorizations = value;
+            return this;
+        }
+
+        /**
+         * 设置授权逻辑超时，不会强制结束第三方任务。
+         *
+         * @param value 最大授权等待时间
+         * @return Provider Builder
+         */
+        public Builder authorizationTimeout(Duration value) {
+            if (value == null || value.isNegative() || value.isZero()
+                    || value.compareTo(Duration.ofDays(1)) > 0) {
+                throw new IllegalArgumentException("authorizationTimeout must be positive and finite");
+            }
+            this.authorizationTimeout = value;
             return this;
         }
 
