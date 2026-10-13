@@ -102,9 +102,12 @@ class ResponseByteBudgetTest {
                         }
                         ResponseByteBudget.Lease lease =
                                 budget.tryAcquire(TEST_CAPACITY / 2);
-                        attempted.countDown();
                         if (lease != null) {
                             accepted.incrementAndGet();
+                        }
+                        // 先记录接纳结果再通告完成，避免断言与原子计数竞争。
+                        attempted.countDown();
+                        if (lease != null) {
                             release.await(5, TimeUnit.SECONDS);
                             lease.close();
                         }

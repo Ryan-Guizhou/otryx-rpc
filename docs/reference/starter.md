@@ -301,3 +301,35 @@ Spring Boot 完成 `otryx.rpc.*` 参数绑定时会立即校验 Registry、Trans
 启动时输出 Registry、Transport、Proxy、Fory 安全模式、TLS 模式、启用角色与限额摘要，**不记录注册中心 username/password、密钥、证书或其文件内容**。默认的 `PLAINTEXT` 与 `TRUSTED_COMPATIBILITY` 会发出安全提醒；提醒不阻止本地开发，但面向不可信网络应开启 TLS/mTLS 与严格 Fory allowlist。
 
 当未引入任一业务注解时，虽然会进行配置校验，Consumer/Provider 的实际运行时仍按需创建，不会因此提前建立远程连接。
+
+## U05 安全意图与认证授权
+
+Spring Boot 默认要求明确指定 `otryx.rpc.security-profile`。
+可信隔离开发可选 `TRUSTED_DEVELOPMENT`（不得开放至不可信网络）；
+网络部署选 `NETWORK_MTLS`，同时设置
+`otryx.rpc.transport.security.mode=MTLS`、
+`otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST` 与实际 DTO allowlist。
+缺失任何必需项在配置绑定阶段失败。
+
+Provider 在实际解码 RPC DTO 之前从已验证 TLS Peer 与预绑定
+ServiceKey/MethodId 生成 `RpcAuthorizationContext`；若容器中声明
+`RpcAuthorizer` Bean 则运行自定义服务/方法权限，网络 Profile 始终
+先要求证书已验证。业务授权 Stage 必须非阻塞。
+
+`otryx.rpc.server.authorization.max-pending` 默认 1024，
+`otryx.rpc.server.authorization.timeout` 默认 3s；
+已逻辑超时但尚未真实退出的授权仍占据容量，不可认为业务已停止。
+
+`otryx.rpc.server.authorization.max-buffered-request-bytes` 默认
+67108864，限制异步安全策略等待期间持有的原始请求 Frame 总字节数；
+与 `max-pending` 一起组成授权阶段双维度容量限制，超额立即拒绝。
+
+
+安全 Profile 对自定义 `RpcCodecRegistry` 与 `RpcTransportOptions` Bean 进行运行时
+验证：`NETWORK_MTLS` 的最终 Codec 必须是严格白名单 Fory，最终 Transport
+必须启用 mTLS。授权失败使用已有 `BAD_REQUEST`，不应重试；
+授权等待截止时间为客户端剩余预算与服务端策略超时的较短者。
+
+`NETWORK_MTLS` Provider 未声明 `RpcAuthorizer` Bean 时默认拒绝所有方法，
+因此示例 mTLS 仅完成传输安全配置，并不自动授予业务访问；需要声明
+按证书身份和 ServiceKey/MethodId 验证的业务授权 Bean。

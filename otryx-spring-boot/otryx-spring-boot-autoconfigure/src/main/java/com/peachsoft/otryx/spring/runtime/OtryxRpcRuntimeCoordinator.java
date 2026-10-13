@@ -1,9 +1,14 @@
 package com.peachsoft.otryx.spring.runtime;
 
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.codec.RpcCodec;
+import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
+import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
+import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
+import com.peachsoft.otryx.core.RpcAuthorizer;
 import com.peachsoft.otryx.core.RpcShutdownOptions;
 import com.peachsoft.otryx.core.RpcProviderAdmissionOptions;
 import com.peachsoft.otryx.core.RpcClientResilienceOptions;
@@ -43,6 +48,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
             metadataPropagatorProvider;
     private final ObjectProvider<RpcTracingBridge>
             tracingBridgeProvider;
+    private final ObjectProvider<RpcAuthorizer> authorizerProvider;
     private final OtryxRpcProperties properties;
     private volatile OtryxRpcClient client;
     private volatile OtryxRpcServer server;
@@ -62,6 +68,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
      * @param observerProvider 可观测性 Observer 提供器
      * @param metadataPropagatorProvider Metadata 传播器提供器
      * @param tracingBridgeProvider 分布式 Trace Bridge 提供器
+     * @param authorizerProvider 非阻塞安全授权策略提供器
      * @param properties OTRYX RPC 配置
      */
     public OtryxRpcRuntimeCoordinator(
@@ -76,6 +83,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
             ObjectProvider<RpcObserver> observerProvider,
             ObjectProvider<RpcMetadataPropagator> metadataPropagatorProvider,
             ObjectProvider<RpcTracingBridge> tracingBridgeProvider,
+            ObjectProvider<RpcAuthorizer> authorizerProvider,
             OtryxRpcProperties properties) {
         this.registry = Objects.requireNonNull(registry, "registry");
         this.codecRegistry = Objects.requireNonNull(codecRegistry, "codecRegistry");
@@ -100,9 +108,52 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 Objects.requireNonNull(
                         tracingBridgeProvider,
                         "tracingBridgeProvider");
+        this.authorizerProvider = Objects.requireNonNull(
+                authorizerProvider, "authorizerProvider");
         this.properties = Objects.requireNonNull(
                 properties,
                 "properties");
+        validateEffectiveNetworkSecurity();
+    }
+
+    /**
+     * 检查最终注入的安全运行对象，防止自定义 Spring Bean 绕过 Profile。
+     */
+    private void validateEffectiveNetworkSecurity() {
+        if (!properties.isEnabled()
+                || properties.getSecurityProfile()
+                != OtryxRpcProperties.SecurityProfile.NETWORK_MTLS) {
+            return;
+        }
+        if (!transportOptions.security().mutualTls()) {
+            throw new IllegalStateException(
+                    "Invalid otryx.rpc.transport.security.mode: "
+                            + "effective transport must use MTLS");
+        }
+        // 未声明统一安全策略的第三方 Codec 不可在网络 Profile 中协商。
+        if (!codecRegistry.supportedCodecIds()
+                .equals(java.util.Set.of(RpcCodecIds.FORY_NATIVE))
+                || !transportOptions.codecIds()
+                        .equals(java.util.Set.of(RpcCodecIds.FORY_NATIVE))) {
+            throw new IllegalStateException(
+                    "Invalid otryx.rpc.codec.fory.mode: "
+                            + "NETWORK_MTLS supports only audited Fory Native codec");
+        }
+        RpcCodec effective;
+        try {
+            effective = codecRegistry.require(RpcCodecIds.FORY_NATIVE);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalStateException(
+                    "Invalid otryx.rpc.codec.fory.mode: "
+                            + "effective registry must contain Fory codec", error);
+        }
+        if (!(effective instanceof ForyRpcCodec fory)
+                || fory.securityOptions().mode()
+                != ForyRpcSecurityOptions.Mode.STRICT_ALLOWLIST) {
+            throw new IllegalStateException(
+                    "Invalid otryx.rpc.codec.fory.mode: "
+                            + "effective Fory codec must use STRICT_ALLOWLIST");
+        }
     }
 
     /**
@@ -225,10 +276,38 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .drainTimeout(serverProperties.getDrainTimeout())
                 .controlPlaneTimeout(serverProperties.getControlPlaneTimeout())
                 .executionOptions(executionOptions)
+                .authorizer(authorizer())
+                .maxPendingAuthorizations(serverProperties.getAuthorization().getMaxPending())
+                .maxPendingAuthorizationBytes(
+                        serverProperties.getAuthorization().getMaxBufferedRequestBytes())
+                .authorizationTimeout(serverProperties.getAuthorization().getTimeout())
                 .observer(observer())
                 .metadataPropagator(metadataPropagator())
                 .tracingBridge(tracingBridge())
                 .build();
+    }
+
+    /**
+     * Spring 注入的业务授权不能绕过 NETWORK_MTLS 的认证前置条件。
+     *
+     * @return 网络身份强制校验后组合的非阻塞策略
+     */
+    private RpcAuthorizer authorizer() {
+        if (properties.getSecurityProfile()
+                != OtryxRpcProperties.SecurityProfile.NETWORK_MTLS) {
+            return authorizerProvider.getIfAvailable(
+                    RpcAuthorizer::allowTrustedDevelopment);
+        }
+        // 仅验证客户端证书的身份不等于得到 ServiceKey/MethodId 授权。
+        // 网络 Profile 未声明业务授权 Bean 时拒绝全部请求，不自动信任 CA 角色。
+        RpcAuthorizer policy = authorizerProvider.getIfAvailable();
+        if (policy == null) {
+            return context -> java.util.concurrent.CompletableFuture
+                    .completedFuture(false);
+        }
+        return context -> context.peer().authenticated()
+                ? policy.authorize(context)
+                : java.util.concurrent.CompletableFuture.completedFuture(false);
     }
 
     private static RpcProviderAdmissionOptions providerAdmissionOptions(

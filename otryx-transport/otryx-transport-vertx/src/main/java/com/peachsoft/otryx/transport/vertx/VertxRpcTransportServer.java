@@ -1,6 +1,7 @@
 package com.peachsoft.otryx.transport.vertx;
 
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcRemoteError;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcTimeoutException;
@@ -27,7 +28,13 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.net.NetServer;
 import io.vertx.core.net.NetServerOptions;
 import io.vertx.core.net.NetSocket;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateEncodingException;
+import java.security.cert.X509Certificate;
 import java.time.Duration;
+import java.util.HexFormat;
+import javax.net.ssl.SSLPeerUnverifiedException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -164,6 +171,33 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         return started;
     }
 
+    /**
+     * 只信任成功完成 mTLS 客户端证书校验的连接主体；其他模式一律匿名。
+     *
+     * @param socket 已建立的 TLS/明文连接
+     * @return Transport 验证的身份，不能从请求 Metadata 取得
+     */
+    private RpcPeerIdentity verifiedPeer(NetSocket socket) {
+        if (!options.security().mutualTls()) {
+            return RpcPeerIdentity.anonymous();
+        }
+        try {
+            var certificates = socket.peerCertificates();
+            if (certificates == null || certificates.isEmpty()
+                    || !(certificates.getFirst() instanceof X509Certificate certificate)) {
+                throw new IllegalStateException("Verified mTLS client certificate is missing");
+            }
+            byte[] fingerprint = MessageDigest.getInstance("SHA-256")
+                    .digest(certificate.getEncoded());
+            return RpcPeerIdentity.verifiedClientCertificate(
+                    certificate.getSubjectX500Principal().getName(),
+                    HexFormat.of().formatHex(fingerprint));
+        } catch (SSLPeerUnverifiedException | CertificateEncodingException
+                 | NoSuchAlgorithmException error) {
+            throw new IllegalStateException("Failed to resolve verified mTLS client identity", error);
+        }
+    }
+
     private final class ServerConnection {
         private final NetSocket socket;
         private final TransportAdmissionController.Lease connectionLease;
@@ -171,6 +205,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         private final RpcRequestHandler handler;
         private final Context context;
         private final RpcEndpoint remote;
+        private final RpcPeerIdentity peerIdentity;
         private final FrameAccumulator accumulator =
                 new FrameAccumulator(options.maxFrameBytes(), admission);
         private final Map<Long, CompletableFuture<byte[]>> inflight =
@@ -199,6 +234,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 TransportAdmissionController.Lease connectionLease,
                 TransportAdmissionController.Lease handshakeLease) {
             this.socket = socket;
+            this.peerIdentity = verifiedPeer(socket);
             this.connectionLease = connectionLease;
             this.handshakeLease = handshakeLease;
             this.handler = handler;
@@ -340,7 +376,10 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 return;
             }
             CompletableFuture<byte[]> requestFuture =
-                    handler.handle(remote, frame).toCompletableFuture();
+                    handler.handle(
+                            remote, peerIdentity, frame,
+                            task -> context.runOnContext(ignored -> task.run()))
+                            .toCompletableFuture();
             // 只有返回 Future 并取得所有权之后才计入连接级协议槽位。
             inflight.put(requestId, requestFuture);
             requestFuture.whenComplete((response, error) ->

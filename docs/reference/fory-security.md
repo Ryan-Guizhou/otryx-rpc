@@ -1,6 +1,6 @@
 # Fory Native 安全模式与迁移（PR-B）
 
-> 状态：**1.0.0-SNAPSHOT 现有 Fory 类型模型；U05 安全默认策略尚待完成。**
+> 状态：**1.0.0-SNAPSHOT：Spring 显式安全 Profile 与 Provider 身份授权已接入；程序化默认行为仍在迁移中。**
 > Wire v1 的 Payload 仍使用原有 Fory Native 编码、Codec ID 1、Object[] 参数形式；没有引入新的 Type ID 或变更固定协议头。
 
 ## 安全边界
@@ -72,3 +72,32 @@ Fory 的严格模式在 `bind(descriptor)` 阶段校验这些**静态声明**的
 - [ ] CI 完整通过，安全模式高负载下的吞吐与尾延迟有单独证据
 
 没有测到的性能与安全性质不得当作已验证事实。
+
+## U05 Spring 安全意图与解码前授权
+
+Spring Boot 现在要求显式指定 `otryx.rpc.security-profile`；未指定或值为
+`UNSPECIFIED` 时启动失败。`TRUSTED_DEVELOPMENT` 为隔离开发的显式许可；
+`NETWORK_MTLS` 强制 `otryx.rpc.transport.security.mode=MTLS` 和
+`otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST`，并要求实际应用 DTO 白名单。
+
+Provider 由 Vert.x TLS 握手后的 `peerCertificates()` 获取已验证客户端证书主体与
+SHA-256 指纹。TLS 单向模式与明文连接一律为匿名；Metadata（包括伪造身份字段）
+不会提升连接身份。解码请求对象之前调用非阻塞 `RpcAuthorizer.authorize`，
+其上下文提供 `RpcPeerIdentity`、`ServiceKey`、MethodId 和 Remote Address；
+业务可注入 Spring `RpcAuthorizer` Bean 进行服务及方法级授权。
+`NETWORK_MTLS` 的已验证身份前置检查不能被自定义 Bean 绕过。
+
+`otryx.rpc.server.authorization.max-pending`（默认 1024）限制真实未完成授权；
+`otryx.rpc.server.authorization.timeout`（默认 3s）控制逻辑超时。
+拒绝返回 Wire v1 现有的非重试状态 `BAD_REQUEST`，容量耗尽返回 `OVERLOADED`，
+不添加新 Wire 状态。超时不意味着第三方策略停止，因此槽位在实际 Stage
+完成时才归还。授权代码不得在 EventLoop 上阻塞，若访问数据库/外部服务
+必须使用自带容量治理的异步客户端或有界执行器。
+
+**程序化边界**：无参 `ForyRpcCodec` 和部分既有 Core Builder 仍以可信开发
+兼容行为启动；非可信网络接入须显式 `new ForyRpcCodec(strictAllowlist(...))`
+和 Provider `authorizer(...)`，不能单独依赖此 Spring 安全 Profile。
+
+授权队列还受 `server.authorization.max-buffered-request-bytes`（默认 64MiB）
+约束，以防多连接大 Frame 在应用层授权等待阶段绕过 Provider 的已准入
+请求字节预算；逻辑授权完成后额外检查剩余 Deadline，再进入业务解码。

@@ -38,7 +38,9 @@ OTRYX RPC 安全边界包括：
 - 依赖漏洞；
 - Release Artifact 完整性。
 
-当前代码中，Fory 可信兼容模式与可选 PLAINTEXT 均存在，不能仅因支持 TLS/mTLS 就推断框架默认安全。严格反序列化策略、可信身份与应用授权链属于首发质量改造工作包，详见[实施契约](docs/engineering/plans/2026-10-12-open-source-quality-upgrade.md)。
+Spring Boot 接入要求明确设置 `otryx.rpc.security-profile`：`TRUSTED_DEVELOPMENT` 仅用于可信隔离环境；`NETWORK_MTLS` 强制双向 TLS 与 Fory 严格 DTO 白名单，并在业务参数解码前校验客户端证书身份。自定义 `RpcAuthorizer` 可进一步按 ServiceKey/MethodId 授权。
+
+**残余边界**：纯程序化 `new ForyRpcCodec()` / `RpcCodecRegistry.fromSpi()` 仍可使用历史可信兼容模式；调用方需要显式配置严格 Codec 和安全 Transport，不能把该入口视为生产安全默认。TLS 不能替代服务和方法权限，证书签发方信任范围应按租户收敛。详见[实施契约](docs/engineering/plans/2026-10-12-open-source-quality-upgrade.md)。
 
 ## Secret 规则
 
@@ -49,3 +51,10 @@ OTRYX RPC 安全边界包括：
 ## Release 修复
 
 安全修复遵循最小兼容改动原则。若 Wire/API 必须发生不兼容变化，将使用新的兼容边界并在 Release Notes 中明确说明。
+
+
+.NETWORK_MTLS: custom `RpcCodecRegistry` and `RpcTransportOptions` beans are
+validated against **effective** strict Fory and mTLS settings at startup. Denied
+requests use existing Wire v1 `BAD_REQUEST` (non-retryable); client deadlines
+end pending authorization with `DEADLINE_EXCEEDED`, without assuming that a
+third-party authorization task has actually stopped.

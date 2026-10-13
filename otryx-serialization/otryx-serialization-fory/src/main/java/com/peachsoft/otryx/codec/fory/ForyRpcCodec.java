@@ -70,6 +70,15 @@ public final class ForyRpcCodec implements RpcCodec {
         fory = builder.buildThreadSafeFory();
     }
 
+    /**
+     * 返回实际生效的 Fory 反序列化策略，供宿主验证替换后的 Codec 注册表。
+     *
+     * @return 创建本 Codec 时冻结的安全设置
+     */
+    public ForyRpcSecurityOptions securityOptions() {
+        return securityOptions;
+    }
+
     private void checkPayload(int length) {
         if (length < 0 || length > securityOptions.maxPayloadBytes()) {
             throw new IllegalArgumentException(

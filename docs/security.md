@@ -201,3 +201,64 @@ TLS/mTLS
 - invalid reload keeps old material；
 - TLS + Heartbeat + reconnect；
 - plaintext Transport regression 由原有 Transport suite 持续覆盖。
+
+## U05：网络身份与授权接入（1.0.0-SNAPSHOT）
+
+- **Spring 显式配置**：`otryx.rpc.security-profile` 不允许省略。
+  `TRUSTED_DEVELOPMENT` 仅在受隔离的开发/可信环境使用，
+  `NETWORK_MTLS` 强制 Transport mTLS 与 Fory STRICT_ALLOWLIST。
+- **可信身份来源**：Vert.x 只在 mTLS 客户端证书经 TLS 信任链验证后提取
+  Subject 和证书 SHA-256 指纹；明文/单向 TLS 均视为匿名，
+  即使 Metadata 声称用户名或管理员权限也不可信。
+- **解码前授权**：Core `RpcAuthorizer` 异步接受
+  `RpcAuthorizationContext(peer, serviceKey, methodId, remote)`；
+  除 mTLS 身份之外，需要按业务边界注入 ServiceKey/MethodId 权限策略。
+  拒绝不会反序列化请求 DTO，也不会运行业务方法。
+- **容量与关闭**：`server.authorization.max-pending` 默认 1024，
+  `server.authorization.timeout` 默认 3s；逻辑超时不会中止正在
+  执行的第三方授权 Stage，实际完成前仍占槽位。不要阻塞 EventLoop。
+- **程序化 API 尚有过渡入口**：无参 Fory 和未显式加策略的 Core Builder
+  保留可信兼容行为；新程序化生产接入须显式传入 STRICT_ALLOWLIST、
+  mTLS 和 `RpcAuthorizer`，不能将其理解为已经默认 fail-closed。
+
+详细白名单规则、Wire 限制见 [Fory 安全说明](reference/fory-security.md)。
+
+授权等待阶段新增 `server.authorization.max-buffered-request-bytes`（默认
+67108864），对尚未通过授权的完整请求 Frame 独立做 CAS 字节准入。
+超过上限直接 OVERLOADED；逻辑超时/取消最终释放该阶段字节额度，
+第三方授权真正完成之前仍持有独立的并发槽位。授权等待结束再次
+检查发送方提供的剩余时间预算（优先于可能跨机器偏差的 Epoch Deadline）。
+此预算不是 JVM 堆上限，也不替代业务执行和 Transport 已有预算。
+
+
+### 当前网络安全策略的运行时校验
+
+`NETWORK_MTLS` 不只检查配置字段。Spring Runtime Coordinator 在创建时还检查**最终生效**
+`RpcCodecRegistry` 内的 Fory Native Codec 是否为 `STRICT_ALLOWLIST`，以及最终
+`RpcTransportOptions` 是否真实为 mTLS。自定义 Spring Bean 不得通过绕过 AutoConfiguration
+使声明的安全 Profile 失效。
+
+授权拒绝当前使用 Wire v1 已有的 `BAD_REQUEST`（客户端不重试、不计入端点可用性故障），
+而非表示网络不可用的 `UNAVAILABLE`。这是一项明确的 Wire v1 兼容取舍，未来独立协议
+升级可考虑专用 Permission Denied 状态。请求截止时间优先于策略的独立超时时间；
+授权排队在相对预算或旧版 Epoch Deadline 到期时以 `DEADLINE_EXCEEDED` 结束，
+但已挂起的第三方授权任务仍在实际结束前占用并发许可。
+
+在该版本中 `NETWORK_MTLS` 只允许实际运行中的 Fory Native Codec ID 1；附加的第三方 Codec 尚无统一的反序列化安全证明时，不允许进入该网络配置。后续若接入其他序列化方式，须建立独立安全证明与准入检查，而不能仅依赖 Fory 配置字段。
+
+无业务 `RpcAuthorizer` Bean 的 `NETWORK_MTLS` Provider 默认**拒绝所有方法**：
+客户端证书验证只证明身份，并不默认赋予 ServiceKey/MethodId 权限。
+为了接通实际业务，必须注册执行相应授权策略的 Bean。Provider 关闭时，
+授权 Gate 会将仍在等待的逻辑结果结算为拒绝并释放原始 Frame 字节预算，
+即使第三方授权 Stage 无法停止；真实并发许可仍直到第三方 Stage 完成才释放。
+
+当异步授权由外部执行器完成时，Core 必须先将 Provider 请求重新提交到
+Transport 提供的原事件循环，再执行 `DIRECT` 业务方法。官方 Vert.x
+Transport 实现使用连接所绑定的 `Context.runOnContext`；自定义
+Transport 若启用 DIRECT 与异步授权，则应实现
+`RpcRequestHandler.handle(remote, peer, frame, requestExecutor)` 并提交回原
+事件循环，否则不得声称维持 DIRECT 线程亲和性。
+
+部分 mTLS 证书仅包含 SAN 而没有 Subject DN，此时仍可用已验证的叶子
+证书 SHA-256 指纹做身份与权限映射，`RpcPeerIdentity.authenticated()`
+只以已验证指纹非空为条件，不依赖 Subject DN 必填。

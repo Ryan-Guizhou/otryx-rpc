@@ -89,9 +89,12 @@ The full starter is otryx-spring-boot-starter. **No Maven Central release is cla
 otryx:
   rpc:
     enabled: true
+    security-profile: TRUSTED_DEVELOPMENT # isolated development only
     registry:
       type: memory
 ~~~
+
+Real network deployments must explicitly choose `NETWORK_MTLS` with mutual TLS and a strict Fory DTO allowlist. An optional `RpcAuthorizer` bean checks the verified peer against ServiceKey/MethodId. Missing security intent fails Spring startup; `TRUSTED_DEVELOPMENT` is for isolated demos only. See the [security guide](docs/security.md).
 
 Consul and Eureka are opt-in adapters with polling-based subscriptions. See [Consul](docs/reference/registry-consul.md) and [Eureka](docs/reference/registry-eureka.md).
 
@@ -120,3 +123,4 @@ The repository requires **Chinese standard Javadoc, English structured logs and 
 ## License
 
 [MIT License](LICENSE)
+

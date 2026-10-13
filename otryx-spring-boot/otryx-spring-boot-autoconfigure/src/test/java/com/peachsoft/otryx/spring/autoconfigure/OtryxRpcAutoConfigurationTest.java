@@ -2,6 +2,9 @@ package com.peachsoft.otryx.spring.autoconfigure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.peachsoft.otryx.codec.RpcCodecRegistry;
+import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
+import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.observability.RpcSecurityMode;
@@ -31,8 +34,157 @@ public class OtryxRpcAutoConfigurationTest {
             new ApplicationContextRunner()
                     .withConfiguration(
                             AutoConfigurations.of(
-                                    OtryxRpcAutoConfiguration.class));
+                                    OtryxRpcAutoConfiguration.class))
+                    .withPropertyValues(
+                            "otryx.rpc.security-profile=TRUSTED_DEVELOPMENT");
 
+
+    @Test
+    void unspecifiedSecurityPolicyMustFailWithActionableMessage() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OtryxRpcAutoConfiguration.class))
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("otryx.rpc.security-profile")
+                            .hasStackTraceContaining("NETWORK_MTLS");
+                });
+    }
+
+    @Test
+    void explicitDevelopmentPolicyMustWork() {
+        contextRunner.run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void networkPolicyMustRequireMutualTlsAndStrictAllowlist() {
+        contextRunner.withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("transport.security.mode");
+                });
+        contextRunner.withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("codec.fory.mode");
+                });
+        contextRunner.withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS",
+                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
+                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void networkProfileMustValidateEffectiveCustomCodecRegistry() {
+        contextRunner.withBean(RpcCodecRegistry.class,
+                        () -> RpcCodecRegistry.of(new ForyRpcCodec()))
+                .withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS",
+                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
+                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("effective Fory codec");
+                });
+    }
+
+    @Test
+    void networkProfileMustValidateEffectiveCustomTransportOptions() {
+        contextRunner.withBean(RpcTransportOptions.class,
+                        () -> RpcTransportOptions.DEFAULT)
+                .withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS",
+                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
+                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("effective transport must use MTLS");
+                });
+    }
+
+    @Test
+    void networkProfileMustAllowVerifiedStrictCustomCodec() {
+        contextRunner.withBean(RpcCodecRegistry.class,
+                        () -> RpcCodecRegistry.of(new ForyRpcCodec(
+                                ForyRpcSecurityOptions.strictAllowlist(
+                                        java.util.Set.of("com.peachsoft.otryx.demo.*")))))
+                .withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS",
+                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
+                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void networkProfileMustRejectAdditionalUnauditedCodec() {
+        contextRunner.withBean(RpcCodecRegistry.class, () -> {
+                    ForyRpcCodec strict = new ForyRpcCodec(
+                            ForyRpcSecurityOptions.strictAllowlist(
+                                    java.util.Set.of("com.peachsoft.otryx.demo.*")));
+                    com.peachsoft.otryx.codec.RpcCodec unsafe =
+                            new com.peachsoft.otryx.codec.RpcCodec() {
+                                @Override
+                                public byte code() {
+                                    return com.peachsoft.otryx.codec.RpcCodecIds.JSON;
+                                }
+
+                                @Override
+                                public byte[] encode(Object value) {
+                                    return new byte[0];
+                                }
+
+                                @Override
+                                public <T> T decode(byte[] encoded, Class<T> type) {
+                                    return null;
+                                }
+                            };
+                    return RpcCodecRegistry.of(strict, unsafe);
+                })
+                .withPropertyValues(
+                        "otryx.rpc.security-profile=NETWORK_MTLS",
+                        "otryx.rpc.transport.security.mode=MTLS",
+                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
+                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("only audited Fory Native codec");
+                });
+    }
+
+    @Test
+    void invalidAuthorizationCapacityMustFailFast() {
+        contextRunner.withPropertyValues("otryx.rpc.server.authorization.max-pending=0")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("server.authorization.max-pending");
+                });
+    }
+
+    @Test
+    void invalidAuthorizationFrameByteBudgetMustFailFast() {
+        contextRunner.withPropertyValues(
+                        "otryx.rpc.server.authorization.max-buffered-request-bytes=0")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining(
+                                    "server.authorization.max-buffered-request-bytes");
+                });
+    }
 
     @Test
     void invalidClientDeadlineShouldFailAtConfigurationBinding() {

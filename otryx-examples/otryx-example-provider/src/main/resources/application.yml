@@ -4,6 +4,8 @@ spring:
 
 otryx:
   rpc:
+    # Only for isolated developer demonstrations; never expose to untrusted networks.
+    security-profile: TRUSTED_DEVELOPMENT
     registry:
       type: nacos
       endpoints: 127.0.0.1:8848
