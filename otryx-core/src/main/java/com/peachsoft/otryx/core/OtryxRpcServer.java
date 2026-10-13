@@ -149,7 +149,10 @@ public final class OtryxRpcServer implements AutoCloseable {
                 builder.tracingBridge,
                 "tracingBridge");
         this.authorizationGate = new RpcAuthorizationGate(
-                builder.authorizer, builder.maxPendingAuthorizations, builder.authorizationTimeout);
+                builder.authorizer,
+                builder.maxPendingAuthorizations,
+                builder.maxPendingAuthorizationBytes,
+                builder.authorizationTimeout);
         this.cpuExecutor = new ThreadPoolExecutor(
                 executionOptions.cpuParallelism(),
                 executionOptions.cpuParallelism(),
@@ -469,7 +472,9 @@ public final class OtryxRpcServer implements AutoCloseable {
 
         RpcAuthorizationContext context = new RpcAuthorizationContext(
                 peer, binding.serviceKey(), request.methodId(), remote);
-        return authorizationGate.authorize(context).thenCompose(outcome -> {
+        long authorizationStartedNanos = System.nanoTime();
+        return authorizationGate.authorize(context, request.bytes().length)
+                .thenCompose(outcome -> {
             if (outcome == RpcAuthorizationGate.Decision.OVERLOADED) {
                 return CompletableFuture.completedFuture(errorResponse(
                         request, RpcStatus.OVERLOADED,
@@ -479,6 +484,17 @@ public final class OtryxRpcServer implements AutoCloseable {
                 return CompletableFuture.completedFuture(errorResponse(
                         request, RpcStatus.UNAVAILABLE,
                         RpcException.class.getName(), "RPC authorization denied"));
+            }
+            // Epoch only is for legacy clients; relative duration takes precedence
+            // when both are present to avoid cross-host clock-skew expansion.
+            boolean expired = timeoutBudgetMillis > 0L
+                    ? TimeUnit.NANOSECONDS.toMillis(
+                            System.nanoTime() - authorizationStartedNanos)
+                            >= timeoutBudgetMillis
+                    : deadline > 0L && System.currentTimeMillis() > deadline;
+            if (expired) {
+                return CompletableFuture.completedFuture(frameworkError(
+                        request, RpcStatus.DEADLINE_EXCEEDED, "Deadline exceeded during authorization"));
             }
             return executeAuthorized(request, binding, methodCodec);
         });
@@ -1277,6 +1293,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                 RpcTracingBridge.noop();
         private RpcAuthorizer authorizer = RpcAuthorizer.allowTrustedDevelopment();
         private int maxPendingAuthorizations = 1024;
+        private long maxPendingAuthorizationBytes = 64L * 1024L * 1024L;
         private Duration authorizationTimeout = Duration.ofSeconds(3);
 
         /** 创建 Provider Builder。 */
@@ -1448,6 +1465,21 @@ public final class OtryxRpcServer implements AutoCloseable {
                 throw new IllegalArgumentException("maxPendingAuthorizations must be positive");
             }
             this.maxPendingAuthorizations = value;
+            return this;
+        }
+
+        /**
+         * 设置授权等待阶段全局原始帧的硬字节预算。
+         *
+         * @param value 等待授权阶段最多保留的请求帧总字节数
+         * @return Provider Builder
+         */
+        public Builder maxPendingAuthorizationBytes(long value) {
+            if (value <= 0L) {
+                throw new IllegalArgumentException(
+                        "maxPendingAuthorizationBytes must be positive");
+            }
+            this.maxPendingAuthorizationBytes = value;
             return this;
         }
 
