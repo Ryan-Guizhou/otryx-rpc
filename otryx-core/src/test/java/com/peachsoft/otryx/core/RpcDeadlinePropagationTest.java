@@ -213,7 +213,7 @@ class RpcDeadlinePropagationTest {
         }
 
         private static RegistrySnapshot snapshot(ServiceKey key) {
-            Class<?> contract = key.interfaceName().equals(
+            Class<?> contract = key.serviceName().equals(
                     BudgetService.class.getName())
                     ? BudgetService.class
                     : BadBudgetService.class;
