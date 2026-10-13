@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.peachsoft.otryx.api.OtryxRpcExecution;
+import com.peachsoft.otryx.api.RpcCallContext;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcExecutionMode;
 import com.peachsoft.otryx.api.RpcIds;
@@ -28,6 +29,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -41,6 +43,44 @@ import org.junit.jupiter.api.Test;
 class OtryxRpcAuthorizationTest {
 
     private static final RpcEndpoint REMOTE = new RpcEndpoint("127.0.0.1", 20000);
+
+    @Test
+    void inboundBudgetAndCustomMetadataMustBeRestoredForProviderExecution()
+            throws Exception {
+        TestTransport transport = new TestTransport();
+        TestCodec codec = new TestCodec();
+        ScopeServiceImpl service = new ScopeServiceImpl();
+        OtryxRpcServer server = OtryxRpcServer.builder()
+                .serviceRegistrar(new NoopRegistrar())
+                .transportServer(transport)
+                .codecRegistry(RpcCodecRegistry.of(codec))
+                .bindEndpoint(new RpcEndpoint("127.0.0.1", 19091))
+                .build()
+                .registerService(ScopeService.class, service, "1.0.0", "default");
+        try {
+            server.start().toCompletableFuture().join();
+            ServiceKey key = new ServiceKey(
+                    ScopeService.class.getName(), "1.0.0", "default");
+            byte[] request = RpcProtocolCodec.encodeRequest(
+                    (byte) 1,
+                    RpcIds.serviceId(key),
+                    RpcIds.methodId(ScopeService.class.getMethod("inspect")),
+                    System.currentTimeMillis() - 3000L,
+                    1500L,
+                    Map.of("x-correlation", "forwarded"),
+                    new byte[0]);
+            byte[] result = transport.call(RpcPeerIdentity.anonymous(), request)
+                    .toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertEquals(RpcStatus.OK, RpcProtocolCodec.view(result).status());
+            assertEquals("forwarded", service.correlation.get());
+            assertTrue(service.remainingNanos.get() > 0L);
+            assertTrue(service.remainingNanos.get()
+                    <= TimeUnit.MILLISECONDS.toNanos(1500L));
+            assertEquals(null, RpcCallContext.current());
+        } finally {
+            server.close();
+        }
+    }
 
     @Test
     void authorizationDeniedMustNotInvokeOrDecodeBusinessPayload()
@@ -432,6 +472,24 @@ class OtryxRpcAuthorizationTest {
     public interface DirectService {
         @OtryxRpcExecution(RpcExecutionMode.DIRECT)
         String direct();
+    }
+
+    public interface ScopeService {
+        String inspect();
+    }
+
+    /** 验证入站业务线程只在请求作用域内访问预算与扩展 Metadata。 */
+    public static final class ScopeServiceImpl implements ScopeService {
+        final AtomicReference<String> correlation = new AtomicReference<>();
+        final AtomicLong remainingNanos = new AtomicLong();
+
+        @Override
+        public String inspect() {
+            RpcCallContext context = RpcCallContext.current();
+            correlation.set(context.metadata().get("x-correlation"));
+            remainingNanos.set(context.remainingNanos());
+            return "ok";
+        }
     }
 
     /** 公共实现类供 MethodHandle.publicLookup 确定性解析。 */
