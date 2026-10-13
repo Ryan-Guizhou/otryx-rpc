@@ -72,7 +72,7 @@ public class GreetingRunner implements ApplicationRunner {
                 if (useRelay) {
                     GreetingReply reply;
                     try (RpcCallScope ignored = RpcCallContext.open(
-                            new RpcCallOptions(Duration.ofMillis(1_800L),
+                            new RpcCallOptions(Duration.ofSeconds(5L),
                                     Map.of("otryx-e2e", "true", "tenant", "alpha")))) {
                         reply = relayGreetingService.hello(new GreetingRequest("OTRYX RPC"));
                     }
