@@ -25,6 +25,7 @@ import java.util.Set;
  * @CreateTime 2026/9/23 10:51
  */
 final class ServiceBinding {
+    private final ServiceKey serviceKey;
     private final Map<Integer, Invoker> methods;
     private final RpcGeneratedServerDispatcher generatedDispatcher;
 
@@ -33,6 +34,7 @@ final class ServiceBinding {
             Class<?> api,
             Object target,
             RpcCodecRegistry codecs) {
+        this.serviceKey = serviceKey;
         this.generatedDispatcher = RpcGeneratedServers
                 .create(api, target)
                 .orElse(null);
@@ -73,6 +75,15 @@ final class ServiceBinding {
             }
         }
         this.methods = Map.copyOf(resolved);
+    }
+
+    /**
+     * 返回预绑定服务标识，用于授权决策。
+     *
+     * @return 真实 ServiceKey
+     */
+    ServiceKey serviceKey() {
+        return serviceKey;
     }
 
     /** 返回启动阶段完成解析的服务方法 ID 集合。 */
