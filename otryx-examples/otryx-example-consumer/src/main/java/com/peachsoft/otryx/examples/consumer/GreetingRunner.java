@@ -1,11 +1,16 @@
 package com.peachsoft.otryx.examples.consumer;
 
+import com.peachsoft.otryx.core.RpcCallContext;
+import com.peachsoft.otryx.core.RpcCallOptions;
+import com.peachsoft.otryx.core.RpcCallScope;
 import com.peachsoft.otryx.api.RpcRemoteException;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcUnavailableException;
 import com.peachsoft.otryx.examples.api.GreetingReply;
 import com.peachsoft.otryx.examples.api.GreetingRequest;
 import com.peachsoft.otryx.examples.api.GreetingService;
+import com.peachsoft.otryx.examples.api.RelayGreetingService;
+import java.util.Map;
 import com.peachsoft.otryx.spring.annotation.OtryxRpcReference;
 import java.time.Duration;
 import java.util.concurrent.CompletionException;
@@ -34,6 +39,12 @@ public class GreetingRunner implements ApplicationRunner {
     @OtryxRpcReference(version = "1.0.0")
     private GreetingService greetingService;
 
+    @OtryxRpcReference(version = "1.0.0")
+    private RelayGreetingService relayGreetingService;
+
+    @Value("${otryx.rpc.example.use-relay:false}")
+    private boolean useRelay;
+
     @Value("${otryx.rpc.example.repeat-interval-millis:0}")
     private long repeatIntervalMillis;
 
@@ -58,11 +69,22 @@ public class GreetingRunner implements ApplicationRunner {
         RuntimeException lastFailure = null;
         while (System.nanoTime() < deadline) {
             try {
-                GreetingReply reply = greetingService.hello(
-                        new GreetingRequest("OTRYX RPC"));
-                LOGGER.info(
-                        "RPC demo completed successfully: {}",
-                        reply.message());
+                if (useRelay) {
+                    GreetingReply reply;
+                    try (RpcCallScope ignored = RpcCallContext.open(
+                            new RpcCallOptions(Duration.ofMillis(1_800L),
+                                    Map.of("otryx-e2e", "true", "tenant", "alpha")))) {
+                        reply = relayGreetingService.hello(new GreetingRequest("OTRYX RPC"));
+                    }
+                    if (!reply.message().startsWith("CHAIN_OK ")) {
+                        throw new IllegalStateException("Relay deadline chain was not verified");
+                    }
+                    LOGGER.info("RPC deadline chain completed: {}", reply.message());
+                } else {
+                    GreetingReply reply = greetingService.hello(
+                            new GreetingRequest("OTRYX RPC"));
+                    LOGGER.info("RPC demo completed successfully: {}", reply.message());
+                }
                 return;
             } catch (RuntimeException error) {
                 if (!isTransientUnavailable(error)) {
