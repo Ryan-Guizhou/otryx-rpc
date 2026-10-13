@@ -135,3 +135,17 @@ HELLO 继续负责 Protocol Version、Codec、Compression、Feature 与 Max Fram
 - 缺失 Fingerprint、协议版本或 Schema 版本的节点均会拒绝；这些安全拒绝不能当作 Registry 故障进行无限重试。
 
 跨语言 Protobuf/IDL 属于 1.1.x+ 战略生态，不阻塞 1.0 GA。
+
+
+## U08 递减 Deadline 的向后兼容
+
+Wire v1 不变更固定 32-byte Header，也不增加额外的必选 Metadata：
+`deadlineEpochMillis` 与 `timeoutBudgetMillis` 原样复用。Consumer
+先根据单次、方法、引用、默认的规则选择预算，并与父级剩余时间取小；
+Provider 优先使用相对剩余预算在自身 `System.nanoTime` 时钟上重建
+Deadline，不根据远端绝对 Epoch 重新增长预算。
+
+对于不携带 `timeoutBudgetMillis` 的旧版节点，仅可用
+`deadlineEpochMillis` 按本机 wall-clock 折算，跨机时钟偏差可能提前
+过期或延长等待；这个限制应在滚动升级验收时明确测试，不能推断
+绝对 Epoch 本身具有跨节点单调性。

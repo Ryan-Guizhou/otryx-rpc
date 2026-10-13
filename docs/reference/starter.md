@@ -333,3 +333,19 @@ ServiceKey/MethodId 生成 `RpcAuthorizationContext`；若容器中声明
 `NETWORK_MTLS` Provider 未声明 `RpcAuthorizer` Bean 时默认拒绝所有方法，
 因此示例 mTLS 仅完成传输安全配置，并不自动授予业务访问；需要声明
 按证书身份和 ServiceKey/MethodId 验证的业务授权 Bean。
+
+## U08 方法级 Deadline 与调用上下文
+
+契约方法可以使用 `@OtryxRpcTimeout(millis = 800)` 定义预算；
+`@OtryxRpcReference(timeoutMillis = 1200)` 定义每个引用的默认预算，
+0 表示沿用 `client.timeout`。程序化 `client.refer(api, version, group,
+Duration)` 提供相同配置。优先级始终为：单次 Scope > 方法 > Reference >
+Client，且不能覆盖父级调用剩余预算。
+
+单次调用示例：`try (RpcCallScope scope = RpcCallContext.open(
+new RpcCallOptions(Duration.ofMillis(250), Map.of("x-request", "123")))) { ... }`。
+框架在 Provider 的同步及异步完成线程恢复入站上下文；
+用户自定义业务线程池必须显式 `RpcCallContext.wrap(...)`。
+
+详细示例、相对预算和兼容行为见
+[方法级 Deadline 与上下文](deadline-context.md)。

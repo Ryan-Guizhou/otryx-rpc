@@ -53,7 +53,7 @@ Wire Protocol v1 的 32 字节 Header、消息和 Codec 标识、历史 Registry
 - 新旧服务先做版本隔离或蓝绿部署；互通能力必须按业务契约实际验证。
 - 旧版 Registry 兼容键保持为 peach.rpc.protocol.version / peach.rpc.schema.version / peach.rpc.schema.fingerprint。
 
-[详细兼容协议](docs/wire-compatibility.md) · [迁移与回滚指南](docs/migration.md)
+[详细兼容协议](docs/wire-compatibility.md) · [Deadline 与调用上下文](docs/reference/deadline-context.md) · [迁移与回滚指南](docs/migration.md)
 
 <!-- doc-section:quick-start -->
 ## 快速开始

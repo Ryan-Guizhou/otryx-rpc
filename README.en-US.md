@@ -105,7 +105,7 @@ See [Starter guide](docs/reference/starter.md) and [Production configuration](do
 
 Validate deadline, admission, backpressure, retries, TLS and observability against your actual workloads. Shared CI-runner smoke results are not production throughput, p99 or capacity claims.
 
-[Performance evidence](docs/reference/performance-evidence.md) · [Capacity planning](docs/reference/capacity-planning.md) · [Observability](docs/observability.md)
+[Deadline context](docs/reference/deadline-context.md) · [Performance evidence](docs/reference/performance-evidence.md) · [Capacity planning](docs/reference/capacity-planning.md) · [Observability](docs/observability.md)
 
 <!-- doc-section:documentation -->
 ## Documentation
