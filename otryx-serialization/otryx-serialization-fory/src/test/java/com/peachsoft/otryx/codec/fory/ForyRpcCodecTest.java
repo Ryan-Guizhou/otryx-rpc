@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -123,6 +124,30 @@ class ForyRpcCodecTest {
     }
 
     @Test
+    void strictBindMustRejectNestedDtoMissingFromAllowlist()
+            throws Exception {
+        RpcMethodDescriptor descriptor = RpcMethodDescriptor.from(
+                new ServiceKey(
+                        GenericContract.class.getName(),
+                        "1.0.0",
+                        "default"),
+                GenericContract.class.getMethod("find", Box.class));
+        ForyRpcCodec incomplete = new ForyRpcCodec(
+                ForyRpcSecurityOptions.strictAllowlist(
+                        Set.of(Box.class.getName())));
+        assertThrows(IllegalArgumentException.class,
+                () -> incomplete.bind(descriptor));
+
+        ForyRpcCodec complete = new ForyRpcCodec(
+                ForyRpcSecurityOptions.strictAllowlist(
+                        Set.of(
+                                Box.class.getName(),
+                                ForbiddenPayload.class.getName())));
+        RpcMethodCodec methodCodec = complete.bind(descriptor);
+        assertTrue(methodCodec.codecId() == RpcCodecIds.FORY_NATIVE);
+    }
+
+    @Test
     void rejectPayloadWithExcessiveObjectGraphDepth() {
         ForyRpcCodec legacy = new ForyRpcCodec();
         Object nested = "leaf";
@@ -193,6 +218,13 @@ class ForyRpcCodecTest {
                 3,
                 payload.length);
         return frame;
+    }
+
+    private record Box<T>(T value) {
+    }
+
+    interface GenericContract {
+        Box<ForbiddenPayload> find(Box<ForbiddenPayload> request);
     }
 
     interface SampleService {

@@ -1,6 +1,6 @@
 # Fory Native 安全模式与迁移（PR-B）
 
-> **状态：PR 待验收。** 本文描述 PR-B 开发分支上的能力，不代表已经合并至 main。
+> 状态：**1.0.0-SNAPSHOT 现有 Fory 类型模型；U05 安全默认策略尚待完成。**
 > Wire v1 的 Payload 仍使用原有 Fory Native 编码、Codec ID 1、Object[] 参数形式；没有引入新的 Type ID 或变更固定协议头。
 
 ## 安全边界
@@ -52,6 +52,16 @@ RpcCodecRegistry registry = RpcCodecRegistry.of(codec);
 2. 统计真实 RPC 方法涉及的 DTO 类型，显式维护允许的应用类和包。
 3. 在隔离环境开启 STRICT_ALLOWLIST，运行字段结构、数组、集合、参数、返回值和滚动兼容性测试。
 4. 双方完成验证后，分批启用 STRICT_ALLOWLIST，保留单独的回退开关。不要将兼容模式当作永久生产安全保障。
+
+## U07 可达 DTO 类型模型（当前实施）
+
+`RpcContractTypeModel.reachableTypes(RpcMethodDescriptor)` 从 RPC 方法参数和返回类型出发，发现自定义 DTO 的 record component、普通非静态/非 transient 字段、数组、泛型容器参数与继承父类类型，并为 `RpcTypeRegistry.register(descriptor)` 补充可达类的稳定身份与碰撞检测。
+
+Fory 的严格模式在 `bind(descriptor)` 阶段校验这些**静态声明**的应用 DTO 是否全部被 `allowed-class-patterns` 覆盖，不满足则 fail-fast；实际报文中的未知多态子类仍由 Fory `AllowListChecker` 在解码时验证，不能从字段类型 `Object` 自动推断可接受的运行时子类。
+
+**区别：** `RpcTypeIds` 与本类型图依旧只负责框架侧稳定 ID 与方法绑定校验，**不会调用 Fory 类注册接口，更不会修改 Wire v1/Codec ID 1/Object[] 的原生 Fory Payload**。
+
+注解处理器增加真实 `JavaCompiler` 验证：继承/重载方法能够生成 Stub，而泛型方法、嵌套契约会给出诊断；Generated/JDK fallback 的 null 返回与异常终态有成对测试。当前自动处理器没有无限制支持通配符/自由类型变量或任意多态 Object，它们仍需设计明确的允许类型范围。
 
 ## 测试准入
 

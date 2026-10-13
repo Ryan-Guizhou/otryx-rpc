@@ -73,6 +73,10 @@ Fingerprint 输入包括：
 
 如果变更需要与旧契约同时在线，推荐发布新的 ServiceKey.version，而不是覆盖原版本。
 
+### U07 Type Model 与 Fory Wire 的分离
+
+`RpcContractTypeModel` 在方法级绑定时递归发现可达 DTO，用于 `RpcTypeRegistry` 的稳定身份碰撞检测及严格 Fory 白名单的**静态声明类校验**。它不能将 `RpcTypeIds` 自动映射为 Fory Native Payload 中的类注册编号；当前 Codec ID 1 的真实线上编码不变。应用运行期的多态/Object 参数仍须由 Fory 的独立类检查器守护。
+
 ## 4. Registry Metadata
 
 新 Provider 注册实例时发布：
