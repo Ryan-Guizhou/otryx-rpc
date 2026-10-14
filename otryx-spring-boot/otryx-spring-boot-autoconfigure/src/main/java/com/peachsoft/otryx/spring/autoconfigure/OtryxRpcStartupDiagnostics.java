@@ -119,6 +119,7 @@ final class OtryxRpcStartupDiagnostics {
         OtryxRpcProperties.Client client = properties.getClient();
         if (client.isEnabled()) {
             positive("client.timeout", client.getTimeout());
+            nonNegative("client.directory-max-staleness", client.getDirectoryMaxStaleness());
             requireText("client.proxy", client.getProxy());
             requireText("client.load-balancer", client.getLoadBalancer());
             validateResilience(client.getResilience());

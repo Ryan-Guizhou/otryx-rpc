@@ -123,3 +123,7 @@ Consul / Eureka 采用按需依赖与轮询式订阅，见 [Consul](docs/referen
 ## License
 
 [MIT License](LICENSE)
+
+## Registry Freshness / 服务发现可靠性
+
+Consumer 可选设置 `otryx.rpc.client.directory-max-staleness`，当 Registry **显式同步失败**且 LKG 超时后拒绝过期路由；默认不限制。查看 [Registry 健康状态与 LKG](docs/reference/registry-freshness.md)。

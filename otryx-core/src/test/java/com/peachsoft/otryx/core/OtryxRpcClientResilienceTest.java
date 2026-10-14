@@ -494,6 +494,34 @@ class OtryxRpcClientResilienceTest {
     }
 
     @Test
+    void staleDirectoryMustRejectDispatchAndAllowExplicitRecovery() {
+        MutableDiscovery discovery = new MutableDiscovery();
+        AtomicInteger requests = new AtomicInteger();
+        try (OtryxRpcClient client = OtryxRpcClient.builder()
+                .serviceDiscovery(discovery)
+                .transportClient(new TestTransport((endpoint, frame, timeout) -> {
+                    requests.incrementAndGet();
+                    return CompletableFuture.completedFuture(successResponse(frame, "ok"));
+                }))
+                .codecRegistry(RpcCodecRegistry.of(new StringCodec()))
+                .directoryFreshnessOptions(
+                        new RpcDirectoryFreshnessOptions(Duration.ofNanos(1L)))
+                .build()) {
+            RetryService service = client.refer(RetryService.class, "1.0.0", "test");
+            assertEquals("ok", service.find("initial"));
+            discovery.fail();
+            CompletionException failure = assertThrows(CompletionException.class,
+                    () -> service.find("stale"));
+            assertInstanceOf(RpcUnavailableException.class, failure.getCause());
+            assertTrue(failure.getCause().getMessage().contains("freshness budget exceeded"));
+            assertEquals(1, requests.get(), "Expired LKG must not dispatch");
+            discovery.healthy();
+            assertEquals("ok", service.find("recovered"));
+            assertEquals(2, requests.get());
+        }
+    }
+
+    @Test
     void retiredEndpointsShouldNotAccumulateConsumerStatistics() {
         MutableDiscovery discovery = new MutableDiscovery();
         try (OtryxRpcClient client = OtryxRpcClient.builder()
@@ -745,6 +773,21 @@ class OtryxRpcClientResilienceTest {
             listener.set(updateListener);
             updateListener.onSnapshot(StaticDiscovery.snapshot(key));
             return () -> listener.compareAndSet(updateListener, null);
+        }
+
+        private void fail() {
+            RegistryListener observer = listener.get();
+            if (observer != null) {
+                observer.onSynchronizationFailed(
+                        new RpcUnavailableException("Registry disconnected"));
+            }
+        }
+
+        private void healthy() {
+            RegistryListener observer = listener.get();
+            if (observer != null) {
+                observer.onSynchronizationSucceeded();
+            }
         }
 
         private void publishEmpty() {

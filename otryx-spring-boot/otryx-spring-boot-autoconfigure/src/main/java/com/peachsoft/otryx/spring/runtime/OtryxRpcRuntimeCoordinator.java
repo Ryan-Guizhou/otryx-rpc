@@ -7,6 +7,7 @@ import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
 import com.peachsoft.otryx.core.OtryxRpcClient;
+import com.peachsoft.otryx.core.RpcDirectoryFreshnessOptions;
 import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.core.RpcAuthorizer;
 import com.peachsoft.otryx.core.RpcShutdownOptions;
@@ -250,6 +251,8 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .proxyFactory(proxyFactory)
                 .timeout(clientProperties.getTimeout())
                 .methodTimeouts(clientProperties.getMethodTimeouts())
+                .directoryFreshnessOptions(new RpcDirectoryFreshnessOptions(
+                        clientProperties.getDirectoryMaxStaleness()))
                 .resilienceOptions(resilienceOptions)
                 .observer(observer())
                 .metadataPropagator(metadataPropagator())

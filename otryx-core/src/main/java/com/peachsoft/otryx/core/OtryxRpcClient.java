@@ -87,6 +87,7 @@ public final class OtryxRpcClient implements AutoCloseable {
     private final ProxyFactory proxyFactory;
     private final Duration timeout;
     private final Map<String, Duration> methodTimeouts;
+    private final RpcDirectoryFreshnessOptions directoryFreshnessOptions;
     private final RpcClientResilienceOptions resilienceOptions;
     private final RetryBudget retryBudget;
     private final ThreadPoolExecutor responseCompletionExecutor;
@@ -138,6 +139,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                 : ExtensionLoader.getLoader(ProxyFactory.class).getDefaultExtension();
         this.timeout = Objects.requireNonNull(builder.timeout, "timeout");
         this.methodTimeouts = Map.copyOf(builder.methodTimeouts);
+        this.directoryFreshnessOptions = builder.directoryFreshnessOptions;
         this.resilienceOptions = Objects.requireNonNull(
                 builder.resilienceOptions,
                 "resilienceOptions");
@@ -218,7 +220,8 @@ public final class OtryxRpcClient implements AutoCloseable {
                 ignored -> new ServiceDirectory(
                         discovery,
                         key,
-                        schemaFingerprint));
+                        schemaFingerprint,
+                        directoryFreshnessOptions));
         ClientReference reference = ClientReference.create(
                 key,
                 api,
@@ -587,10 +590,16 @@ public final class OtryxRpcClient implements AutoCloseable {
                 ? null
                 : loadBalancer.select(instances, loadMetrics);
         if (selected == null) {
+            String reason = switch (reference.directory().status()) {
+                case NOT_READY -> "Registry directory has no initial snapshot for ";
+                case STALE -> "Registry directory freshness budget exceeded for ";
+                case CLOSED -> "Registry directory has been closed for ";
+                case LAST_KNOWN_GOOD -> "No available instance in LKG directory for ";
+                case HEALTHY -> "No available instance for ";
+            };
             RpcUnavailableException unavailable =
                     new RpcUnavailableException(
-                            "No available instance for "
-                                    + reference.key().canonicalName());
+                            reason + reference.key().canonicalName());
             observeClientAttempt(
                     reference,
                     method,
@@ -1407,6 +1416,8 @@ public final class OtryxRpcClient implements AutoCloseable {
         private ProxyFactory proxyFactory;
         private Duration timeout = Duration.ofSeconds(3);
         private Map<String, Duration> methodTimeouts = Map.of();
+        private RpcDirectoryFreshnessOptions directoryFreshnessOptions =
+                RpcDirectoryFreshnessOptions.UNBOUNDED;
         private RpcClientResilienceOptions resilienceOptions =
                 RpcClientResilienceOptions.DEFAULT;
         private int responseCompletionThreads = Math.max(
@@ -1512,6 +1523,20 @@ public final class OtryxRpcClient implements AutoCloseable {
                 }
             });
             this.methodTimeouts = Map.copyOf(value);
+            return this;
+        }
+
+        /**
+         * 配置 Registry 显式同步失败后的 Last-Known-Good 允许陈旧时长。
+         *
+         * <p>默认不限制。没有 Watch 变更事件本身不代表不健康。
+         *
+         * @param value 不允许为 null 的目录陈旧策略
+         * @return 当前 Builder
+         */
+        public Builder directoryFreshnessOptions(RpcDirectoryFreshnessOptions value) {
+            this.directoryFreshnessOptions = Objects.requireNonNull(
+                    value, "directoryFreshnessOptions");
             return this;
         }
 
