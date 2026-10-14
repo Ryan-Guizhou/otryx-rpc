@@ -124,3 +124,6 @@ The repository requires **Chinese standard Javadoc, English structured logs and 
 
 [MIT License](LICENSE)
 
+## Registry freshness
+
+Consumers can opt in to `otryx.rpc.client.directory-max-staleness` to reject expired last-known-good snapshots **after explicit synchronization failure**. The default remains unbounded; a quiet Watch does not become stale. See the [registry freshness reference](docs/reference/registry-freshness.md).

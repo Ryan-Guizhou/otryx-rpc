@@ -1200,6 +1200,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private boolean enabled = true;
         private Duration timeout = Duration.ofSeconds(3);
         private Map<String, Duration> methodTimeouts = Map.of();
+        private Duration directoryMaxStaleness = Duration.ZERO;
         private String loadBalancer = "p2c-ewma";
         private String proxy = "jdk";
         private final Resilience resilience = new Resilience();
@@ -1256,6 +1257,24 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public void setMethodTimeouts(Map<String, Duration> methodTimeouts) {
             this.methodTimeouts = Map.copyOf(methodTimeouts);
+        }
+
+        /**
+         * 获取 Consumer 容许的 Registry 故障后目录陈旧时长。
+         *
+         * @return 非负时长；零表示不限制
+         */
+        public Duration getDirectoryMaxStaleness() {
+            return directoryMaxStaleness;
+        }
+
+        /**
+         * 配置 Consumer 容许的 Registry 故障后目录陈旧时长。
+         *
+         * @param value 非负时长；零表示不限制
+         */
+        public void setDirectoryMaxStaleness(Duration value) {
+            this.directoryMaxStaleness = value;
         }
 
         /**
