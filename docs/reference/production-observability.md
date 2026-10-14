@@ -215,3 +215,15 @@ Load & chaos validation
 10. 固定 Evidence 与容量模型对比。
 
 Telemetry Adapter 的异常不得传播回 RPC 数据面。
+
+## 11. Circuit 状态缓存与标签基数（U10-A）
+
+Micrometer 内部对不同服务/方法 Circuit 状态的跟踪数量默认限制为 4096，
+可以通过 `MicrometerRpcObserver(registry, maxTrackedCircuits)` 显式调整。
+新键超过容量时累计 `otryx.rpc.client.circuit.tracking.dropped`；
+超限时 Circuit Gauge 仅代表被跟踪子集，不能宣称等于全部实际 Circuit。
+Registry Type 仅使用内置值及统一 `custom`，Admission Reason 仅使用
+框架既定值及统一 `other`；从任何第三方 SPI 获得的任意字符串都不能直接成为标签。
+
+这只解决标签基数和缓存容量，不解决同步自定义 Observer 可能阻塞 EventLoop 的问题；
+外部慢速遥测须在下一步使用明确的有界异步出口。
