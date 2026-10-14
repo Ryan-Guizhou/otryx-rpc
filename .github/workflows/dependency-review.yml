@@ -12,16 +12,76 @@ permissions:
   contents: read
 
 jobs:
-  osv-diff:
-    permissions:
-      contents: read
-      actions: read
-    # Compare a complete scan of the base with the proposed pull request.
-    # This does not depend on repository Dependency Graph being enabled.
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@0a65f82af05cd58cf587827b0bb0489548c18346 # v2.7.0
-    with:
-      scan-args: |
-        --recursive
-        ./
-      fail-on-vuln: true
-      upload-sarif: false
+  dependency-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout PR merge with complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout target branch for baseline
+        shell: bash
+        run: |
+          git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+          git checkout --detach "refs/remotes/origin/$GITHUB_BASE_REF"
+
+      - name: Scan existing dependencies
+        id: old
+        uses: google/osv-scanner-action/osv-scanner-action@0a65f82af05cd58cf587827b0bb0489548c18346 # v2.7.0
+        continue-on-error: true
+        with:
+          scan-args: |
+            --format=json
+            --output=old-results.json
+            --recursive
+            ./
+
+      - name: Restore proposed PR merge
+        shell: bash
+        run: git checkout --force --detach "$GITHUB_SHA"
+
+      - name: Scan proposed dependencies
+        id: new
+        uses: google/osv-scanner-action/osv-scanner-action@0a65f82af05cd58cf587827b0bb0489548c18346 # v2.7.0
+        continue-on-error: true
+        with:
+          scan-args: |
+            --format=json
+            --output=new-results.json
+            --recursive
+            ./
+
+      - name: Fail closed if either OSV scan did not produce evidence
+        shell: bash
+        run: |
+          if [ ! -s old-results.json ] || [ ! -s new-results.json ]; then
+            echo "An OSV scan produced no usable results. Refusing to mark this PR safe." >&2
+            exit 1
+          fi
+          python3 -m json.tool old-results.json >/dev/null
+          python3 -m json.tool new-results.json >/dev/null
+
+      - name: Reject newly introduced known vulnerabilities
+        uses: google/osv-scanner-action/osv-reporter-action@0a65f82af05cd58cf587827b0bb0489548c18346 # v2.7.0
+        with:
+          scan-args: |
+            --old=old-results.json
+            --new=new-results.json
+            --gh-annotations=false
+            --fail-on-vuln=true
+            --output=results.sarif
+
+      - name: Save evidence for review
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: osv-diff-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: |
+            old-results.json
+            new-results.json
+            results.sarif
+          if-no-files-found: warn
+          retention-days: 7
