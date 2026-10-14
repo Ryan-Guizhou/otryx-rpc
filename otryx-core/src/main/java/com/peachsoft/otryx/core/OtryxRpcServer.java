@@ -1229,12 +1229,12 @@ public final class OtryxRpcServer implements AutoCloseable {
             if (previous == State.STARTED
                     && budget.remainingNanos() > 0L) {
                 try {
-                    long budget = Math.min(
+                    long drainBudgetNanos = Math.min(
                             budget.remainingNanos(),
                             drainTimeout.toNanos());
                     CompletionStage<Void> stage =
-                            transport.drain(Duration.ofNanos(budget));
-                    progress.drained = awaitWithin(stage, budget);
+                            transport.drain(Duration.ofNanos(drainBudgetNanos));
+                    progress.drained = awaitWithin(stage, drainBudgetNanos);
                     if (!progress.drained) {
                         progress.failures.incrementAndGet();
                         LOGGER.warn("RPC provider drain did not finish within shutdown budget");
@@ -1341,16 +1341,16 @@ public final class OtryxRpcServer implements AutoCloseable {
         if (pending.size() != configuredInstances.size()) {
             return;
         }
-        long budget = Math.min(
+        long unregisterBudgetNanos = Math.min(
                 budget.remainingNanos(),
                 controlPlaneTimeout.toNanos());
-        if (budget <= 0L) {
+        if (unregisterBudgetNanos <= 0L) {
             return;
         }
         boolean completed = awaitWithin(
                 CompletableFuture.allOf(pending.toArray(
                         CompletableFuture[]::new)),
-                budget);
+                unregisterBudgetNanos);
         progress.registrationsRemoved = completed
                 && pending.stream().allMatch(future ->
                         future.isDone() && !future.isCompletedExceptionally());
