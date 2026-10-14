@@ -7,14 +7,15 @@
 ## 1. 前置条件
 
 - JDK 21；
-- Maven 3.9+；
+- 无需全局 Maven：仓库内 `mvnw` / `mvnw.cmd` 固定 Maven 3.9.11，首次运行需要联网下载并校验发行包；
+- Python 3：用于仓库质量检查；
 - Docker（用于官方 Nacos 示例）。
 
 确认：
 
 ```bash
 java -version
-mvn -version
+./mvnw -version
 docker version
 ```
 
@@ -31,10 +32,10 @@ cd otryx-rpc
 
 ```bash
 python3 scripts/check_project.py
-mvn -B -ntp clean verify -Pquality
+./mvnw -B -ntp clean verify -Pquality
 ```
 
-Windows 没有 `python3` 命令时可使用已安装 Python 的等价入口执行同一脚本。
+Windows 没有 `python3` 命令时可使用已安装 Python 的等价入口执行同一脚本；所有 `./mvnw` 命令在 Windows CMD/PowerShell 改用 `mvnw.cmd`。Maven Wrapper 下载地址及固定 SHA-256 见 [Maven 结构](reference/maven.md)。
 
 ## 4. 启动官方 Nacos 示例环境
 
@@ -49,7 +50,7 @@ docker compose -f otryx-examples/docker-compose.yml up -d
 ## 5. 构建 Examples
 
 ```bash
-mvn -B -ntp -pl otryx-examples -am clean package
+./mvnw -B -ntp -pl otryx-examples -am clean package
 ```
 
 ## 6. 启动 Provider
@@ -110,7 +111,7 @@ Provider 和 Consumer 是两个独立 JVM；Contract 位于共享 API 模块。
 当前 1.0.0-SNAPSHOT 尚未发布至 Maven Central。需先在仓库根目录执行：
 
 ```bash
-mvn -B -ntp clean install -DskipTests
+./mvnw -B -ntp clean install -DskipTests
 ```
 
 安装完成后，本地 Maven Repository 才能解析相同的 `1.0.0-SNAPSHOT` 坐标。

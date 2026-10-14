@@ -293,6 +293,35 @@ public class OtryxRpcAutoConfigurationTest {
     }
 
     @Test
+    void customTransportFactoryMustOverrideUnavailableSpiName() {
+        com.peachsoft.otryx.transport.RpcTransportFactory custom =
+                new com.peachsoft.otryx.transport.vertx.VertxRpcTransportFactory();
+        contextRunner
+                .withBean(com.peachsoft.otryx.transport.RpcTransportFactory.class, () -> custom)
+                .withPropertyValues("otryx.rpc.transport.type=unknown-adapter")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(
+                            com.peachsoft.otryx.transport.RpcTransportFactory.class))
+                            .isSameAs(custom);
+                });
+    }
+
+    @Test
+    void customRpcObserverMustRemainUserOwnedBean() {
+        com.peachsoft.otryx.observability.RpcObserver custom =
+                new com.peachsoft.otryx.observability.RpcObserver() { };
+        contextRunner
+                .withBean(com.peachsoft.otryx.observability.RpcObserver.class, () -> custom)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(
+                            com.peachsoft.otryx.observability.RpcObserver.class))
+                            .isSameAs(custom);
+                });
+    }
+
+    @Test
     void noRpcAnnotationsShouldNotCreateRuntime() {
         contextRunner.run(context -> {
             OtryxRpcRuntimeCoordinator coordinator =

@@ -239,3 +239,10 @@ close 返回不代表不可中断的第三方回调已经停止。
 
 默认 NOOP 和 Micrometer 轻量回调保持原路径，这个 Adapter 是**显式按需选用**，
 不能用于可靠审计记录、严格排序的用户业务回调或无法容忍丢失的事件。
+
+
+## 12. JFR/Trace 出口安全与性能门禁（U10）
+
+JFR 的 Registry 恢复事件输出已知内置类型；未知自定义字符串折叠为 `registry:custom`，而不是传播原始 Registry 配置。OpenTelemetry 导出的是状态、服务与方法标识及错误 **类型**，默认不调用 `recordException` 或导出业务异常 message/stacktrace。自定义 Observer 不享有自动可信权限，第三方慢速出口应单独部署有界队列、拒绝统计和安全策略。
+
+JMH 的 `ObservabilityPathBenchmark` 提供固定条件下本地 NOOP/Micrometer/JFR/OTel NOOP 对比工具，但其结果不是完整远程 exporter 的生产开销。需要结合真实导出器、抽样比例、CPU/GC、B/op、p99/p99.9 与遥测丢弃率进行验收；当前没有正式性能数值声明。

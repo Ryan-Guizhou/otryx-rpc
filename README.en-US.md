@@ -58,14 +58,16 @@ However, full Java class names affect type and method identifiers and schema fin
 <!-- doc-section:quick-start -->
 ## Quick start
 
-Requires **JDK 21, Maven and Spring Boot 3.5.4**. Build the development version from source:
+Requires **JDK 21 and Spring Boot 3.5.4**. The checked-in Maven Wrapper pins Maven 3.9.11 and needs Maven Central access on its first run.
 
 ~~~bash
-mvn -B -ntp clean install -DskipTests
-mvn -B -ntp clean verify -Pquality
+./mvnw -B -ntp clean install -DskipTests
+./mvnw -B -ntp clean verify -Pquality
 ~~~
 
-Run the independent Provider / Consumer example from [otryx-examples](otryx-examples/README.md); see [Getting started](docs/getting-started.md) for complete setup.
+Use `mvnw.cmd` on Windows CMD/PowerShell; a globally installed Maven is optional.
+
+Run the independent Provider / Consumer example from [otryx-examples](otryx-examples/README.md); see [Getting started](docs/getting-started.md) for complete setup. The consumer's `ExampleCallObserver` demonstrates a safe, Spring-managed custom observability SPI.
 
 <!-- doc-section:dependency -->
 ## Maven coordinates

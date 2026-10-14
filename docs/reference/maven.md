@@ -247,3 +247,16 @@ mvn -B -ntp clean install -DskipTests
 Central Portal 发布使用 GitHub Secrets 注入临时 Credential；组织内部私服继续通过组织自己的 Maven `settings.xml` / deployment policy 管理。
 
 版本、Release Notes、兼容和回滚规则见 [发布策略](../archive/releases/release-policy.md)。
+
+
+## 7. 源码 Maven Wrapper（U11）
+
+本仓库内 `mvnw` 与 `mvnw.cmd` 采用 Apache Maven Wrapper **3.3.4 only-script** 模式，无需提交二进制 JAR。发行版固定 Maven **3.9.11**，首次运行需访问 `repo.maven.apache.org` 下载 ZIP，并按 `.mvn/wrapper/maven-wrapper.properties` 中 SHA-256 校验。
+
+~~~bash
+./mvnw --version
+python3 scripts/test_wrapper_contract.py
+./mvnw -B -ntp clean verify -Pquality
+~~~
+
+Windows CMD/PowerShell 使用 `mvnw.cmd --version` 和 `mvnw.cmd -B -ntp clean verify -Pquality`。Wrapper 只固定 Maven 版本，**不提供 JDK**，运行前必须显式选择 JDK 21。现有发布配置不因 Wrapper 增加而自动签名、上传 Central 或打 Tag。

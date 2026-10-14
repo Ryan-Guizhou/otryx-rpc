@@ -150,3 +150,15 @@ flowchart LR
 - [容量规划](capacity-planning.md)
 - [生产配置](../configuration.md)
 - [发布就绪](../archive/releases/release-readiness.md)
+
+
+## 12. 可观测性本地基准（U10）
+
+项目的 `ObservabilityPathBenchmark` 以相同的 `ServiceKey`、`MethodId`、成功终态比较 NOOP、Micrometer、JFR 未录制、OpenTelemetry NOOP 出口下的本地 API 路径耗时与分配：
+
+~~~bash
+./mvnw -B -ntp -pl otryx-benchmarks -am package -DskipTests
+java -jar otryx-benchmarks/target/benchmarks.jar ObservabilityPathBenchmark -prof gc
+~~~
+
+该基准**不包含**网络、真实 Exporter、活动的 JFR Recording、采样处理器，也不会输出生产容量。固定环境对比需要记录 Runner/CPU/JVM/SHA/JFR 事件策略并执行至少三轮 AB/BA，再结合真实链路 p99/p99.9、heap/GC 和 10k logical-concurrency Soak 验证。目前不将缺失的受控测量宣称为验收完成。

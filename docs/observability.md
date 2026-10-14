@@ -172,3 +172,10 @@ Provider 已准入字节 Delta 独立聚合，队列满不丢失净值，但短�
 - [生产可观测与 SLO](reference/production-observability.md)
 - [Grafana Dashboard](../deploy/observability/grafana/otryx-dashboard.json)
 - [Prometheus Alert Example](../deploy/observability/prometheus/otryx-alerts.example.yml)
+
+
+## 9. JFR 出口和遥测开销（U10）
+
+JFR Recovery 的 Registry domain 只保留内置类型 `memory`、`etcd`、`nacos`、`consul`、`eureka`，未知、空值和第三方动态名称统一为 `registry:custom`。这与 Micrometer 低基数 Registry 类型分类一致，避免意外把配置字符串或密钥写入 JFR Recording。
+
+`ObservabilityPathBenchmark` 分别测量 NOOP、Micrometer、未启用 Recording 的 JFR、OTel NOOP Exporter 热路径（工具级能力）。请参考 [性能证据指南](reference/performance-evidence.md) 的运行方式。OTel NOOP 不代表实际 Exporter 排队、网络或采样开销，必须在固定硬件评估真实 Trace/JFR 和丢弃率，不能凭 Shared CI 输出制定容量指标。

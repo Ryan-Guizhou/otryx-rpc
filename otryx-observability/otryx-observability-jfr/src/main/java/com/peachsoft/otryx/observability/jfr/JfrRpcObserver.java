@@ -119,7 +119,7 @@ public final class JfrRpcObserver implements RpcObserver {
             long durationNanos,
             Throwable error) {
         recovery(
-                "registry:" + registryType,
+                "registry:" + safeRegistryType(registryType),
                 action.name(),
                 error == null ? "SUCCESS" : "FAILURE",
                 durationNanos);
@@ -179,6 +179,22 @@ public final class JfrRpcObserver implements RpcObserver {
         event.status = status.name();
         event.durationNanos = durationNanos;
         event.commit();
+    }
+
+    /**
+     * 限制 JFR Registry 类型的出口值，避免动态 SPI 名称泄露密钥并产生无限类别。
+     *
+     * @param registryType Registry SPI 名称，可能来自外部配置
+     * @return 已知内置名称或固定 custom 标签
+     */
+    private static String safeRegistryType(String registryType) {
+        if (registryType == null) {
+            return "custom";
+        }
+        return switch (registryType) {
+            case "memory", "etcd", "nacos", "consul", "eureka" -> registryType;
+            default -> "custom";
+        };
     }
 
     private static void recovery(

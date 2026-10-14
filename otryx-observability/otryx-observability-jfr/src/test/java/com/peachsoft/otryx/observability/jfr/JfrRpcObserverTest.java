@@ -1,11 +1,19 @@
 package com.peachsoft.otryx.observability.jfr;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.observability.RpcRegistryRecoveryAction;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 import java.time.Duration;
+import jdk.jfr.Recording;
+import jdk.jfr.consumer.RecordingFile;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -16,6 +24,45 @@ import org.junit.jupiter.api.Test;
  * @CreateTime 2026/9/29 15:00
  */
 class JfrRpcObserverTest {
+
+    @Test
+    void registryRecoveryJfrMustNotLeakDynamicRegistryNames() throws Exception {
+        Path file = Files.createTempFile("otryx-registry-redaction-", ".jfr");
+        try {
+            try (Recording recording = new Recording()) {
+                recording.enable(RpcRecoveryJfrEvent.class);
+                recording.start();
+
+                JfrRpcObserver observer = new JfrRpcObserver(Duration.ofMillis(1));
+                observer.onRegistryRecoveryCompleted(
+                        "custom-DO_NOT_EXPORT_SECRET",
+                        RpcRegistryRecoveryAction.SUBSCRIPTION_RECOVERED,
+                        100L,
+                        null);
+                observer.onRegistryRecoveryCompleted(
+                        "nacos",
+                        RpcRegistryRecoveryAction.SNAPSHOT_RESYNCED,
+                        200L,
+                        null);
+
+                recording.stop();
+                recording.dump(file);
+            }
+
+            List<String> domains = RecordingFile.readAllEvents(file)
+                    .stream()
+                    .filter(event -> event.getEventType().getName()
+                            .equals("com.peachsoft.otryx.Recovery"))
+                    .map(event -> event.getString("domain"))
+                    .toList();
+            assertTrue(domains.contains("registry:custom"));
+            assertTrue(domains.contains("registry:nacos"));
+            assertFalse(domains.stream()
+                    .anyMatch(domain -> domain.contains("DO_NOT_EXPORT_SECRET")));
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
 
     @Test
     void shouldRemainSafeWithoutActiveRecording() {
