@@ -61,7 +61,12 @@ Nacos group 与 RPC `ServiceKey.group` 不可混用：前者是 Registry 管理�
 10. 远端 Provider 生命周期以 Nacos NamingEvent 为主通道；
 11. Registry 每 5 秒执行一次低频完整视图 reconcile 作为最终一致性兜底；只有事件队列空闲时才执行，避免旧查询结果覆盖正在排队的新事件；
 12. 独立 Provider/Consumer Client 集成测试验证“远端最后一个 Provider 注销 -> empty snapshot”最终收敛；
-13. 关闭时取消 reconcile task，并使用原 EventListener 实例 unsubscribe。
+13. 关闭时取消 reconcile task，并使用原 EventListener 实例 unsubscribe；
+14. 初始订阅失败不会被伪造为健康空视图，也不会直接销毁该订阅；5 秒 reconcile 周期负责单飞重试；
+15. SDK 查询失败时发送明确的同步失败信号，保留最近有效实例快照；远端查询恢复后，即使内容没有变化也确认健康；
+16. NamingEvent 为完整实例视图，Adapter 只暂存最新事件，避免慢 Consumer 带来无界事件队列；
+17. 远端查询期间收到的新 NamingEvent 优先，旧查询结果不得倒灌覆盖；
+18. Nacos 对 Ephemeral Provider 的心跳与重注册仍由其官方客户端负责，本适配层没有额外的无界注册重试任务。
 
 ## 5. 线程与资源
 
@@ -76,6 +81,8 @@ Nacos Java SDK 的注册、注销、查询和订阅初始化可能阻塞。Adapt
 - 单线程 daemon scheduler 只负责触发低频 reconcile，真实 Nacos 查询仍提交到上述有界控制面执行器。
 
 Registry 关闭先取消订阅，再关闭 NamingService，最后关闭控制面执行器；重复关闭幂等。
+注册服务的 SDK 自动恢复应以独立 Nacos 故障注入的 Provider 停机/恢复测试验收，
+不要误认为应用层已经实现主动重建全部 Provider 注册。
 
 ## 6. 配置
 
