@@ -227,3 +227,15 @@ Registry Type 仅使用内置值及统一 `custom`，Admission Reason 仅使用
 
 这只解决标签基数和缓存容量，不解决同步自定义 Observer 可能阻塞 EventLoop 的问题；
 外部慢速遥测须在下一步使用明确的有界异步出口。
+
+## 12. 显式的有界异步第三方出口（U10-B）
+
+慢速第三方 `RpcObserver` 可以由
+`new BoundedAsyncRpcObserver(observer, 1024)` 隔离到有界、单 daemon 线程。
+满队列丢弃普通遥测，不阻塞 RPC 调用线程；inflight Delta 单独聚合保证最终净值，
+但不能用于统计短期瞬时峰值。通过 `droppedEvents()`、`failedCallbacks()`
+及 `queuedEvents()` 诊断出口饱和。线程执行期间不自动传播 MDC/ThreadLocal，
+close 返回不代表不可中断的第三方回调已经停止。
+
+默认 NOOP 和 Micrometer 轻量回调保持原路径，这个 Adapter 是**显式按需选用**，
+不能用于可靠审计记录、严格排序的用户业务回调或无法容忍丢失的事件。
