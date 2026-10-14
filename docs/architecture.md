@@ -255,3 +255,11 @@ Telemetry callback 异常会被隔离。
 - 官方性能/容量数字需要固定环境 Evidence。
 
 更完整的设计权衡见 [技术方案](design/technical-solution.md) 与 [详细设计](design/detailed-design.md)。
+
+
+## 15. Consumer 重试与关闭预算的资源所有权（U12）
+
+`ClientRetryController` 只判断幂等性、失败类型、Attempt 次数、`RetryBudget` 和剩余单调时钟预算；`OtryxRpcClient` 仍拥有 Scheduler、编码、网络、取消及终态通知。
+`RpcShutdownBudget` 是 Consumer/Provider 共用的不可变关闭时间预算；每次关闭只创建一个预算，跨注销、排空、Executor 等待共享，不能用 Stage 超时冒充用户线程已退出。
+
+详细决策表、资源关闭责任与现有回归边界见 [运行时资源所有权](reference/runtime-ownership.md)。

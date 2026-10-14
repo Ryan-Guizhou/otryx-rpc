@@ -249,3 +249,15 @@ client.retry.exhausted = optional final stop reason
 - Retry 不能替代容量；
 - Circuit/Outlier 不能隐藏长期故障；
 - TLS 错误不允许自动降级到明文。
+
+
+## 13. U12 内部职责隔离
+
+本轮仅分离两个能保持现有行为、并独立编写回归测试的职责：
+
+- `ClientRetryController`：按幂等/错误类型 → Attempt 上限 → 额度扣减 → Deadline/Backoff 的**原有顺序**计算决策，不负责安排重试或归还额度；非幂等失败不生成 retry-exhausted 信号。
+- `RpcShutdownBudget`：由 Client/Server shutdown 入口创建一次单调时钟预算，后续 Controller/Transport/Executor 等阶段共享。Stage 到期不等于外部用户业务已退出。
+
+`ClientCall` 和 `ProviderInvocation` 仍保持原有作用域，避免在没有额外所有权/延迟证据时跨对象搬移响应完成与 Admission Lease。本轮不改变 Java 公共 API、Wire v1、Retry 策略、配置默认值或行为终态。
+
+具体入口、所有权表和故障回归见 [运行时资源所有权](../reference/runtime-ownership.md)。
