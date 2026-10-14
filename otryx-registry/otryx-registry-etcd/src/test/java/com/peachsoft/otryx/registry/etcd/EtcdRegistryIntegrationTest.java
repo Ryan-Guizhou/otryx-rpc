@@ -11,6 +11,7 @@ import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.ServiceInstance;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.registry.RegistryContractTestKit;
+import com.peachsoft.otryx.registry.RegistryListener;
 import com.peachsoft.otryx.registry.RegistrySnapshot;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import java.net.URI;
@@ -20,6 +21,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -120,6 +122,32 @@ class EtcdRegistryIntegrationTest {
     }
 
     @Test
+    void initialHealthyEmptyDirectoryMustEmitExplicitSyncSuccess()
+            throws Exception {
+        ServiceKey key =
+                new ServiceKey("demo.InitialHealth", "1.0.0", "default");
+        CountDownLatch initial = new CountDownLatch(1);
+        CountDownLatch healthy = new CountDownLatch(1);
+        try (EtcdRegistry registry = registry(uniqueNamespace("initial-health"), 5);
+             RegistrySubscription ignored = registry.subscribe(key, new RegistryListener() {
+                 @Override
+                 public void onSnapshot(RegistrySnapshot snapshot) {
+                     if (snapshot.instances().isEmpty()) {
+                         initial.countDown();
+                     }
+                 }
+
+                 @Override
+                 public void onSynchronizationSucceeded() {
+                     healthy.countDown();
+                 }
+             })) {
+            assertTrue(initial.await(10, TimeUnit.SECONDS));
+            assertTrue(healthy.await(10, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     void shouldIsolateRegistryNamespaces() {
         try (EtcdRegistry left = registry(uniqueNamespace("namespace-a"), 5);
              EtcdRegistry right = registry(uniqueNamespace("namespace-b"), 5)) {
@@ -185,6 +213,24 @@ class EtcdRegistryIntegrationTest {
                 instance(key, "node-compaction-b", 19101);
         AtomicReference<RegistrySnapshot> latest =
                 new AtomicReference<>();
+        AtomicInteger failedSyncs = new AtomicInteger();
+        AtomicInteger recoveredSyncs = new AtomicInteger();
+        RegistryListener observing = new RegistryListener() {
+            @Override
+            public void onSnapshot(RegistrySnapshot snapshot) {
+                latest.set(snapshot);
+            }
+
+            @Override
+            public void onSynchronizationSucceeded() {
+                recoveredSyncs.incrementAndGet();
+            }
+
+            @Override
+            public void onSynchronizationFailed(Throwable error) {
+                failedSyncs.incrementAndGet();
+            }
+        };
 
         try (EtcdRegistry registry = registry(namespace, 5);
              Client client = rawClient()) {
@@ -212,13 +258,17 @@ class EtcdRegistryIntegrationTest {
             try (RegistrySubscription ignored =
                          registry.subscribeFromRevision(
                                  key,
-                                 latest::set,
+                                 observing,
                                  staleRevision)) {
                 assertTrue(await(
                         Duration.ofSeconds(15),
                         () -> contains(latest.get(), first)
                                 && contains(latest.get(), second)));
                 assertTrue(latest.get().revision() >= compactRevision);
+                assertTrue(failedSyncs.get() >= 1,
+                        "Compacted Watch must report failure rather than fabricate an empty directory");
+                assertTrue(recoveredSyncs.get() >= 1,
+                        "Successful resynchronization must report health");
             }
         }
     }

@@ -35,9 +35,13 @@ new RpcDirectoryFreshnessOptions(Duration.ofSeconds(10)))`。
 
 ## 范围和待完成项
 
-U09-A 提供 Core 的策略、诊断和兼容性监听接口；不声称既有所有 Adapter
-已经能报告同步失败。后续 U09-B/C/D 分别完成 Etcd、Nacos、
-HTTP/Consul/Eureka 的真实健康状态通知与有界恢复，再进行 U09-E 的多进程故障注入。
+U09-A 提供 Core 的策略、诊断和兼容性监听接口，不声称所有 Adapter
+已经能报告同步失败。U09-B 将 Etcd 的实际 Watch / Range 健康信号接入，
+针对 compaction/断开提供有界退避、单飞重连、请求快照合并与关闭时失效保护。
+对应代码和 Etcd 集成测试在 U09-B PR 验收；不得将这些能力归因于 U09-A。
+
+Nacos 与 HTTP/Consul/Eureka 的故障同步通知及重建仍由后续 U09-C/D 完成，
+随后进行 U09-E 的多进程故障注入。
 
 回归：`ServiceDirectoryTest`、`OtryxRpcClientResilienceTest`。
 全量 Maven 与 Examples 以关联 PR 的准确 Head CI 为准。
