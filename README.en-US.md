@@ -84,6 +84,8 @@ Development version:
 
 The full starter is otryx-spring-boot-starter. **No Maven Central release is claimed for this snapshot.**
 
+First-release RC/GA candidates use an [unsigned non-publishing dry-run](docs/reference/first-release-acceptance.md) to verify main JARs, sources, Javadocs, SBOM and SHA256 checksums. It **does not sign, tag or upload to Central**. Trademark and Maven namespace clearance remain external release gates.
+
 <!-- doc-section:configuration -->
 ## Configuration
 

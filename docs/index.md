@@ -27,7 +27,7 @@
 
 ## 发布与项目管理
 
-[品牌规范与 Otti](brand-guidelines.md) · [公开发布验收与授权风险](publication-readiness.md) · [历史发布说明](archive/releases/release-notes-1.0.1.md)。
+[首发 RC/GA 验收与供应链](reference/first-release-acceptance.md) · [品牌规范与 Otti](brand-guidelines.md) · [公开发布验收与授权风险](publication-readiness.md) · [历史发布说明](archive/releases/release-notes-1.0.1.md)。
 
 Agent/MCP 与 Java 规范属于贡献者资料，不是使用 OTRYX RPC 的必要步骤，详见 [工程规范](../AGENTS.md)。
 

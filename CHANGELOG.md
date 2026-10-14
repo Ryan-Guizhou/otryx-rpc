@@ -8,6 +8,13 @@
 - 保留旧版稳定快照 stable/peach-rpc-1.0.1-pre-otryx-2026-10-10；新坐标目前处于开发测试，尚未在 Maven Central 发布。
 - 增加 Otti 吉祥物、品牌 Banner、架构和调用链插图，完善 Agent/质量与迁移门禁。
 
+### 2026-10 首发工程准备（未发布）
+
+- U10：低基数遥测、有界 Observer、JFR Registry 标签脱敏和基准工具。
+- U11：Maven Wrapper、Lite Starter 自定义 Bean/SPI 接入测试和独立进程示例。
+- U12：重试决策及关闭总预算提取为可独立测试的内部职责；保持 Wire v1。
+- U14：RC1/GA 无发布 Dry-run、CycloneDX SBOM、SHA256 清单、Dependency Review 与 Dependabot；**尚无发行 Tag、GPG 签名或 Central 上传**。
+
 ## Peach RPC 1.0.x 历史变更记录
 
 Peach RPC 使用语义化版本。1.0.x 保持 Wire v1、Stable Type ID、Schema Fingerprint v1 和 Public Core API 的兼容边界。

@@ -84,6 +84,8 @@ Windows CMD/PowerShell 使用 `mvnw.cmd` 替代 `./mvnw`，无需预装全局 Ma
 
 完整 Starter：otryx-spring-boot-starter。**1.0.0-SNAPSHOT 并未声明已发布到 Maven Central。**
 
+首发 RC/GA 仅提供 [无发布 Dry-run](docs/reference/first-release-acceptance.md)：核验 Main、Sources、Javadoc、SBOM 与 SHA256 清单，**不签名、不创建 Tag、不上传 Central**。首次发行仍须核实品牌与 Maven Namespace 授权。
+
 <!-- doc-section:configuration -->
 ## 配置
 

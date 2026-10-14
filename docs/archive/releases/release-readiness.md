@@ -219,3 +219,8 @@ central_auto_publish = true
 4. 运行全部门禁；
 5. 发布新 Patch；
 6. 在 CHANGELOG/Release Notes 说明影响与升级建议。
+
+
+## OTRYX 首发与历史 Patch 的区别
+
+本文的历史 Peach RPC 1.0.x 发行记录不是当前 OTRYX `1.0.0-SNAPSHOT` 已发布的证明。OTRYX 的无签名、无上传 RC1/GA 候选工作流详见 [首发验收与供应链](../../reference/first-release-acceptance.md)。当前开发版不得启动历史 Patch 发行逻辑。
