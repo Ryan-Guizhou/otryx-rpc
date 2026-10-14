@@ -27,6 +27,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +51,7 @@ public final class HttpRegistry implements Registry, ServiceRegistrar {
     private static final int MAX_PENDING_CONTROL_TASKS = 256;
     private static final long CLOSE_TIMEOUT_SECONDS = 3L;
     private static final long MIN_INTERVAL_MILLIS = 1L;
+    private static final long MAX_POLL_BACKOFF_MILLIS = 30_000L;
     private static final RegistryCapabilities CAPABILITIES = RegistryCapabilities.of(
             RegistryCapability.REGISTRATION,
             RegistryCapability.SUBSCRIPTION,
@@ -226,8 +228,17 @@ public final class HttpRegistry implements Registry, ServiceRegistrar {
         Objects.requireNonNull(listener, "listener");
         Subscription sub = new Subscription(key, listener);
         subscriptions.add(sub);
-        sub.future = scheduler.scheduleWithFixedDelay(sub::poll,
-                0L, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
+        try {
+            sub.future = scheduler.scheduleWithFixedDelay(sub::poll,
+                    0L, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException schedulingError) {
+            subscriptions.remove(sub);
+            throw schedulingError;
+        }
+        if (closed.get()) {
+            sub.close();
+            throw new IllegalStateException("HTTP registry is closed");
+        }
         return sub;
     }
 
@@ -242,6 +253,9 @@ public final class HttpRegistry implements Registry, ServiceRegistrar {
                     .distinct()
                     .toList();
         } catch (Exception error) {
+            if (error instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw failure("lookup", error);
         }
     }
@@ -342,11 +356,33 @@ public final class HttpRegistry implements Registry, ServiceRegistrar {
         private volatile ScheduledFuture<?> future;
     }
 
+    /**
+     * 返回订阅失败后的下次允许查询间隔；该函数不会创建后台任务。
+     *
+     * @param baseMillis 正数的基础轮询间隔
+     * @param consecutiveFailures 连续失败次数，从 1 开始
+     * @return 有限指数退避，最多 30 秒或基础间隔（取较大者）
+     */
+    static long pollBackoffMillis(long baseMillis, int consecutiveFailures) {
+        if (baseMillis <= 0L || consecutiveFailures <= 0) {
+            throw new IllegalArgumentException("Invalid registry retry backoff arguments");
+        }
+        long limit = Math.max(baseMillis, MAX_POLL_BACKOFF_MILLIS);
+        long delay = baseMillis;
+        for (int number = 1; number < consecutiveFailures && delay < limit; number++) {
+            delay = delay > limit / 2L ? limit : Math.min(limit, delay * 2L);
+        }
+        return delay;
+    }
+
     private final class Subscription implements RegistrySubscription {
         private final ServiceKey key;
         private final RegistryListener listener;
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private final AtomicBoolean pending = new AtomicBoolean();
+        private final AtomicBoolean unhealthy = new AtomicBoolean();
+        private final AtomicInteger failureStreak = new AtomicInteger();
+        private volatile long nextAttemptNanos;
         private volatile ScheduledFuture<?> future;
         private List<ServiceInstance> last;
 
@@ -362,7 +398,9 @@ public final class HttpRegistry implements Registry, ServiceRegistrar {
         }
 
         private void poll() {
-            if (cancelled.get() || closed.get() || !pending.compareAndSet(false, true)) {
+            if (cancelled.get() || closed.get()
+                    || (nextAttemptNanos != 0L && System.nanoTime() - nextAttemptNanos < 0L)
+                    || !pending.compareAndSet(false, true)) {
                 return;
             }
             try {
@@ -370,14 +408,20 @@ public final class HttpRegistry implements Registry, ServiceRegistrar {
                     try {
                         List<ServiceInstance> current = fetch(key);
                         synchronized (this) {
-                            if (!cancelled.get() && !closed.get()
-                                    && !current.equals(last)) {
-                                last = List.copyOf(current);
+                            if (cancelled.get() || closed.get()) {
+                                return;
+                            }
+                            if (!current.equals(last)) {
                                 listener.onSnapshot(new RegistrySnapshot(
                                         current, revision.incrementAndGet()));
+                                last = List.copyOf(current);
                             }
+                            failureStreak.set(0);
+                            nextAttemptNanos = 0L;
+                            signalHealthy();
                         }
                     } catch (RuntimeException error) {
+                        fail(error);
                         LOGGER.debug("Registry subscription refresh failed: type={}, service={}",
                                 backend.type(), key.canonicalName());
                     } finally {
@@ -386,7 +430,35 @@ public final class HttpRegistry implements Registry, ServiceRegistrar {
                 });
             } catch (RejectedExecutionException error) {
                 pending.set(false);
+                fail(error);
                 LOGGER.warn("Registry subscription refresh rejected: type={}", backend.type());
+            }
+        }
+
+        private void fail(Throwable error) {
+            if (cancelled.get() || closed.get()) {
+                return;
+            }
+            int failures = failureStreak.updateAndGet(value ->
+                    value == Integer.MAX_VALUE ? value : value + 1);
+            long delayMillis = pollBackoffMillis(pollInterval.toMillis(), failures);
+            nextAttemptNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(delayMillis);
+            if (unhealthy.compareAndSet(false, true)) {
+                try {
+                    listener.onSynchronizationFailed(error);
+                } catch (RuntimeException listenerFailure) {
+                    LOGGER.debug("Registry unhealthy listener failed: type={}", backend.type());
+                }
+            }
+        }
+
+        private void signalHealthy() {
+            unhealthy.set(false);
+            try {
+                // Healthy full polling with an identical view is still an explicit remote sync.
+                listener.onSynchronizationSucceeded();
+            } catch (RuntimeException listenerFailure) {
+                LOGGER.debug("Registry healthy listener failed: type={}", backend.type());
             }
         }
 
