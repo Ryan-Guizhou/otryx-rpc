@@ -25,7 +25,7 @@ python3 scripts/check_project.py
 python3 scripts/test_java_conventions.py
 python3 scripts/test_java_doc_metadata.py
 python3 scripts/check_java_doc_metadata.py --audit --report target/java-javadoc-metadata-audit.json
-mvn -B -ntp clean verify -Pquality
+./mvnw -B -ntp clean verify -Pquality
 ~~~
 
 如果修改了 Java 类型，PR 工作流还会对变化文件执行 --changed 元数据门禁；完整 Checkstyle 规则由 Java Style Audit 执行。PR-02 先建立存量审计，PR-03 至 PR-06 分模块整改，PR-07 统一开启全量元数据零违规门禁。
@@ -39,3 +39,11 @@ mvn -B -ntp clean verify -Pquality
 ## 社区和安全
 
 请遵守 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)；安全漏洞按 [SECURITY.md](SECURITY.md) 中的私密途径报告，不在公开 Issue 中发布敏感细节。
+
+
+## 依赖与首发候选贡献规范（U14）
+
+- OSV Scanner 新增依赖漏洞告警先评估可达性与修复方案；例外须由维护者记录风险、责任人、期限，不通过关闭检查绕过。
+- Maven/GitHub Actions 依赖使用 Dependabot 月度分组，以减少无意义的 CI；不要在同一个 PR 混合无关升级。
+- `first-release-dry-run.yml` 只提供无凭据 RC/GA 构建证据，**不包括发布、签名或 Tag**。代码合并不授权实际发行。
+- 所有提交须通过准确 Head 和合并后 main CI；Fixed Runner 受控性能证据与共享 Runner Smoke 严格区分。

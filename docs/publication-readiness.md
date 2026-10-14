@@ -1,6 +1,6 @@
 # OTRYX RPC 公开发布与品牌权利核查
 
-> 更新日期：2026-10-10。本文记录可验证的工程事实与尚未满足的外部条件，**不是商标法律意见、域名所有权证明或 Central 账号授权结果**。
+> 更新日期：2026-10-14。本文记录可验证的工程事实与尚未满足的外部条件，**不是商标法律意见、域名所有权证明或 Central 账号授权结果**。
 
 ## 一、工程与仓库状态
 
@@ -63,7 +63,7 @@
 - **语义化版本**：`1.0.0-SNAPSHOT` 为开发版；升级 Java 包名、GAV 和部分公开 API 属于 Breaking Change；Wire v1 冻结键保持不变。
 - **Central**：发布前确认已取得 `com.peachsoft.otryx` 命名空间使用权，Maven Central 坐标未被占用，生成主 JAR + Sources + Javadoc + GPG 签名，验证 POM/SCM/许可证/依赖元数据。
 - **凭据**：使用 GitHub Repository Secrets 配置 `CENTRAL_USERNAME`、`CENTRAL_PASSWORD`、`MAVEN_GPG_PRIVATE_KEY`、`MAVEN_GPG_PASSPHRASE`；禁止回显或提交。
-- **发布工作流**：现有 `.github/workflows/release.yml` 仍是历史 1.0.x Patch 专用，**不可用于发布 OTRYX 1.0 GA**。正式发布需另行实施 OTRYX 首发专用 Release Candidate/GA 流程并完成相应权限审批。
+- **发布工作流**：历史 `.github/workflows/release.yml` 仅面向历史 1.0.x Patch；开发源码增加明确拒绝，不可用来发布 OTRYX 首发。独立 `.github/workflows/first-release-dry-run.yml` 提供 RC1/GA 候选构建、CycloneDX SBOM 和校验清单，**不签名、不创建 Tag、不上传 Central**。正式发布须另行授权和演练。
 - **第一次发布**：建议 Central `autoPublish=false`，由维护者在 Portal 验证 Bundle 后人工确认发布。未经以上授权不要触发 Central/GitHub Release 或创建 GA Tag。
 - **回滚**：保留旧版稳定分支。跨 Peach RPC 1.x 与 OTRYX 1.0 的 Type ID、Method ID、Schema Fingerprint 变化不等同于 Wire 协议级兼容保证。
 
@@ -81,3 +81,15 @@
 - [ ] 由维护者授权实际公开发布。
 
 **只有以上阻塞项完成，才能将“工程可构建”推进为“具备正式公开发布条件”。**
+
+
+## 七、首发 Dry-run 边界（2026-10-14）
+
+- `first_release_dry_run.py` 仅允许临时 Maven 版本 `1.0.0-RC1` 或 `1.0.0`；根 POM 和 `release-status.properties` 保持 `1.0.0-SNAPSHOT`。
+- `test_first_release_dry_run.py` 覆盖非法版本、缺失 Sources、SBOM 版本漂移、无效 SHA 和开发状态变更时的拒绝行为。
+- 签名验证、Maven Central Namespace Verified、品牌素材权属和实际发行授权不由 unsigned dry-run 代替。
+- 每次候选运行应记录确切 Commit SHA、Workflow、完整 CI、SBOM 和 Checksum；**PR 合并不代表手动 RC/GA Dry-run 已执行**。
+
+详见 [首发验收与供应链](reference/first-release-acceptance.md)。
+
+**安全扫描实施说明：** GitHub Dependency Graph 尚未启用，因此改为 `dependency-review.yml` 中固定完整 Commit SHA 的 OSV Scanner PR Base/Head 差异扫描。新增已知漏洞阻断，原有风险仍需维护者登记；扫描失败时不能假定没有漏洞。

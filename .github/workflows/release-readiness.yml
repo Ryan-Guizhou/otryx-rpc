@@ -23,6 +23,11 @@ on:
       - 'scripts/check_central_publication.py'
       - 'scripts/check_release_version.py'
       - 'scripts/check_release_readiness.py'
+      - 'scripts/first_release_dry_run.py'
+      - 'scripts/test_first_release_dry_run.py'
+      - '.github/workflows/first-release-dry-run.yml'
+      - '.github/workflows/dependency-review.yml'
+      - '.github/dependabot.yml'
       - '.github/workflows/release-readiness.yml'
       - '.github/workflows/release.yml'
       - 'pom.xml'
@@ -36,9 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: '21'
@@ -61,6 +66,15 @@ jobs:
       - name: Verify OTRYX migration readiness
         if: ${{ endsWith(steps.release.outputs.version, '-SNAPSHOT') }}
         run: python3 scripts/check_migration_readiness.py
+
+      - name: Verify unsigned RC/GA dry-run contract and negative fixtures
+        if: ${{ endsWith(steps.release.outputs.version, '-SNAPSHOT') }}
+        run: |
+          python3 scripts/test_first_release_dry_run.py
+          python3 scripts/first_release_dry_run.py \
+            --stage rc1 --version 1.0.0-RC1 --preflight-only
+          python3 scripts/first_release_dry_run.py \
+            --stage ga --version 1.0.0 --preflight-only
 
       - name: Verify migration Maven reactor
         if: ${{ endsWith(steps.release.outputs.version, '-SNAPSHOT') }}
@@ -107,7 +121,7 @@ jobs:
 
       - name: Upload release artifact inventory
         if: ${{ !endsWith(steps.release.outputs.version, '-SNAPSHOT') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: otryx-release-readiness-${{ steps.release.outputs.version }}-${{ github.run_id }}
           path: target/release-artifacts.txt

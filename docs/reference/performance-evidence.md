@@ -162,3 +162,10 @@ java -jar otryx-benchmarks/target/benchmarks.jar ObservabilityPathBenchmark -pro
 ~~~
 
 该基准**不包含**网络、真实 Exporter、活动的 JFR Recording、采样处理器，也不会输出生产容量。固定环境对比需要记录 Runner/CPU/JVM/SHA/JFR 事件策略并执行至少三轮 AB/BA，再结合真实链路 p99/p99.9、heap/GC 和 10k logical-concurrency Soak 验证。目前不将缺失的受控测量宣称为验收完成。
+
+
+## 13. U13 首发性能证据状态（2026-10-14）
+
+当前已有 JMH、Allocation Profiling、Benchmark Matrix、共享 Runner 10k logical concurrency Smoke 和证据校验工具。**尚无可核验的固定物理主机、同一版本至少三轮 AB/BA 和 60 分钟正式 Soak 原始证据**，因此不宣称 U13 受控性能验收完成，也不发布官方 QPS/Core、p99/p99.9、B/op 或容量数字。
+
+需要维护者指定真实物理主机及环境指纹、JDK/JVM 参数、负载矩阵和测前确定的验收阈值，才可运行受控实验并审批 Evidence Report。没有测量证据时不应引入猜测性的零拷贝或压缩优化；Shared Runner Smoke 仅证明工具可运行。

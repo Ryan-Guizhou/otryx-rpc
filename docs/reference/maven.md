@@ -260,3 +260,22 @@ python3 scripts/test_wrapper_contract.py
 ~~~
 
 Windows CMD/PowerShell 使用 `mvnw.cmd --version` 和 `mvnw.cmd -B -ntp clean verify -Pquality`。Wrapper 只固定 Maven 版本，**不提供 JDK**，运行前必须显式选择 JDK 21。现有发布配置不因 Wrapper 增加而自动签名、上传 Central 或打 Tag。
+
+
+## 8. OTRYX 首发 RC1 / GA 无发布 Dry-run（U14）
+
+`first-release-dry-run.yml` 是首发独立构建入口，`workflow_dispatch` 只能选择 `rc1` 或 `ga`，对应临时 Maven `-Drevision` 为 `1.0.0-RC1` 或 `1.0.0`。不会改写根 POM 或 Snapshot 版本状态，也不签名、不创建 Tag、不上传 Maven Central。
+
+从仓库根目录运行负面证据测试和静态预检：
+
+~~~bash
+python3 scripts/test_first_release_dry_run.py
+python3 scripts/first_release_dry_run.py --stage rc1 --version 1.0.0-RC1 --preflight-only
+python3 scripts/first_release_dry_run.py --stage ga --version 1.0.0 --preflight-only
+~~~
+
+手动完整 Dry-run 构建全部公开模块的 Main/Sources/Javadoc JAR，用固定 `org.cyclonedx:cyclonedx-maven-plugin:2.9.3` 生成 Aggregate CycloneDX `target/bom.json`，随后核验精确源码 SHA、SBOM 版本及每个产物的 SHA256，归档 `manifest.json`、`SHA256SUMS` 与 `bom.json`。这些仅是 **unsigned evidence**，不是已签发 GA 的发行包。
+
+依赖变更由固定 SHA 的 OSV Scanner PR 差异扫描（新增漏洞阻断）与 Dependabot 月度分组更新审核。依赖漏洞例外需要维护者评估可达性、实际影响并记录责任人和复核期限；禁止无期限全局忽略。
+
+正式签名、Central Namespace 权限、商标/素材权属和真实用户应用的干净仓库消费测试需要独立验收。详见 [首发验收与供应链](first-release-acceptance.md)。
