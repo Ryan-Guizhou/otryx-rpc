@@ -44,7 +44,7 @@
         <maven.compiler.release>${java.version}</maven.compiler.release>
 
         <spring.boot.version>3.5.4</spring.boot.version>
-        <vertx.version>4.5.34</vertx.version>
+        <vertx.version>5.2.1</vertx.version>
         <jetcd.version>0.8.7</jetcd.version>
         <nacos.version>3.2.4</nacos.version>
         <fory.version>1.5.0</fory.version>
