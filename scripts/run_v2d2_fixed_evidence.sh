@@ -4,7 +4,7 @@ set -euo pipefail
 OUTPUT_DIR="${1:-target/v2d2-fixed-evidence}"
 PROFILE="${OTRYX_RPC_EVIDENCE_PROFILE:-full}"
 CONCURRENCY="${OTRYX_RPC_SOAK_CONCURRENCY:-10000}"
-DURATION_SECONDS="${OTRYX_RPC_SOAK_DURATION_SECONDS:-1800}"
+DURATION_SECONDS="${OTRYX_RPC_SOAK_DURATION_SECONDS:-3600}"
 PAYLOAD_SIZE="${OTRYX_RPC_SOAK_PAYLOAD_SIZE:-256}"
 CONNECTIONS="${OTRYX_RPC_SOAK_CONNECTIONS:-4}"
 WARMUP_SECONDS="${OTRYX_RPC_SOAK_WARMUP_SECONDS:-30}"
@@ -28,8 +28,8 @@ if [[ -z "${OTRYX_RPC_RUNNER_ID:-}" ]]; then
   echo "OTRYX_RPC_RUNNER_ID must identify the fixed performance runner" >&2
   exit 1
 fi
-if (( DURATION_SECONDS < 1800 )); then
-  echo "Fixed production evidence requires at least 1800 soak seconds" >&2
+if (( DURATION_SECONDS < 3600 )); then
+  echo "Fixed production evidence requires at least 3600 soak seconds" >&2
   exit 1
 fi
 if (( CONCURRENCY < 10000 )); then
@@ -37,7 +37,7 @@ if (( CONCURRENCY < 10000 )); then
   exit 1
 fi
 # A configured 10k worker count alone does not prove 10k actual inflight calls.
-# Require operator-selected quality thresholds before starting a 30+ minute run.
+# Require operator-selected quality thresholds before starting a 60+ minute run.
 if [[ -z "$MAX_ERROR_RATE" || -z "$MIN_OBSERVED_INFLIGHT" ]]; then
   echo "Controlled soak requires OTRYX_RPC_SOAK_MAX_ERROR_RATE and OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT" >&2
   exit 1
@@ -81,7 +81,7 @@ if [[ -n "$BASELINE" ]]; then
   python3 scripts/check_v2d2_runner_baseline.py     --environment "$OUTPUT_DIR/environment.properties"     --baseline "$BASELINE"     --initialize-if-missing
 fi
 
-mvn -B -ntp -pl otryx-benchmarks -am clean package -DskipTests
+./mvnw -B -ntp -pl otryx-benchmarks -am clean package -DskipTests
 
 bash scripts/run_v2d2_benchmark_matrix.sh   full   "$OUTPUT_DIR/matrix"
 
@@ -99,7 +99,7 @@ if [[ -n "$MAX_P99_MICROS" ]]; then
 fi
 python3 scripts/check_soak_quality.py "${POLICY_ARGS[@]}"
 
-python3 scripts/validate_v2d2_evidence.py   --environment "$OUTPUT_DIR/environment.properties"   --matrix-dir "$OUTPUT_DIR/matrix"   --soak "$OUTPUT_DIR/soak.json"   --profile full   --require-matrix   --require-soak   --require-controlled   --min-soak-seconds 1800   --min-concurrency 10000   --output-dir "$OUTPUT_DIR"
+python3 scripts/validate_v2d2_evidence.py   --environment "$OUTPUT_DIR/environment.properties"   --matrix-dir "$OUTPUT_DIR/matrix"   --soak "$OUTPUT_DIR/soak.json"   --profile full   --require-matrix   --require-soak   --require-controlled   --min-soak-seconds 3600   --min-concurrency 10000   --output-dir "$OUTPUT_DIR"
 
 python3 scripts/generate_v2d2_decision_report.py   --environment "$OUTPUT_DIR/environment.properties"   --matrix-summary "$OUTPUT_DIR/matrix/summary.csv"   --soak "$OUTPUT_DIR/soak.json"   --output-dir "$OUTPUT_DIR"
 

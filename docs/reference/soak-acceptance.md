@@ -1,6 +1,6 @@
 # OTRYX RPC 长稳 Soak 质量门禁与高可用验收
 
-> 状态：**质量门禁已实现；固定主机 30 分钟以上运行与生产 SLO 仍待真实证据**。
+> 状态：**质量门禁已实现；固定主机 60 分钟以上运行与生产 SLO 仍待真实证据**。
 
 ## 1. 为什么需要另一道门
 
@@ -45,14 +45,14 @@ flowchart LR
 export OTRYX_RPC_RUNNER_ID="<fixed-runner-id>"
 export OTRYX_RPC_EVIDENCE_CLASS="controlled"
 export OTRYX_RPC_SOAK_CONCURRENCY="10000"
-export OTRYX_RPC_SOAK_DURATION_SECONDS="1800"
+export OTRYX_RPC_SOAK_DURATION_SECONDS="3600"
 export OTRYX_RPC_SOAK_MAX_ERROR_RATE="<your-error-rate-limit>"
 export OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT="<your-measured-concurrency-floor>"
 # 可选：OTRYX_RPC_SOAK_MAX_P99_MICROS="<your-p99-budget>"
 bash scripts/run_v2d2_fixed_evidence.sh target/v2d2-fixed-evidence
 ```
 
-这些占位符必须换成可解析的实际值。完整受控流程包括机器指纹预检、全矩阵 JMH、至少 1800 秒 Soak、阈值验证与证据包清单。该流程在触发超标时**非零退出**，不会生成错误的“验收通过”结论。
+这些占位符必须换成可解析的实际值。完整受控流程包括机器指纹预检、全矩阵 JMH、至少 3600 秒 Soak、阈值验证与证据包清单。该流程在触发超标时**非零退出**，不会生成错误的“验收通过”结论。
 
 质量报告：
 - `soak-smoke-quality/report.json`：仅结构检查，不代表 SLO；
@@ -75,5 +75,21 @@ bash scripts/run_v2d2_fixed_evidence.sh target/v2d2-fixed-evidence
 
 **已实现**：代码级结构与策略校验、失败阻断、不可复用的原始数据摘要、负面单元测试、原有 Chaos/Compatibility workflow。
 
-**待运行/提交真实证据**：目标规格固定 Runner、至少三次受控重复、30 分钟长稳（必要时延长至数小时/24h）、TLS/mTLS 和故障注入矩阵结果、allocation/profiling、实际 SLO 判断。
+**待运行/提交真实证据**：目标规格固定 Runner、至少三次受控重复、60 分钟长稳（必要时延长至数小时/24h）、TLS/mTLS 和故障注入矩阵结果、allocation/profiling、实际 SLO 判断。
 
+
+
+## 6. U13 受控 AB/BA 验收（新增工具）
+
+固定测试主机验证完整执行三对实验，运行顺序必须为 **Baseline → Candidate → Candidate → Baseline → Baseline → Candidate**，每个单独实验均要求 >=3600 秒真实 Soak、>=10000 配置逻辑并发、明确指定的实际在途下限、错误率上限和可选 p99 上限。启动前必须设置 Runner ID、期望主机指纹、完整 Commit SHA、JVM Flags。
+
+`scripts/check_v2d2_runner_baseline.py` 只比较固定硬件与 JVM 环境属性，**Commit SHA 不再作为硬件基线字段**：不同版本共用同一主机时可以通过基线核验，版本来源则由每个 Evidence Bundle 及 `check_u13_campaign.py` 单独校验。
+
+在两份代码版本各运行三次 `scripts/run_v2d2_fixed_evidence.sh`，按上述顺序组织六个不可覆盖的目录，然后按 [性能证据指南](performance-evidence.md) 生成 Campaign JSON 并执行：
+
+~~~bash
+python3 scripts/test_u13_campaign.py
+python3 scripts/check_u13_campaign.py --campaign target/u13-campaign.json --output-dir target/u13-campaign-report
+~~~
+
+该工具重新核验每次运行的 SHA256 清单、Runner/Commit、受控策略、最低观测在途量、持续时长、Full Matrix 已有报告及六次样本的环境同一性；输出 **REPORT_ONLY** 和各版本三次样本描述统计，**不是**自动的生产容量认证。没有真实硬件证据时不能声称首发性能门槛已完成。

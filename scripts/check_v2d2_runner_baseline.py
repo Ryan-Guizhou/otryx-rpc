@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 STABLE_KEYS = (
-    "commit",
+    # Git commit is a run provenance field, not an attribute of fixed hardware.
     "evidence_class",
     "runner_id",
     "host_fingerprint_sha256",

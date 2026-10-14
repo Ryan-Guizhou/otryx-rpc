@@ -49,3 +49,8 @@ flowchart LR
 相关：[公开发布核查](../publication-readiness.md) · [性能证据](performance-evidence.md) · [历史发行边界](../archive/releases/release-readiness.md)。
 
 **当前结论：候选构建具有执行入口，不等于 GA Ready 或 Published。**
+
+
+## U13 性能工具新增边界
+
+`check_u13_campaign.py` 以 AB BA AB 六个受控 Evidence Bundle 为输入校验源 Commit、固定 Runner 硬件/虚拟机指纹、JVM、每次至少 3600 秒 Soak、10000 逻辑并发、实际在途阈值和 SHA256 完整性。它仅提供 `REPORT_ONLY`；真实运行、风险阈值与人工性能评审仍是发布前的独立证据要求。

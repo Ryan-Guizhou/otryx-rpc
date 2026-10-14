@@ -13,7 +13,7 @@ command_required() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
-for command_name in git java mvn python3 openssl lscpu awk getconf sha256sum; do
+for command_name in git java python3 openssl lscpu awk getconf sha256sum; do
   command_required "$command_name"
 done
 
@@ -60,7 +60,9 @@ if [[ -z "$JAVA_MAJOR" ]]; then
 fi
 [[ "$JAVA_MAJOR" == "21" ]] || fail "JDK 21 is required, found: $JAVA_LINE"
 
-MAVEN_LINE="$(mvn -version 2>&1 | head -n 1)"
+[[ -x ./mvnw ]] || fail "Controlled run must use the checked-in executable ./mvnw"
+MAVEN_VERSION_OUTPUT="$(./mvnw -version 2>&1)" || fail "Maven Wrapper failed"
+MAVEN_LINE="$(printf '%s\n' "$MAVEN_VERSION_OUTPUT" | grep -m1 '^Apache Maven ')"
 MAVEN_VERSION="$(printf '%s' "$MAVEN_LINE" | awk '{print $3}')"
 MAVEN_MAJOR="$(printf '%s' "$MAVEN_VERSION" | cut -d. -f1)"
 MAVEN_MINOR="$(printf '%s' "$MAVEN_VERSION" | cut -d. -f2)"

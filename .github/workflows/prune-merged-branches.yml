@@ -1,5 +1,9 @@
 name: Safe merged branch cleanup
 
+# This repository-controlled job only prunes confirmed merged main ancestors.
+# Open PR heads and stable/release/support/maintenance/archive branches remain protected.
+# Updating this file intentionally triggers one safe post-merge cleanup pass.
+
 on:
   push:
     branches:

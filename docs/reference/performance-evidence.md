@@ -169,3 +169,37 @@ java -jar otryx-benchmarks/target/benchmarks.jar ObservabilityPathBenchmark -pro
 当前已有 JMH、Allocation Profiling、Benchmark Matrix、共享 Runner 10k logical concurrency Smoke 和证据校验工具。**尚无可核验的固定物理主机、同一版本至少三轮 AB/BA 和 60 分钟正式 Soak 原始证据**，因此不宣称 U13 受控性能验收完成，也不发布官方 QPS/Core、p99/p99.9、B/op 或容量数字。
 
 需要维护者指定真实物理主机及环境指纹、JDK/JVM 参数、负载矩阵和测前确定的验收阈值，才可运行受控实验并审批 Evidence Report。没有测量证据时不应引入猜测性的零拷贝或压缩优化；Shared Runner Smoke 仅证明工具可运行。
+
+
+## 14. U13 三轮 AB/BA 固定主机证据审查
+
+`scripts/run_v2d2_fixed_evidence.sh` 现在要求至少 **3600 秒**连续测量和 **10000 逻辑并发调用者**。`performance-evidence.yml` 的 controlled 路径要求自托管 Runner、固定主机指纹、Full Matrix、正式 Soak 和测前定义的 `soak_max_error_rate` / `soak_min_observed_inflight` / 可选 `soak_max_p99_micros`；原先受控工作流缺失的 Soak Policy Report 已被补齐。
+
+单次运行仍不能证明低尾延迟和分配稳定性。收集两个完整 Commit 在同一硬件上的六份不可覆盖 Evidence Bundle，按 **A B B A A B** 顺序，建议把下方 JSON 存为 `target/u13-campaign.json`：
+
+~~~json
+{
+  "schemaVersion": 1,
+  "baselineSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "candidateSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "runs": [
+    {"side": "baseline", "path": "u13-A1"},
+    {"side": "candidate", "path": "u13-B1"},
+    {"side": "candidate", "path": "u13-B2"},
+    {"side": "baseline", "path": "u13-A2"},
+    {"side": "baseline", "path": "u13-A3"},
+    {"side": "candidate", "path": "u13-B3"}
+  ]
+}
+~~~
+
+这里的 SHA 仅为**格式占位符**，实际执行必须替换为两个不同的 Git 完整 SHA；六个 `path` 都相对于 Campaign JSON 所在目录。每个 Bundle 必须包含有效的 `environment.properties`、`matrix/summary.csv`、`soak.json`、`soak-policy/report.json`、`validation-report.json`、`decision-inputs.json` 和 `evidence-manifest.json`。
+
+~~~bash
+python3 scripts/test_u13_campaign.py
+python3 scripts/check_u13_campaign.py --campaign target/u13-campaign.json --output-dir target/u13-report
+~~~
+
+校验通过仍返回 `REPORT_ONLY`（原始数据未经过独立真实性审计），输出同硬件三次 Baseline/Candidate 中位 QPS、p99 和错误率；需人工评审独立的 `gc.alloc.rate.norm`、JFR/JVM 分配剖析、CPU/GC/heap、方差/置信区间、异常拒绝和端到端 p99/p99.9，再决定是否实施特定热点改造。对每个优化候选必须额外证明 Wire、限流、取消与资源 Lease 语义无回归。
+
+**当前工程状态：验收工具实现，真实固定 Runner 的六次长稳试验尚未执行。** 不得将测试用合成 Fixtures 或 Shared CI Smoke 表述为性能数字。
