@@ -2,10 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROVIDER_JAR="$(find "$ROOT_DIR/otryx-examples/otryx-example-provider/target" -maxdepth 1 -name '*-exec.jar' -print -quit)"
-CONSUMER_JAR="$(find "$ROOT_DIR/otryx-examples/otryx-example-consumer/target" -maxdepth 1 -name '*-exec.jar' -print -quit)"
+PROVIDER_JAR="$(find "$ROOT_DIR/otryx-examples/otryx-example-provider/target" \
+  -maxdepth 1 -name '*-exec.jar' -print -quit)"
+CONSUMER_JAR="$(find "$ROOT_DIR/otryx-examples/otryx-example-consumer/target" \
+  -maxdepth 1 -name '*-exec.jar' -print -quit)"
 NACOS_ENDPOINT="${NACOS_TEST_ENDPOINT:-127.0.0.1:8848}"
 RESTART_NACOS="${OTRYX_RPC_E2E_RESTART_NACOS:-${CI:-false}}"
+# Explicit freshness budget exercises LKG recovery; short outages may never enter STALE.
+MAX_STALENESS="${OTRYX_RPC_E2E_MAX_STALENESS:-3s}"
 
 if [[ -z "$PROVIDER_JAR" || -z "$CONSUMER_JAR" ]]; then
   echo "Executable example JARs were not found. Build the reactor first." >&2
@@ -118,6 +122,7 @@ probe_fresh_consumer() {
     : >"$probe_log"
     java -jar "$CONSUMER_JAR" \
       --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
+      --otryx.rpc.client.directory-max-staleness="$MAX_STALENESS" \
       >"$probe_log" 2>&1 &
     probe_pid=$!
 
@@ -149,6 +154,7 @@ start_provider 19090
 
 java -jar "$CONSUMER_JAR" \
   --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
+  --otryx.rpc.client.directory-max-staleness="$MAX_STALENESS" \
   --otryx.rpc.example.repeat-interval-millis=200 \
   --otryx.rpc.client.resilience.circuit-open-duration=500ms \
   --otryx.rpc.client.resilience.outlier-ejection-duration=500ms \
