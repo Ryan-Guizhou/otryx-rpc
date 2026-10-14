@@ -63,6 +63,9 @@ public final class MicrometerRpcObserver implements RpcObserver {
     private static final String METRIC_SERVER_FAILURES = "otryx.rpc.server.failures";
     private static final String METRIC_SERVER_OVERLOADED = "otryx.rpc.server.overloaded";
     private static final String METRIC_CLIENT_CIRCUIT_STATE = "otryx.rpc.client.circuit.state";
+    private static final String METRIC_CIRCUIT_TRACKING_DROPPED =
+            "otryx.rpc.client.circuit.tracking.dropped";
+    private static final int DEFAULT_MAX_TRACKED_CIRCUITS = 4096;
     private static final String TAG_REGISTRY = "registry";
     private static final String TAG_ROLE = "role";
     private static final String TAG_REASON = "reason";
@@ -78,6 +81,8 @@ public final class MicrometerRpcObserver implements RpcObserver {
     private static final String OUTCOME_FAILURE = "FAILURE";
 
     private final MeterRegistry registry;
+    private final int maxTrackedCircuits;
+    private final AtomicInteger trackedCircuitCount = new AtomicInteger();
     private final AtomicInteger activeConnections =
             new AtomicInteger();
     private final AtomicInteger clientInflight =
@@ -101,9 +106,21 @@ public final class MicrometerRpcObserver implements RpcObserver {
      * @param registry MeterRegistry
      */
     public MicrometerRpcObserver(MeterRegistry registry) {
-        this.registry = Objects.requireNonNull(
-                registry,
-                "registry");
+        this(registry, DEFAULT_MAX_TRACKED_CIRCUITS);
+    }
+
+    /**
+     * 创建有界 Circuit 状态表的指标适配器。
+     *
+     * @param registry 指标注册器
+     * @param maxTrackedCircuits 最大被跟踪的服务/方法 Circuit 数量
+     */
+    public MicrometerRpcObserver(MeterRegistry registry, int maxTrackedCircuits) {
+        if (maxTrackedCircuits <= 0) {
+            throw new IllegalArgumentException("maxTrackedCircuits must be positive");
+        }
+        this.maxTrackedCircuits = maxTrackedCircuits;
+        this.registry = Objects.requireNonNull(registry, "registry");
         Gauge.builder(
                         METRIC_CONNECTION_ACTIVE,
                         activeConnections,
@@ -203,7 +220,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
         timer(
                 METRIC_REGISTRY_OPERATIONS,
                 TAG_REGISTRY,
-                safe(registryType),
+                registryLabel(registryType),
                 TAG_OPERATION,
                 operation.name(),
                 TAG_OUTCOME,
@@ -214,7 +231,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
             registry.counter(
                             METRIC_REGISTRY_FAILURES,
                             TAG_REGISTRY,
-                            safe(registryType),
+                            registryLabel(registryType),
                             TAG_OPERATION,
                             operation.name())
                     .increment();
@@ -230,7 +247,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
         timer(
                 METRIC_REGISTRY_RECOVERIES,
                 TAG_REGISTRY,
-                safe(registryType),
+                registryLabel(registryType),
                 TAG_ACTION,
                 action.name(),
                 TAG_OUTCOME,
@@ -349,13 +366,16 @@ public final class MicrometerRpcObserver implements RpcObserver {
                 + '#'
                 + methodId;
         circuitStates.compute(key, (ignored, previous) -> {
+            if (previous == null && !reserveCircuitSlot()) {
+                registry.counter(METRIC_CIRCUIT_TRACKING_DROPPED).increment();
+                return null;
+            }
             if (previous == state) {
                 return state;
             }
             if (previous != null) {
-                circuitCounter(previous)
-                        .updateAndGet(value ->
-                                Math.max(0, value - 1));
+                circuitCounter(previous).updateAndGet(value ->
+                        Math.max(0, value - 1));
             }
             circuitCounter(state).incrementAndGet();
             return state;
@@ -439,7 +459,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
         registry.counter(
                         METRIC_SERVER_ADMISSION_REJECTED,
                         TAG_REASON,
-                        safe(reason))
+                        admissionReasonLabel(reason))
                 .increment();
     }
 
@@ -480,6 +500,22 @@ public final class MicrometerRpcObserver implements RpcObserver {
         }
     }
 
+    /**
+     * 使用原子计数预留有界的状态追踪槽位；不同方法不持有同一全局锁。
+     *
+     * @return 成功预留时为 true
+     */
+    private boolean reserveCircuitSlot() {
+        int current;
+        do {
+            current = trackedCircuitCount.get();
+            if (current >= maxTrackedCircuits) {
+                return false;
+            }
+        } while (!trackedCircuitCount.compareAndSet(current, current + 1));
+        return true;
+    }
+
     private void registerCircuitGauge(
             RpcCircuitState state,
             AtomicInteger value) {
@@ -512,9 +548,37 @@ public final class MicrometerRpcObserver implements RpcObserver {
         return error == null ? OUTCOME_SUCCESS : OUTCOME_FAILURE;
     }
 
-    private static String safe(String value) {
-        return value == null || value.isBlank()
-                ? "unknown"
-                : value;
+    /**
+     * Registry 类型只保留内置枚举集合，未识别字符串归并为固定 custom 标签。
+     *
+     * @param value 原始 Registry Type
+     * @return 低基数标签
+     */
+    private static String registryLabel(String value) {
+        if (value == null) {
+            return "custom";
+        }
+        return switch (value) {
+            case "memory", "etcd", "nacos", "consul", "eureka" -> value;
+            default -> "custom";
+        };
+    }
+
+    /**
+     * Provider 拒绝原因使用固定字典，阻断动态任意字符注入 Meter 标签。
+     *
+     * @param value 原始原因
+     * @return 有界标签
+     */
+    private static String admissionReasonLabel(String value) {
+        if (value == null) {
+            return "other";
+        }
+        return switch (value) {
+            case "global-concurrency", "service-concurrency", "method-concurrency",
+                    "global-inflight-bytes", "service-inflight-bytes", "method-inflight-bytes",
+                    "frame-exceeds-budget", "cpu-queue" -> value;
+            default -> "other";
+        };
     }
 }

@@ -3,6 +3,7 @@ package com.peachsoft.otryx.observability.micrometer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.peachsoft.otryx.api.RpcEndpoint;
@@ -13,6 +14,8 @@ import com.peachsoft.otryx.observability.RpcConnectionCloseReason;
 import com.peachsoft.otryx.observability.RpcCircuitState;
 import com.peachsoft.otryx.observability.RpcConnectionRole;
 import com.peachsoft.otryx.observability.RpcRetryExhaustionReason;
+import com.peachsoft.otryx.observability.RpcRegistryOperation;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -195,6 +198,60 @@ class MicrometerRpcObserverTest {
                                 "otryx.rpc.connection.active")
                         .gauge()
                         .value());
+    }
+
+    @Test
+    void circuitStateTrackingMustStayBoundedAndAccountForOverflow() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        MicrometerRpcObserver observer = new MicrometerRpcObserver(registry, 2);
+        ServiceKey first = new ServiceKey("demo.A", "1.0.0", "default");
+        ServiceKey second = new ServiceKey("demo.B", "1.0.0", "default");
+        ServiceKey third = new ServiceKey("demo.C", "1.0.0", "default");
+
+        observer.onClientCircuitStateChanged(first, 1, RpcCircuitState.CLOSED);
+        observer.onClientCircuitStateChanged(second, 1, RpcCircuitState.OPEN);
+        observer.onClientCircuitStateChanged(third, 1, RpcCircuitState.HALF_OPEN);
+        observer.onClientCircuitStateChanged(first, 1, RpcCircuitState.OPEN);
+
+        assertEquals(0.0, registry.find("otryx.rpc.client.circuit.state")
+                .tag("state", "CLOSED").gauge().value());
+        assertEquals(2.0, registry.find("otryx.rpc.client.circuit.state")
+                .tag("state", "OPEN").gauge().value());
+        assertEquals(0.0, registry.find("otryx.rpc.client.circuit.state")
+                .tag("state", "HALF_OPEN").gauge().value());
+        assertEquals(1.0, registry.find("otryx.rpc.client.circuit.tracking.dropped")
+                .counter().count());
+        assertThrows(IllegalArgumentException.class,
+                () -> new MicrometerRpcObserver(new SimpleMeterRegistry(), 0));
+    }
+
+    @Test
+    void parallelCircuitCreationMustNeverExceedTrackingCapacity() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        MicrometerRpcObserver observer = new MicrometerRpcObserver(registry, 64);
+        IntStream.range(0, 256).parallel().forEach(index ->
+                observer.onClientCircuitStateChanged(
+                        new ServiceKey("demo." + index, "1.0.0", "default"),
+                        1, RpcCircuitState.OPEN));
+        assertEquals(64.0, registry.find("otryx.rpc.client.circuit.state")
+                .tag("state", "OPEN").gauge().value());
+        assertEquals(192.0, registry.find("otryx.rpc.client.circuit.tracking.dropped")
+                .counter().count());
+    }
+
+    @Test
+    void uncontrolledRegistryAndAdmissionTagsMustBeCollapsed() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        MicrometerRpcObserver observer = new MicrometerRpcObserver(registry);
+        String untrusted = "SECRET_CUSTOM_TENANT_ID";
+        observer.onRegistryOperationCompleted(
+                untrusted, RpcRegistryOperation.LOOKUP, 200L, new IllegalStateException(untrusted));
+        observer.onServerAdmissionRejected(1, 2, untrusted);
+
+        assertEquals("custom", registry.find("otryx.rpc.registry.operations")
+                .timer().getId().getTag("registry"));
+        assertEquals("other", registry.find("otryx.rpc.server.admission.rejected")
+                .counter().getId().getTag("reason"));
     }
 
     @Test

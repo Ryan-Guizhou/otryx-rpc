@@ -141,7 +141,8 @@ JFR 用于低频高价值诊断：慢/失败调用、Retry、reconnect、heartbe
 - key/value 不允许换行；
 - key 不允许 `=`；
 - key/value 有长度限制；
-- 总 metadata 最大 65535 bytes；
+- `RpcCallOptions` 传播元数据最多 64 项、总 UTF-8 字节预算 8KiB；
+- Wire 帧上限另行校验，不能替代应用 Metadata 校验；
 - Deadline/Timeout Budget 为保留键；
 - 未启用 Trace Adapter 时不创建额外 Trace Metadata。
 
@@ -150,6 +151,13 @@ JFR 用于低频高价值诊断：慢/失败调用、Retry、reconnect、heartbe
 > telemetry failure must not become RPC failure.
 
 Observer/Propagator Adapter 回调异常必须被隔离，不得改变 RPC 业务成功与否。
+
+Micrometer 的 Circuit 状态缓存默认最多跟踪 4096 个服务/方法组合，可通过
+`new MicrometerRpcObserver(registry, maxTrackedCircuits)` 显式调整容量。
+新增组合超过上限时累加低基数计数器 `otryx.rpc.client.circuit.tracking.dropped`，
+不会无限增加状态缓存；此时 Circuit Gauge 只表示已被跟踪的子集。
+未知 Registry 类型统一为 `custom`，未知 Admission 原因统一为 `other`，
+避免把自定义 SPI 名称或未经限制的字符串扩张为动态时序。
 
 ## 8. 生产入口
 
