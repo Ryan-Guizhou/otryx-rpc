@@ -68,7 +68,8 @@ public class GreetingRunner implements ApplicationRunner {
         long deadline =
                 System.nanoTime() + DISCOVERY_TIMEOUT.toNanos();
         RuntimeException lastFailure = null;
-        while (System.nanoTime() < deadline) {
+        while (shouldContinueDiscovery(
+                repeatIntervalMillis > 0L, System.nanoTime(), deadline)) {
             try {
                 if (useRelay) {
                     GreetingReply reply;
@@ -101,6 +102,22 @@ public class GreetingRunner implements ApplicationRunner {
                 "RPC demo could not discover a provider within "
                         + DISCOVERY_TIMEOUT,
                 lastFailure);
+    }
+
+    /**
+     * 决定示例是否继续等待服务发现。
+     *
+     * <p>一次性调用最多等待启动预算；显式重复调用模式在外部停止前持续恢复，
+     * 防止长时间 Registry 重启窗口提前终止独立 JVM 示例。
+     *
+     * @param repeating 是否处于重复调用模式
+     * @param nowNanos 本地单调时间
+     * @param deadlineNanos 一次性调用的截止时间
+     * @return 仍应等待时返回 true
+     */
+    static boolean shouldContinueDiscovery(
+            boolean repeating, long nowNanos, long deadlineNanos) {
+        return repeating || deadlineNanos - nowNanos > 0L;
     }
 
     /**
