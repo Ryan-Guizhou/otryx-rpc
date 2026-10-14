@@ -49,12 +49,20 @@ public final class ExampleCallObserver implements RpcObserver {
         }
     }
 
-    /** @return 当前成功逻辑请求数 */
+    /**
+     * 返回成功完成的逻辑调用数。
+     *
+     * @return 当前成功逻辑请求数
+     */
     public long successfulCalls() {
         return successfulCalls.sum();
     }
 
-    /** @return 当前失败逻辑请求数 */
+    /**
+     * 返回失败完成的逻辑调用数。
+     *
+     * @return 当前失败逻辑请求数
+     */
     public long failedCalls() {
         return failedCalls.sum();
     }

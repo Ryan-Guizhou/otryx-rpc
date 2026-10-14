@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.benchmarks;
 
+import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.observability.RpcObserver;
@@ -36,6 +37,8 @@ import org.openjdk.jmh.annotations.TearDown;
 public class ObservabilityPathBenchmark {
 
     private static final int METHOD_ID = 7;
+    private static final RpcEndpoint ENDPOINT =
+            new RpcEndpoint("127.0.0.1", 19090);
     private static final ServiceKey SERVICE_KEY =
             new ServiceKey("benchmark.Observability", "1.0.0", "default");
 
@@ -70,7 +73,14 @@ public class ObservabilityPathBenchmark {
     /** 测量没有启用 JFR Recording 时的调用事件路径。 */
     @Benchmark
     public void jfrDisabledLogicalCall() {
-        jfr.onClientCallCompleted(SERVICE_KEY, METHOD_ID, 100L, RpcStatus.OK, null);
+        jfr.onClientAttemptCompleted(
+                SERVICE_KEY,
+                METHOD_ID,
+                ENDPOINT,
+                1,
+                Duration.ofMillis(2).toNanos(),
+                RpcStatus.OK,
+                null);
     }
 
     /** 测量 OpenTelemetry NOOP 实现，不将其解释为完整 Exporter 的开销。 */
