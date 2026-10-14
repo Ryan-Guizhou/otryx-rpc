@@ -19,7 +19,7 @@ Provider 与 Consumer 都同时产出：
 
 ```bash
 docker compose -f otryx-examples/docker-compose.yml up -d
-mvn -B -ntp -pl otryx-examples -am clean package
+./mvnw -B -ntp -pl otryx-examples -am clean package
 java -jar otryx-examples/otryx-example-provider/target/*-exec.jar
 ```
 
@@ -49,7 +49,7 @@ Consumer 在启动阶段允许等待短暂的注册中心传播时间，但真�
 在本地启动官方示例 Nacos 后，先构建全部示例，再从仓库根目录运行：
 
 ```bash
-mvn -B -ntp -pl otryx-examples -am clean package
+./mvnw -B -ntp -pl otryx-examples -am clean package
 bash scripts/run_three_process_deadline_e2e.sh
 ```
 
@@ -143,7 +143,7 @@ N+1 Consumer -> N Provider rollback
 示例 Provider、Consumer 的 POM 均按需引入新增 Adapter，默认仍为 Nacos。先从项目根目录执行：
 
 ```bash
-mvn -B -ntp -pl otryx-examples -am clean package
+./mvnw -B -ntp -pl otryx-examples -am clean package
 ```
 
 确保已启动同一 Consul Agent（默认本地 `http://127.0.0.1:8500`）或 Eureka Server（默认本地 `http://127.0.0.1:8761/eureka`）。两个进程使用**相同**的 Spring Profile、Registry endpoint 和逻辑 namespace 启动：
@@ -178,7 +178,7 @@ java -jar otryx-examples/otryx-example-consumer/target/*-exec.jar --spring.profi
 可通过 `OTRYX_RPC_E2E_MAX_STALENESS` 覆盖。仅在**隔离 Docker 环境**测试 Nacos 容器重启：
 
 ```bash
-mvn -B -ntp -pl otryx-examples -am clean package
+./mvnw -B -ntp -pl otryx-examples -am clean package
 OTRYX_RPC_E2E_RESTART_NACOS=true OTRYX_RPC_E2E_MAX_STALENESS=3s \
   bash scripts/run_example_process_e2e.sh
 ```
@@ -187,3 +187,19 @@ OTRYX_RPC_E2E_RESTART_NACOS=true OTRYX_RPC_E2E_MAX_STALENESS=3s \
 Provider 地址 19090→19091 后恢复。短暂故障不保证每次进入 `STALE`：
 具体拒绝行为由 Core 的确定性单元测试断言。详见
 [Registry 健康与故障恢复](../docs/reference/registry-freshness.md)。
+
+
+## 自定义观测 SPI 与 Starter 覆盖（U11）
+
+`otryx-example-consumer` 在源码中带有 `ExampleCallObserver`：Spring 自动注册该轻量 Observer Bean，Consumer 每个逻辑调用终态只增加一次成功或失败计数，失败原因或 Metadata 不会流出该示例组件。
+
+~~~java
+@Component
+public final class ExampleCallObserver implements RpcObserver {
+    // 详细实现见本模块 src/main/java/.../ExampleCallObserver.java
+}
+~~~
+
+这个 Observer 不访问外部服务，因此不会阻塞 RPC 热路径。若改为 HTTP/数据库写入，应将其移出同步回调，使用有界异步出口并在应用停止时显式关闭；它不提供可靠业务消息投递语义。
+
+在仓库根目录运行 `./mvnw -B -ntp -pl otryx-examples -am clean package` 后，按上面的 Provider/Consumer 两终端步骤验证。Windows CMD/PowerShell 使用 `mvnw.cmd`；不能用各进程独立 Memory Registry 模拟共享发现。

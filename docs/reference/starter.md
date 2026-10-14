@@ -333,3 +333,16 @@ ServiceKey/MethodId 生成 `RpcAuthorizationContext`；若容器中声明
 `NETWORK_MTLS` Provider 未声明 `RpcAuthorizer` Bean 时默认拒绝所有方法，
 因此示例 mTLS 仅完成传输安全配置，并不自动授予业务访问；需要声明
 按证书身份和 ServiceKey/MethodId 验证的业务授权 Bean。
+
+
+## 可运行的自定义 Observer 接入示例（U11）
+
+Consumer 示例中的 [ExampleCallObserver](../../otryx-examples/otryx-example-consumer/src/main/java/com/peachsoft/otryx/examples/consumer/ExampleCallObserver.java) 直接实现 Core `RpcObserver` 并注册为 Spring `@Component`，按逻辑请求终态以 `LongAdder` 统计成功/失败次数。
+它不读取请求 Payload、不记录异常内容，也不在 RPC 线程执行 I/O。
+
+- Spring 可通过已注册的自定义 `RpcObserver` Bean 汇入 Coordinator 的复合 Observer；业务无需修改协议或 Core。
+- 自定义 `RpcTransportFactory` Bean 可覆盖 SPI 名称选择；已有 Bean 时 `@ConditionalOnMissingBean` 不再创建默认工厂。
+- 对可能阻塞的第三方遥测出口，使用 `new BoundedAsyncRpcObserver(delegate, queueCapacity)` 并明确关闭所有权；队列溢出丢弃遥测，不反向压制 RPC 业务。
+- [ExampleCallObserverTest](../../otryx-examples/otryx-example-consumer/src/test/java/com/peachsoft/otryx/examples/consumer/ExampleCallObserverTest.java) 与 `OtryxRpcAutoConfigurationTest` 校验计数和覆盖行为。
+
+本示例不包含持久化、Exactly-once 审计或网络外部 Exporter；直接在隔离开发环境运行上述双 JVM 示例即可触发回调。

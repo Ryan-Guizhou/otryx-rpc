@@ -58,14 +58,16 @@ Wire Protocol v1 的 32 字节 Header、消息和 Codec 标识、历史 Registry
 <!-- doc-section:quick-start -->
 ## 快速开始
 
-推荐 **JDK 21、Maven、Spring Boot 3.5.4**。本仓库尚处迁移开发版阶段，先从源码安装：
+推荐 **JDK 21、Spring Boot 3.5.4**。仓库内 Maven Wrapper 固定 Maven 3.9.11；首次运行需可连接 Maven Central。
 
 ~~~bash
-mvn -B -ntp clean install -DskipTests
-mvn -B -ntp clean verify -Pquality
+./mvnw -B -ntp clean install -DskipTests
+./mvnw -B -ntp clean verify -Pquality
 ~~~
 
-真实的 Provider / Consumer 独立进程示例见 [otryx-examples](otryx-examples/README.md)；详细启动方式见 [快速入门](docs/getting-started.md)。
+Windows CMD/PowerShell 使用 `mvnw.cmd` 替代 `./mvnw`，无需预装全局 Maven。
+
+真实的 Provider / Consumer 独立进程示例见 [otryx-examples](otryx-examples/README.md)；详细启动方式见 [快速入门](docs/getting-started.md)。Consumer 示例内的 `ExampleCallObserver` 演示可验证的自定义遥测 SPI 注入。
 
 <!-- doc-section:dependency -->
 ## Maven 坐标
