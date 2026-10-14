@@ -99,6 +99,12 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
     private void submit(Runnable task) {
         if (closed.get() || !queue.offer(task)) {
             droppedEvents.incrementAndGet();
+            return;
+        }
+        // close() may clear the queue between the first check and offer().
+        // Remove an event published after close without counting it twice.
+        if (closed.get() && queue.remove(task)) {
+            droppedEvents.incrementAndGet();
         }
     }
 
@@ -147,7 +153,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             RpcConnectionRole role,
             RpcEndpoint endpoint,
             long durationNanos) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onConnectionEstablished(
                     role,
                     endpoint,
@@ -160,7 +166,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             RpcEndpoint endpoint,
             int attempt,
             long delayMillis) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onConnectionReconnectScheduled(
                     endpoint,
                     attempt,
@@ -173,7 +179,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             RpcConnectionRole role,
             RpcEndpoint endpoint,
             long idleNanos) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onConnectionHeartbeatTimeout(
                     role,
                     endpoint,
@@ -187,7 +193,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             RpcEndpoint endpoint,
             RpcConnectionCloseReason reason,
             Throwable error) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onConnectionClosed(
                     role,
                     endpoint,
@@ -202,7 +208,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             RpcRegistryOperation operation,
             long durationNanos,
             Throwable error) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onRegistryOperationCompleted(
                     registryType,
                     operation,
@@ -217,7 +223,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             RpcRegistryRecoveryAction action,
             long durationNanos,
             Throwable error) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onRegistryRecoveryCompleted(
                     registryType,
                     action,
@@ -233,7 +239,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             RpcSecurityMode mode,
             long durationNanos,
             Throwable error) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onTlsHandshakeCompleted(
                     role,
                     endpoint,
@@ -249,7 +255,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             RpcCertificateReloadOutcome outcome,
             long durationNanos,
             Throwable error) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onCertificateReloadCompleted(
                     mode,
                     outcome,
@@ -262,7 +268,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
     public void onCertificateExpiryWarning(
             RpcSecurityMode mode,
             long remainingMillis) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onCertificateExpiryWarning(
                     mode,
                     remainingMillis));
@@ -278,7 +284,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             long durationNanos,
             RpcStatus status,
             Throwable error) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onClientAttemptCompleted(
                     serviceKey,
                     methodId,
@@ -316,7 +322,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             ServiceKey serviceKey,
             int methodId,
             RpcCircuitState state) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onClientCircuitStateChanged(
                     serviceKey,
                     methodId,
@@ -331,7 +337,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             long durationNanos,
             RpcStatus status,
             Throwable error) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onClientCallCompleted(
                     serviceKey,
                     methodId,
@@ -348,7 +354,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             int nextAttempt,
             long delayMillis,
             Throwable cause) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onClientRetryScheduled(
                     serviceKey,
                     methodId,
@@ -364,7 +370,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             int methodId,
             RpcRetryExhaustionReason reason,
             Throwable cause) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onClientRetryExhausted(
                     serviceKey,
                     methodId,
@@ -377,7 +383,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
     public void onClientCircuitRejected(
             ServiceKey serviceKey,
             int methodId) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onClientCircuitRejected(
                     serviceKey,
                     methodId));
@@ -389,7 +395,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             ServiceKey serviceKey,
             RpcEndpoint endpoint,
             long ejectionMillis) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onEndpointEjected(
                     serviceKey,
                     endpoint,
@@ -402,7 +408,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             int serviceId,
             int methodId,
             String reason) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onServerAdmissionRejected(
                     serviceId,
                     methodId,
@@ -418,7 +424,7 @@ public final class BoundedAsyncRpcObserver implements RpcObserver, AutoCloseable
             long durationNanos,
             RpcStatus status,
             Throwable error) {
-        if (enabled()) {
+        if (active) {
             submit(() -> delegate.onServerInvocationCompleted(
                     serviceId,
                     methodId,

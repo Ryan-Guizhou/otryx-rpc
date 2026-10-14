@@ -97,6 +97,7 @@ class BoundedAsyncRpcObserverTest {
             assertFalse(observer.enabled());
             observer.onClientCircuitRejected(key, 2);
             assertTrue(observer.droppedEvents() >= 1L);
+            assertEquals(0, observer.queuedEvents());
         } finally {
             observer.close();
         }
