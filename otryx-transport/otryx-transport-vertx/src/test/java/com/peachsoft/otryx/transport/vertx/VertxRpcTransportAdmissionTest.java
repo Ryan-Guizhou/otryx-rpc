@@ -377,8 +377,10 @@ class VertxRpcTransportAdmissionTest {
             socket.getOutputStream().write(request);
             socket.getOutputStream().flush();
             assertTrue(invoked.await(2, TimeUnit.SECONDS));
-            // 提前断连时 Socket.closeHandler 和 write Future 均可先到，
-            // 两条路径通过同一个幂等 Lease 归还额度。
+            // 用 TCP RST 明确测试中途异常断连，而非可能继续排队写的 TCP FIN。
+            // 已创建的响应写 Future 和 closeHandler 都必须以幂等 Lease 释放额度。
+            socket.setSoLinger(true, 0);
+            socket.close();
         } finally {
             await(() -> server.bufferedResponseBytes() == 0L);
             server.close();
