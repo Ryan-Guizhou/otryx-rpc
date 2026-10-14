@@ -1,4 +1,4 @@
-name: Dependency Review
+name: Dependency Vulnerability Review
 
 on:
   pull_request:
@@ -10,15 +10,18 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
-  dependency-review:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/dependency-review-action@05fe4576374b728f0c523d6a13d64c25081e0803 # v4.8.3
-        with:
-          fail-on-severity: critical
-          retry-on-snapshot-warnings: true
+  osv-diff:
+    permissions:
+      contents: read
+      actions: read
+    # Compare a complete scan of the base with the proposed pull request.
+    # This does not depend on repository Dependency Graph being enabled.
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@0a65f82af05cd58cf587827b0bb0489548c18346 # v2.7.0
+    with:
+      scan-args: |
+        --recursive
+        ./
+      fail-on-vuln: true
+      upload-sarif: false

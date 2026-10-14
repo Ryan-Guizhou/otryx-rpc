@@ -37,7 +37,7 @@ flowchart LR
 
 `python3 scripts/test_first_release_dry_run.py` 覆盖错误阶段/版本、缺失 Sources、错误 SBOM 版本、无效 SHA 与开发状态漂移。脚本只检验本地产物，**不能**替代 GPG 签名和 Central Portal 验证。
 
-`dependency-review.yml` 对新增 Critical 级别依赖风险阻断；暂时无法修复时维护者必须记录可达性、影响、责任人及复核期限。Dependabot 按月分组 Maven/Actions 更新；新增工作流 Actions 固定完整 Commit SHA。
+`dependency-review.yml` 通过 OSV Scanner 比较 Base/PR，阻断新引入的已知依赖漏洞，不要求开启 GitHub Dependency Graph；暂时无法修复时维护者必须记录可达性、影响、责任人及复核期限。Dependabot 按月分组 Maven/Actions 更新；新增工作流 Actions 固定完整 Commit SHA。
 
 ## 尚未关闭的外部和性能门槛
 

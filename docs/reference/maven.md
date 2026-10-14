@@ -276,6 +276,6 @@ python3 scripts/first_release_dry_run.py --stage ga --version 1.0.0 --preflight-
 
 手动完整 Dry-run 构建全部公开模块的 Main/Sources/Javadoc JAR，用固定 `org.cyclonedx:cyclonedx-maven-plugin:2.9.3` 生成 Aggregate CycloneDX `target/bom.json`，随后核验精确源码 SHA、SBOM 版本及每个产物的 SHA256，归档 `manifest.json`、`SHA256SUMS` 与 `bom.json`。这些仅是 **unsigned evidence**，不是已签发 GA 的发行包。
 
-依赖变更由固定 SHA 的 GitHub Dependency Review（Critical 级阻断）与 Dependabot 月度分组更新审核。依赖漏洞例外需要维护者评估可达性、实际影响并记录责任人和复核期限；禁止无期限全局忽略。
+依赖变更由固定 SHA 的 OSV Scanner PR 差异扫描（新增漏洞阻断）与 Dependabot 月度分组更新审核。依赖漏洞例外需要维护者评估可达性、实际影响并记录责任人和复核期限；禁止无期限全局忽略。
 
 正式签名、Central Namespace 权限、商标/素材权属和真实用户应用的干净仓库消费测试需要独立验收。详见 [首发验收与供应链](first-release-acceptance.md)。

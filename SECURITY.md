@@ -60,7 +60,7 @@ Spring Boot 接入要求明确设置 `otryx.rpc.security-profile`：`TRUSTED_DEV
 ## 供应链与依赖漏洞治理（U14）
 
 - Dependabot 按 Maven / GitHub Actions 每月分组更新，避免每个补丁分别触发 CI。
-- Dependency Review 对 PR 新增 Critical 级依赖漏洞阻断；High 和其他风险仍须结合可达性、部署和修复版本审查。
+- OSV Scanner 在 PR 中比较目标分支与提交分支，阻断新增的已知依赖漏洞（不仅限 Critical）；不依赖 GitHub Dependency Graph；High 和其他风险仍须结合可达性、部署和修复版本审查。
 - 无法立即修复时，维护者记录组件及版本、可达范围、缓解措施、责任人和复核日期，不允许永久例外。
 - RC/GA 候选应附准确源码 SHA、CycloneDX SBOM 和各发布模块的 SHA256。Unsigned dry-run 不能等同于 GPG 签名或 Central 上架。
 - 不因检查失败而关闭安全扫描；实际发行、权限修改或部署需独立授权。

@@ -91,3 +91,5 @@
 - 每次候选运行应记录确切 Commit SHA、Workflow、完整 CI、SBOM 和 Checksum；**PR 合并不代表手动 RC/GA Dry-run 已执行**。
 
 详见 [首发验收与供应链](reference/first-release-acceptance.md)。
+
+**安全扫描实施说明：** GitHub Dependency Graph 尚未启用，因此改为 `dependency-review.yml` 中固定完整 Commit SHA 的 OSV Scanner PR Base/Head 差异扫描。新增已知漏洞阻断，原有风险仍需维护者登记；扫描失败时不能假定没有漏洞。
