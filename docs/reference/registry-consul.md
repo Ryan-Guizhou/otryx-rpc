@@ -49,7 +49,11 @@ Provider 仍需配置面向 Consumer 的 `server.advertised-host` 与 `server.ad
 
 ## 资源、失败与恢复
 
-控制面使用专属 2–4 线程、有界 256 队列以及一个调度线程；HTTP 请求有超时，订阅失败后继续保持最后有效视图，恢复后重新发布正确快照。TLS/mTLS 指的是 **RPC Transport** 的安全配置；Consul HTTP API 的鉴权和 HTTPS 是另一条独立连接，不能相互替代。
+控制面使用专属 2–4 线程、有界 256 队列以及一个调度线程；HTTP 请求有超时。
+订阅失败会发出明确的不健康信号，但**不会**把 LKG 替换为健康空视图；
+对同一 ServiceKey 的控制面查询单飞，失败后使用不超过 30 秒（或配置轮询周期）的有界指数退避。
+恢复后即使实例集合没有变化，也会发送同步成功信号以恢复健康状态；
+确有变化时才重新发布带进程内 revision 的完整视图。TLS/mTLS 指的是 **RPC Transport** 的安全配置；Consul HTTP API 的鉴权和 HTTPS 是另一条独立连接，不能相互替代。
 
 `consul.ttl-seconds` 必须大于 `consul.heartbeat-seconds`。Consul 健康探测延迟、Agent 失联与 TTL 的短暂不一致仍应通过业务超时、重试和熔断处理。自动续期只针对由当前 Registry 对象注册的实例，`close()` 幂等。
 

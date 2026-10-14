@@ -9,6 +9,7 @@ import com.peachsoft.otryx.api.ServiceInstance;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.registry.RegistryContractTestKit;
+import com.peachsoft.otryx.registry.RegistryListener;
 import com.peachsoft.otryx.registry.RegistrySnapshot;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import java.io.IOException;
@@ -67,6 +68,97 @@ class HttpRegistryTest {
                 registry.unregister(instance(key)).toCompletableFuture().get(5, TimeUnit.SECONDS);
                 await(() -> snapshot.get().instances().isEmpty());
                 assertTrue(snapshot.get().revision() > revision);
+            }
+        }
+    }
+
+    @Test
+    void stalePollMustSignalFailureButPreserveSnapshotThenConfirmQuietRecovery()
+            throws Exception {
+        FakeBackend backend = new FakeBackend();
+        ServiceKey key = new ServiceKey("demo.Api", "1", "quiet");
+        AtomicReference<RegistrySnapshot> snapshot = new AtomicReference<>();
+        AtomicInteger failures = new AtomicInteger();
+        AtomicInteger confirmations = new AtomicInteger();
+        try (HttpRegistry registry = new HttpRegistry(
+                backend, Duration.ofMillis(40),
+                Duration.ofSeconds(2), RpcObserver.noop())) {
+            registry.register(instance(key)).toCompletableFuture().get(3, TimeUnit.SECONDS);
+            RegistryListener listener = new RegistryListener() {
+                @Override
+                public void onSnapshot(RegistrySnapshot value) {
+                    snapshot.set(value);
+                }
+
+                @Override
+                public void onSynchronizationFailed(Throwable error) {
+                    failures.incrementAndGet();
+                }
+
+                @Override
+                public void onSynchronizationSucceeded() {
+                    confirmations.incrementAndGet();
+                }
+            };
+            try (RegistrySubscription ignored = registry.subscribe(key, listener)) {
+                await(() -> snapshot.get() != null
+                        && snapshot.get().instances().size() == 1);
+                long initialRevision = snapshot.get().revision();
+                await(() -> confirmations.get() > 0);
+                int initialConfirmations = confirmations.get();
+                backend.failLookup = true;
+                await(() -> failures.get() == 1);
+                assertEquals(initialRevision, snapshot.get().revision());
+                backend.failLookup = false;
+                await(() -> confirmations.get() > initialConfirmations);
+                assertEquals(initialRevision, snapshot.get().revision(),
+                        "Identical healthy view should refresh health, not the directory revision");
+            }
+        }
+    }
+
+    @Test
+    void pollingRetryBackoffMustBeBounded() {
+        assertEquals(40L, HttpRegistry.pollBackoffMillis(40L, 1));
+        assertEquals(80L, HttpRegistry.pollBackoffMillis(40L, 2));
+        assertEquals(160L, HttpRegistry.pollBackoffMillis(40L, 3));
+        assertEquals(30_000L, HttpRegistry.pollBackoffMillis(40L, 100));
+        assertEquals(60_000L, HttpRegistry.pollBackoffMillis(60_000L, 100));
+        assertThrows(IllegalArgumentException.class,
+                () -> HttpRegistry.pollBackoffMillis(0L, 1));
+    }
+
+    @Test
+    void failedInitialPollMustNotFabricateHealthyEmptyView() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.failLookup = true;
+        ServiceKey key = new ServiceKey("demo.Api", "1", "cold");
+        AtomicInteger failures = new AtomicInteger();
+        AtomicInteger successes = new AtomicInteger();
+        AtomicInteger snapshots = new AtomicInteger();
+        try (HttpRegistry registry = new HttpRegistry(
+                backend, Duration.ofMillis(40),
+                Duration.ofSeconds(1), RpcObserver.noop())) {
+            try (RegistrySubscription ignored = registry.subscribe(key, new RegistryListener() {
+                @Override
+                public void onSnapshot(RegistrySnapshot ignoredSnapshot) {
+                    snapshots.incrementAndGet();
+                }
+
+                @Override
+                public void onSynchronizationFailed(Throwable error) {
+                    failures.incrementAndGet();
+                }
+
+                @Override
+                public void onSynchronizationSucceeded() {
+                    successes.incrementAndGet();
+                }
+            })) {
+                await(() -> failures.get() >= 1);
+                assertEquals(0, snapshots.get());
+                backend.failLookup = false;
+                await(() -> successes.get() > 0 && snapshots.get() == 1);
             }
         }
     }

@@ -46,7 +46,11 @@ otryx:
 
 ## 故障边界
 
-Eureka Lease 是最终一致控制面，不等于单次 RPC 热路径心跳。Consumer 使用本地服务目录；远端订阅校对失败保留最后成功视图。应用仍需配置 RPC Timeout、Retry Budget、Circuit Breaker 和 Provider Admission，应独立验证 Eureka Server 的自我保护（Self-Preservation）模式下过期实例清理行为。**过期服务可能短暂出现在缓存中**，不能将 Eureka 注册当作数据面实时存活证据。
+Eureka Lease 是最终一致控制面，不等于单次 RPC 热路径心跳。Consumer 使用本地服务目录；远端订阅校对失败保留最后成功视图，
+同时发送失败通知；同一 ServiceKey 的控制面查询单飞，
+失败后执行最多 30 秒（或配置轮询周期）的指数退避。
+一旦远端查询恢复成功，即使列表无变化也确认同步健康；快照 revision
+仅由有变化的完整目录更新递增，不伪造 Eureka 全局版本。应用仍需配置 RPC Timeout、Retry Budget、Circuit Breaker 和 Provider Admission，应独立验证 Eureka Server 的自我保护（Self-Preservation）模式下过期实例清理行为。**过期服务可能短暂出现在缓存中**，不能将 Eureka 注册当作数据面实时存活证据。
 
 `eureka.heartbeat-seconds` 必须小于 `eureka.lease-seconds`；所有网络调用在独立、2–4 线程及有界队列的控制面完成，`close()` 停止 lease renewal 并尽力注销。
 
