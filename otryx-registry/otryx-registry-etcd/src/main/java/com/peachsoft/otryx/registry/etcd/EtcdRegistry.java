@@ -33,6 +33,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -42,6 +43,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -82,6 +84,7 @@ final class EtcdRegistry implements Registry, ServiceRegistrar {
             new ConcurrentHashMap<>();
     private final AtomicBoolean leaseRecoveryScheduled = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final Set<EtcdSubscription> subscriptions = ConcurrentHashMap.newKeySet();
     private volatile CompletableFuture<Long> leaseFuture;
     private volatile CloseableClient keepAliveHandle;
     private volatile long activeLeaseId;
@@ -200,8 +203,12 @@ final class EtcdRegistry implements Registry, ServiceRegistrar {
     public RegistrySubscription subscribe(
             ServiceKey key,
             RegistryListener listener) {
+        if (closed.get()) {
+            throw new IllegalStateException("Etcd registry is closed");
+        }
         EtcdSubscription subscription =
                 new EtcdSubscription(key, listener);
+        subscriptions.add(subscription);
         subscription.start();
         return subscription;
     }
@@ -226,9 +233,13 @@ final class EtcdRegistry implements Registry, ServiceRegistrar {
             throw new IllegalArgumentException(
                     "revision must be positive");
         }
+        if (closed.get()) {
+            throw new IllegalStateException("Etcd registry is closed");
+        }
         EtcdSubscription subscription =
                 new EtcdSubscription(key, listener);
-        subscription.openWatch(revision);
+        subscriptions.add(subscription);
+        subscription.openWatch(revision, subscription.generation.get());
         return subscription;
     }
 
@@ -478,10 +489,14 @@ final class EtcdRegistry implements Registry, ServiceRegistrar {
         private final ServiceKey serviceKey;
         private final RegistryListener listener;
         private final AtomicBoolean closed = new AtomicBoolean();
+        private final AtomicBoolean restartScheduled = new AtomicBoolean();
+        private final AtomicBoolean refreshing = new AtomicBoolean();
+        private final AtomicLong generation = new AtomicLong();
+        private final AtomicLong refreshRequests = new AtomicLong();
         private volatile Watch.Watcher watcher;
-        private int restartAttempt;
-        private boolean recovering;
-        private long recoveryStartedAtNanos;
+        private volatile int restartAttempt;
+        private volatile boolean recovering;
+        private volatile long recoveryStartedAtNanos;
 
         private EtcdSubscription(ServiceKey serviceKey, RegistryListener listener) {
             this.serviceKey = Objects.requireNonNull(serviceKey, "serviceKey");
@@ -489,13 +504,22 @@ final class EtcdRegistry implements Registry, ServiceRegistrar {
         }
 
         private void start() {
-            if (closed.get()) {
+            if (closed.get() || EtcdRegistry.this.closed.get()) {
                 return;
             }
+            long token = generation.get();
             long subscribeStartedAtNanos =
                     observer.enabled() ? System.nanoTime() : 0L;
-            range(serviceKey).whenComplete((snapshot, error) -> {
-                if (closed.get()) {
+            CompletionStage<RegistrySnapshot> initial;
+            try {
+                initial = range(serviceKey);
+            } catch (RuntimeException error) {
+                scheduleRestart(error, token);
+                return;
+            }
+            initial.whenComplete((snapshot, error) -> {
+                if (closed.get() || EtcdRegistry.this.closed.get()
+                        || generation.get() != token) {
                     return;
                 }
                 if (error != null) {
@@ -503,85 +527,164 @@ final class EtcdRegistry implements Registry, ServiceRegistrar {
                         observer.onRegistryOperationCompleted(
                                 "etcd",
                                 RpcRegistryOperation.SUBSCRIBE,
-                                System.nanoTime()
-                                        - subscribeStartedAtNanos,
+                                System.nanoTime() - subscribeStartedAtNanos,
                                 error);
                     }
                     LOGGER.warn(
                             "Failed to load Etcd snapshot; retrying. service={}, errorType={}",
                             serviceKey.canonicalName(),
                             error.getClass().getName());
-                    scheduleRestart();
+                    scheduleRestart(error, token);
                     return;
                 }
                 listener.onSnapshot(snapshot);
+                listener.onSynchronizationSucceeded();
                 if (observer.enabled()) {
                     if (recovering) {
                         observer.onRegistryRecoveryCompleted(
                                 "etcd",
                                 RpcRegistryRecoveryAction.SUBSCRIPTION_RECOVERED,
-                                System.nanoTime()
-                                        - recoveryStartedAtNanos,
+                                System.nanoTime() - recoveryStartedAtNanos,
                                 null);
                     } else {
                         observer.onRegistryOperationCompleted(
                                 "etcd",
                                 RpcRegistryOperation.SUBSCRIBE,
-                                System.nanoTime()
-                                        - subscribeStartedAtNanos,
+                                System.nanoTime() - subscribeStartedAtNanos,
                                 null);
                     }
                 }
                 recovering = false;
                 restartAttempt = 0;
-                openWatch(snapshot.revision() + 1);
+                openWatch(snapshot.revision() + 1L, token);
             });
         }
 
-        private void openWatch(long revision) {
-            if (closed.get()) {
+        private void openWatch(long revision, long token) {
+            if (closed.get() || EtcdRegistry.this.closed.get()
+                    || generation.get() != token) {
                 return;
             }
             WatchOption option = WatchOption.builder()
                     .isPrefix(true)
                     .withRevision(revision)
                     .build();
-            watcher = client.getWatchClient().watch(bytes(prefix(serviceKey)), option, Watch.listener(
-                    response -> range(serviceKey).whenComplete((snapshot, error) -> {
-                        if (closed.get()) {
-                            return;
-                        }
-                        if (error != null) {
-                            LOGGER.warn("Failed to refresh Etcd snapshot: service={}, errorType={}",
-                                    serviceKey.canonicalName(), error.getClass().getName());
-                        } else {
-                            listener.onSnapshot(snapshot);
-                        }
-                    }),
-                    error -> {
-                        if (!closed.get()) {
-                            LOGGER.warn("Etcd watch failed; resubscribing. service={}, errorType={}",
-                                    serviceKey.canonicalName(), error.getClass().getName());
-                            scheduleRestart();
-                        }
-                    }));
+            Watch.Watcher opened;
+            try {
+                opened = client.getWatchClient().watch(
+                        bytes(prefix(serviceKey)),
+                        option,
+                        Watch.listener(
+                                response -> scheduleRefresh(token),
+                                error -> {
+                                    if (!closed.get() && generation.get() == token) {
+                                        LOGGER.warn(
+                                                "Etcd watch failed; resubscribing. service={}, errorType={}",
+                                                serviceKey.canonicalName(),
+                                                error.getClass().getName());
+                                        scheduleRestart(error, token);
+                                    }
+                                }));
+            } catch (RuntimeException error) {
+                scheduleRestart(error, token);
+                return;
+            }
+            if (closed.get() || generation.get() != token) {
+                opened.close();
+                return;
+            }
+            Watch.Watcher previous = watcher;
+            watcher = opened;
+            if (previous != null) {
+                previous.close();
+            }
+            if (closed.get() || generation.get() != token) {
+                closeWatcher();
+            }
         }
 
-        private void scheduleRestart() {
+        private void scheduleRefresh(long token) {
+            if (closed.get() || generation.get() != token) {
+                return;
+            }
+            refreshRequests.incrementAndGet();
+            if (refreshing.compareAndSet(false, true)) {
+                readLatest(token);
+            }
+        }
+
+        private void readLatest(long token) {
+            if (closed.get() || generation.get() != token) {
+                return;
+            }
+            long requested = refreshRequests.get();
+            CompletionStage<RegistrySnapshot> update;
+            try {
+                update = range(serviceKey);
+            } catch (RuntimeException error) {
+                refreshing.set(false);
+                scheduleRestart(error, token);
+                return;
+            }
+            update.whenComplete((snapshot, error) -> {
+                if (closed.get() || generation.get() != token) {
+                    return;
+                }
+                if (error != null) {
+                    refreshing.set(false);
+                    scheduleRestart(error, token);
+                    return;
+                }
+                try {
+                    listener.onSnapshot(snapshot);
+                    listener.onSynchronizationSucceeded();
+                } catch (RuntimeException listenerError) {
+                    refreshing.set(false);
+                    scheduleRestart(listenerError, token);
+                    return;
+                }
+                if (refreshRequests.get() != requested) {
+                    readLatest(token);
+                    return;
+                }
+                refreshing.set(false);
+                if (refreshRequests.get() != requested
+                        && refreshing.compareAndSet(false, true)) {
+                    readLatest(token);
+                }
+            });
+        }
+
+        private void scheduleRestart(Throwable error, long token) {
+            if (closed.get() || EtcdRegistry.this.closed.get()
+                    || generation.get() != token
+                    || !restartScheduled.compareAndSet(false, true)) {
+                return;
+            }
+            generation.incrementAndGet();
+            refreshing.set(false);
+            try {
+                listener.onSynchronizationFailed(error);
+            } catch (RuntimeException listenerError) {
+                LOGGER.debug("Etcd listener rejected unhealthy notification. service={}",
+                        serviceKey.canonicalName());
+            }
             closeWatcher();
             if (!recovering) {
                 recovering = true;
                 recoveryStartedAtNanos =
-                        observer.enabled()
-                                ? System.nanoTime()
-                                : 0L;
+                        observer.enabled() ? System.nanoTime() : 0L;
             }
             int attempt = restartAttempt++;
             long delayMillis = recoveryDelayMillis(attempt);
             Executor executor = CompletableFuture.delayedExecutor(
-                    delayMillis,
-                    TimeUnit.MILLISECONDS);
-            CompletableFuture.runAsync(this::start, executor);
+                    delayMillis, TimeUnit.MILLISECONDS);
+            CompletableFuture.runAsync(() -> {
+                restartScheduled.set(false);
+                if (!closed.get() && !EtcdRegistry.this.closed.get()) {
+                    start();
+                }
+            }, executor);
         }
 
         private void closeWatcher() {
@@ -595,7 +698,9 @@ final class EtcdRegistry implements Registry, ServiceRegistrar {
         @Override
         public void close() {
             if (closed.compareAndSet(false, true)) {
+                generation.incrementAndGet();
                 closeWatcher();
+                subscriptions.remove(this);
             }
         }
     }
@@ -701,6 +806,8 @@ final class EtcdRegistry implements Registry, ServiceRegistrar {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        subscriptions.forEach(EtcdSubscription::close);
+        subscriptions.clear();
         activeRegistrations.clear();
         invalidateLease();
         client.close();
