@@ -1,0 +1,40 @@
+name: Safe merged branch cleanup
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/prune-merged-branches.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: otryx-prune-merged-branches
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Snapshot open PR heads and clean merged ancestors
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLEANUP_MODE: ${{ github.event_name == 'push' && 'apply' || 'dry-run' }}
+        run: |
+          set -euo pipefail
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100" \
+            --jq '.[].head.ref' > "${RUNNER_TEMP}/otryx-open-pr-heads.txt"
+          OPEN_PR_HEAD_FILE="${RUNNER_TEMP}/otryx-open-pr-heads.txt" \
+            bash scripts/cleanup_merged_branches.sh
