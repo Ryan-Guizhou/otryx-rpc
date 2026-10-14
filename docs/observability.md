@@ -159,6 +159,14 @@ Micrometer 的 Circuit 状态缓存默认最多跟踪 4096 个服务/方法组�
 未知 Registry 类型统一为 `custom`，未知 Admission 原因统一为 `other`，
 避免把自定义 SPI 名称或未经限制的字符串扩张为动态时序。
 
+对于不受控制的自定义 Observer，可显式包装
+`new BoundedAsyncRpcObserver(delegate, queueCapacity)`。
+它采用单 daemon 线程和有界队列；普通事件过载会丢弃并由 `droppedEvents()`
+计数，失败回调由 `failedCallbacks()` 计数。Client/Server inflight 和
+Provider 已准入字节 Delta 独立聚合，队列满不丢失净值，但短时间峰值可能被合并。
+异步出口不会自动继承调用方 ThreadLocal，不适合强一致审计或可靠业务消息。
+`close()` 不等待忽略中断的第三方回调，所有者应正确安排生命周期。
+
 ## 8. 生产入口
 
 - [生产可观测与 SLO](reference/production-observability.md)
