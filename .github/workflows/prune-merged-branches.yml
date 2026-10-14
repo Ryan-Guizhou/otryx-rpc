@@ -7,6 +7,12 @@ on:
     paths:
       - .github/workflows/prune-merged-branches.yml
   workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply merged-branch cleanup (default dry-run)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -30,7 +36,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          CLEANUP_MODE: ${{ github.event_name == 'push' && 'apply' || 'dry-run' }}
+          CLEANUP_MODE: ${{ github.event_name == 'push' && 'apply' || (inputs.apply && 'apply' || 'dry-run') }}
         run: |
           set -euo pipefail
           gh api --paginate \

@@ -126,4 +126,7 @@ The repository requires **Chinese standard Javadoc, English structured logs and 
 
 ## Registry freshness
 
-Consumers can opt in to `otryx.rpc.client.directory-max-staleness` to reject expired last-known-good snapshots **after explicit synchronization failure**. The default remains unbounded; a quiet Watch does not become stale. See the [registry freshness reference](docs/reference/registry-freshness.md).
+Consumers can opt in to `otryx.rpc.client.directory-max-staleness` to reject expired last-known-good snapshots
+**after explicit registry synchronization failure**. The default remains unbounded; a quiet Watch is not considered
+unhealthy. Etcd, Nacos, and Consul/Eureka report health and use bounded recovery.
+See the [registry recovery and independent-JVM test guide](docs/reference/registry-freshness.md) for limitations.

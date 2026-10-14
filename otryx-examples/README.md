@@ -171,3 +171,19 @@ java -jar otryx-examples/otryx-example-consumer/target/*-exec.jar --spring.profi
 `UNAVAILABLE` 时持续等待 Registry/Provider 恢复，不再因为 Nacos 重启超过初始 10 秒而退出；
 业务错误或非暂时性异常仍然直接抛出。独立进程 CI 脚本仍有外层、有限的成功等待窗口，
 不会无限等待失败的恢复。
+
+### 可选 Registry Freshness 恢复测试（U09）
+
+独立 JVM 脚本的 Consumer 显式启用测试值 `3s` 的 LKG 陈旧预算，
+可通过 `OTRYX_RPC_E2E_MAX_STALENESS` 覆盖。仅在**隔离 Docker 环境**测试 Nacos 容器重启：
+
+```bash
+mvn -B -ntp -pl otryx-examples -am clean package
+OTRYX_RPC_E2E_RESTART_NACOS=true OTRYX_RPC_E2E_MAX_STALENESS=3s \
+  bash scripts/run_example_process_e2e.sh
+```
+
+测试覆盖原 Consumer 持续存活、Provider 重启、Nacos 重启、全新 Consumer 注册发现、
+Provider 地址 19090→19091 后恢复。短暂故障不保证每次进入 `STALE`：
+具体拒绝行为由 Core 的确定性单元测试断言。详见
+[Registry 健康与故障恢复](../docs/reference/registry-freshness.md)。
