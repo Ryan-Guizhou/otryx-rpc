@@ -163,3 +163,11 @@ java -jar otryx-examples/otryx-example-consumer/target/*-exec.jar --spring.profi
 白名单（`com.peachsoft.otryx.examples.api.*`）。部署真实网络时必须配置
 真实 CA/客户端证书和业务的 `RpcAuthorizer`；运行示例不代表已授予
 应用级权限，详见 [安全指南](../docs/security.md)。
+
+### 独立 JVM 故障恢复与发现超时
+
+一次性 Consumer 示例保留 10 秒初始发现窗口，超时会清楚地失败并退出。
+使用 `otryx.rpc.example.repeat-interval-millis` 的长生命周期 Consumer 在遇到
+`UNAVAILABLE` 时持续等待 Registry/Provider 恢复，不再因为 Nacos 重启超过初始 10 秒而退出；
+业务错误或非暂时性异常仍然直接抛出。独立进程 CI 脚本仍有外层、有限的成功等待窗口，
+不会无限等待失败的恢复。

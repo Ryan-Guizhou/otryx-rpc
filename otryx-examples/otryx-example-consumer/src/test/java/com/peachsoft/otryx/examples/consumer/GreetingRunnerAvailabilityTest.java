@@ -21,6 +21,13 @@ import org.junit.jupiter.api.Test;
 class GreetingRunnerAvailabilityTest {
 
     @Test
+    void repeatingConsumerMustWaitBeyondInitialDiscoveryDeadline() {
+        assertTrue(GreetingRunner.shouldContinueDiscovery(true, 200L, 100L));
+        assertTrue(GreetingRunner.shouldContinueDiscovery(false, 50L, 100L));
+        assertFalse(GreetingRunner.shouldContinueDiscovery(false, 100L, 100L));
+    }
+
+    @Test
     void shouldRetryTransportUnavailable() {
         assertTrue(GreetingRunner.isTransientUnavailable(
                 new RpcUnavailableException("Endpoint is unavailable")));
