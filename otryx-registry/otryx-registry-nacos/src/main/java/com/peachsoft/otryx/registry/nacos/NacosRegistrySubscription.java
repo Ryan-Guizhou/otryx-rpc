@@ -46,12 +46,15 @@ final class NacosRegistrySubscription implements RegistrySubscription {
     private final AtomicLong revision;
     private final RpcObserver observer;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean starting = new AtomicBoolean();
+    private final AtomicBoolean unhealthy = new AtomicBoolean();
     private final Object eventMonitor = new Object();
     private final Deque<List<Instance>> eventQueue = new ArrayDeque<>();
     private final List<List<Instance>> preInitialEvents = new ArrayList<>();
     private final EventListener eventListener = this::onEvent;
     private boolean initialized;
     private boolean draining;
+    private long eventSequence;
     private List<ServiceInstance> lastSnapshot;
 
     NacosRegistrySubscription(
@@ -82,39 +85,72 @@ final class NacosRegistrySubscription implements RegistrySubscription {
                 : observer;
     }
 
+    /**
+     * 发起单飞初始订阅；失败后由已有的定期 reconcile 驱动重试。
+     *
+     * <p>同一 EventListener 在失败时先尽力清理旧订阅，避免失败窗口累积监听器。
+     */
     void start() {
+        if (closed.get() || !starting.compareAndSet(false, true)) {
+            return;
+        }
         long startedAtNanos =
                 observer.enabled() ? System.nanoTime() : 0L;
         executor.submit(
                 "subscribe",
                 serviceKey,
                 () -> {
-                    namingService.subscribe(
-                            serviceName,
-                            group,
-                            List.of(cluster),
-                            eventListener);
-                    List<Instance> initial =
-                            namingService.getAllInstances(
-                                    serviceName,
-                                    group,
-                                    List.of(cluster),
-                                    false);
-                    initialize(initial);
+                    if (closed.get()) {
+                        return;
+                    }
+                    boolean subscribed = false;
+                    try {
+                        namingService.subscribe(
+                                serviceName, group, List.of(cluster), eventListener);
+                        subscribed = true;
+                        if (closed.get()) {
+                            namingService.unsubscribe(
+                                    serviceName, group, List.of(cluster), eventListener);
+                            return;
+                        }
+                        List<Instance> initial = namingService.getAllInstances(
+                                serviceName, group, List.of(cluster), false);
+                        initialize(initial);
+                    } catch (Exception error) {
+                        if (subscribed) {
+                            try {
+                                namingService.unsubscribe(
+                                        serviceName, group, List.of(cluster), eventListener);
+                            } catch (Exception cleanupError) {
+                                LOGGER.debug("Nacos failed subscription cleanup: service={}, errorType={}",
+                                        serviceKey.canonicalName(),
+                                        cleanupError.getClass().getName());
+                            }
+                        }
+                        throw error;
+                    }
                 }).whenComplete((ignored, error) -> {
+                    starting.set(false);
                     if (observer.enabled()) {
-                        observer.onRegistryOperationCompleted(
-                                "nacos",
-                                RpcRegistryOperation.SUBSCRIBE,
-                                System.nanoTime() - startedAtNanos,
-                                error);
+                        try {
+                            observer.onRegistryOperationCompleted(
+                                    "nacos",
+                                    RpcRegistryOperation.SUBSCRIBE,
+                                    System.nanoTime() - startedAtNanos,
+                                    error);
+                        } catch (RuntimeException observerError) {
+                            LOGGER.debug("Nacos observer callback failed: service={}",
+                                    serviceKey.canonicalName());
+                        }
                     }
                     if (error != null && !closed.get()) {
-                        LOGGER.warn(
-                                "Nacos subscription initialization failed: service={}, errorType={}",
-                                serviceKey.canonicalName(),
-                                error.getClass().getName());
-                        closeAsync();
+                        synchronized (eventMonitor) {
+                            preInitialEvents.clear();
+                        }
+                        signalFailure(error);
+                        LOGGER.warn("Nacos subscription initialization failed; will retry. "
+                                        + "service={}, errorType={}",
+                                serviceKey.canonicalName(), error.getClass().getName());
                     }
                 });
     }
@@ -128,10 +164,18 @@ final class NacosRegistrySubscription implements RegistrySubscription {
                         ? List.of()
                         : namingEvent.getInstances());
         synchronized (eventMonitor) {
+            if (closed.get()) {
+                return;
+            }
+            eventSequence++;
             if (!initialized) {
+                // NamingEvent contains a full view; only the latest pre-initial view is needed.
+                preInitialEvents.clear();
                 preInitialEvents.add(instances);
                 return;
             }
+            // Coalesce complete views: slow listeners cannot produce an unbounded event queue.
+            eventQueue.clear();
             eventQueue.addLast(instances);
             scheduleDrainLocked();
         }
@@ -144,6 +188,7 @@ final class NacosRegistrySubscription implements RegistrySubscription {
             }
             publish(initial);
             initialized = true;
+            signalHealthy();
             eventQueue.addAll(preInitialEvents);
             preInitialEvents.clear();
             scheduleDrainLocked();
@@ -155,10 +200,17 @@ final class NacosRegistrySubscription implements RegistrySubscription {
             return;
         }
         draining = true;
-        executor.execute(
-                "subscription-event",
-                serviceKey,
-                this::drainEvents);
+        executor.submit("subscription-event", serviceKey,
+                (NacosControlExecutor.CheckedRunnable) this::drainEvents)
+                .whenComplete((ignored, error) -> {
+                    if (error != null && !closed.get()) {
+                        synchronized (eventMonitor) {
+                            draining = false;
+                            eventQueue.clear();
+                        }
+                        signalFailure(error);
+                    }
+                });
     }
 
     private void drainEvents() {
@@ -172,6 +224,7 @@ final class NacosRegistrySubscription implements RegistrySubscription {
                 }
             }
             publish(next);
+            signalHealthy();
         }
         synchronized (eventMonitor) {
             eventQueue.clear();
@@ -189,10 +242,9 @@ final class NacosRegistrySubscription implements RegistrySubscription {
                 || normalized.equals(lastSnapshot)) {
             return;
         }
-        lastSnapshot = List.copyOf(normalized);
-        listener.onSnapshot(new RegistrySnapshot(
-                lastSnapshot,
-                revision.incrementAndGet()));
+        List<ServiceInstance> next = List.copyOf(normalized);
+        listener.onSnapshot(new RegistrySnapshot(next, revision.incrementAndGet()));
+        lastSnapshot = next;
     }
 
     private List<ServiceInstance> normalize(List<Instance> instances) {
@@ -212,35 +264,65 @@ final class NacosRegistrySubscription implements RegistrySubscription {
                 .toList();
     }
 
+    /**
+     * 使用受控远端查询确认健康；旧查询不能覆盖更新的 NamingEvent。
+     *
+     * <p>未初始化时只重试订阅，启动单飞保证不会重复排队阻塞式 SDK 请求。
+     */
     void reconcile() {
-        if (!readyForReconcile()) {
-            return;
-        }
-        try {
-            List<Instance> instances =
-                    namingService.getAllInstances(
-                            serviceName,
-                            group,
-                            List.of(cluster),
-                            false);
-            if (!readyForReconcile()) {
+        long before;
+        synchronized (eventMonitor) {
+            if (closed.get()) {
                 return;
             }
-            publish(instances);
+            if (!initialized) {
+                start();
+                return;
+            }
+            if (draining || !eventQueue.isEmpty()) {
+                return;
+            }
+            before = eventSequence;
+        }
+        try {
+            List<Instance> instances = namingService.getAllInstances(
+                    serviceName, group, List.of(cluster), false);
+            synchronized (eventMonitor) {
+                if (closed.get() || !initialized || draining
+                        || !eventQueue.isEmpty() || eventSequence != before) {
+                    return;
+                }
+                publish(instances);
+                // A remote success without a view change still confirms a healthy subscription.
+                signalHealthy();
+            }
         } catch (Exception error) {
-            LOGGER.debug(
-                    "Nacos subscription reconcile failed: service={}, errorType={}",
-                    serviceKey.canonicalName(),
-                    error.getClass().getName());
+            signalFailure(error);
+            LOGGER.debug("Nacos subscription reconcile failed: service={}, errorType={}",
+                    serviceKey.canonicalName(), error.getClass().getName());
         }
     }
 
-    private boolean readyForReconcile() {
-        synchronized (eventMonitor) {
-            return !closed.get()
-                    && initialized
-                    && !draining
-                    && eventQueue.isEmpty();
+    private void signalHealthy() {
+        if (!closed.get()) {
+            unhealthy.set(false);
+            try {
+                listener.onSynchronizationSucceeded();
+            } catch (RuntimeException observerError) {
+                LOGGER.debug("Nacos health listener failed: service={}",
+                        serviceKey.canonicalName());
+            }
+        }
+    }
+
+    private void signalFailure(Throwable failure) {
+        if (!closed.get() && unhealthy.compareAndSet(false, true)) {
+            try {
+                listener.onSynchronizationFailed(failure);
+            } catch (RuntimeException observerError) {
+                LOGGER.debug("Nacos failure listener failed: service={}",
+                        serviceKey.canonicalName());
+            }
         }
     }
 
