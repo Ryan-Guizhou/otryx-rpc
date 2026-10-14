@@ -53,7 +53,6 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -90,6 +89,7 @@ public final class OtryxRpcClient implements AutoCloseable {
     private final RpcDirectoryFreshnessOptions directoryFreshnessOptions;
     private final RpcClientResilienceOptions resilienceOptions;
     private final RetryBudget retryBudget;
+    private final ClientRetryController retryController;
     private final ThreadPoolExecutor responseCompletionExecutor;
     private final Semaphore responseCompletionPermits;
     private final ScheduledThreadPoolExecutor deadlineScheduler;
@@ -144,6 +144,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                 builder.resilienceOptions,
                 "resilienceOptions");
         this.retryBudget = new RetryBudget(resilienceOptions);
+        this.retryController = new ClientRetryController(resilienceOptions, retryBudget);
         this.responseCompletionPermits = new Semaphore(
                 builder.responseCompletionThreads
                         + builder.responseCompletionQueueCapacity);
@@ -446,7 +447,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                             : statusOf(failure);
                     if (failure == null
                             || (failure instanceof RpcRemoteException
-                                    && !isRetryable(failure))) {
+                                    && !ClientRetryController.isRetryable(failure))) {
                         method.circuitBreaker().onSuccess(
                                 circuitGeneration[0]);
                     } else {
@@ -762,7 +763,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                         null);
                 result.complete(value);
             } catch (RpcRemoteException remoteError) {
-                if (isRetryable(remoteError)) {
+                if (ClientRetryController.isRetryable(remoteError)) {
                     recordEndpointFailure(
                         reference,
                         selected,
@@ -857,45 +858,17 @@ public final class OtryxRpcClient implements AutoCloseable {
         if (result.isDone()) {
             return;
         }
-        boolean retryable =
-                method.idempotent()
-                        && isRetryable(failure);
-        if (!retryable) {
+        ClientRetryController.Decision decision = retryController.decide(
+                method.idempotent(), failure, attempt, deadlineNanos);
+        if (!decision.retry()) {
+            if (decision.exhaustionReason() != null) {
+                observeRetryExhausted(
+                        reference, method, decision.exhaustionReason(), failure);
+            }
             result.completeExceptionally(failure);
             return;
         }
-        if (attempt >= resilienceOptions.maxAttempts()) {
-            observeRetryExhausted(
-                    reference,
-                    method,
-                    RpcRetryExhaustionReason.MAX_ATTEMPTS,
-                    failure);
-            result.completeExceptionally(failure);
-            return;
-        }
-        if (!retryBudget.tryAcquireRetry()) {
-            observeRetryExhausted(
-                    reference,
-                    method,
-                    RpcRetryExhaustionReason.BUDGET,
-                    failure);
-            result.completeExceptionally(failure);
-            return;
-        }
-
-        long remainingNanos =
-                deadlineNanos - System.nanoTime();
-        long delayMillis = retryDelayMillis(attempt);
-        if (remainingNanos
-                <= TimeUnit.MILLISECONDS.toNanos(delayMillis)) {
-            observeRetryExhausted(
-                    reference,
-                    method,
-                    RpcRetryExhaustionReason.DEADLINE,
-                    failure);
-            result.completeExceptionally(failure);
-            return;
-        }
+        long delayMillis = decision.delayMillis();
         if (observer.enabled()) {
             observer.onClientRetryScheduled(
                     reference.key(),
@@ -990,34 +963,6 @@ public final class OtryxRpcClient implements AutoCloseable {
         return RpcStatus.INTERNAL_ERROR;
     }
 
-    private long retryDelayMillis(int attempt) {
-        long base = resilienceOptions.retryBaseBackoff().toMillis();
-        long max = resilienceOptions.retryMaxBackoff().toMillis();
-        if (base == 0L || max == 0L) {
-            return 0L;
-        }
-        int shift = Math.min(Math.max(attempt - 1, 0), 20);
-        long ceiling = base > (Long.MAX_VALUE >> shift)
-                ? max
-                : Math.min(max, base << shift);
-        return ceiling <= 1L
-                ? ceiling
-                : ThreadLocalRandom.current().nextLong(ceiling + 1L);
-    }
-
-    private static boolean isRetryable(Throwable error) {
-        if (error instanceof RpcUnavailableException
-                || error instanceof RpcOverloadedException) {
-            return true;
-        }
-        if (error instanceof RpcRemoteException remote) {
-            return remote.status() == RpcStatus.UNAVAILABLE
-                    || remote.status() == RpcStatus.OVERLOADED
-                    || remote.status() == RpcStatus.INTERNAL_ERROR;
-        }
-        return false;
-    }
-
     private static Throwable unwrap(Throwable error) {
         if (error instanceof CompletionException
                 && error.getCause() != null) {
@@ -1109,31 +1054,27 @@ public final class OtryxRpcClient implements AutoCloseable {
         if (!shutdownResult.compareAndSet(null, created)) {
             return shutdownResult.get();
         }
-        long startedAtNanos = System.nanoTime();
-        long deadlineNanos =
-                startedAtNanos + options.totalTimeout().toNanos();
+        RpcShutdownBudget budget = RpcShutdownBudget.start(options);
         ClientShutdownProgress progress = new ClientShutdownProgress();
         CompletableFuture.delayedExecutor(
                         options.totalTimeout().toNanos(),
                         TimeUnit.NANOSECONDS)
                 .execute(() -> created.complete(
                         clientShutdownReport(
-                                startedAtNanos,
+                                budget.startedAtNanos(),
                                 progress,
                                 true)));
         Thread.ofVirtual()
                 .name("otryx-client-shutdown")
                 .start(() -> runClientShutdown(
-                        startedAtNanos,
-                        deadlineNanos,
+                        budget,
                         progress,
                         created));
         return created;
     }
 
     private void runClientShutdown(
-            long startedAtNanos,
-            long deadlineNanos,
+            RpcShutdownBudget budget,
             ClientShutdownProgress progress,
             CompletableFuture<RpcClientShutdownReport> result) {
         // 执行器清理不能被任何不响应中断的外部 SPI 关闭调用推迟。
@@ -1193,11 +1134,11 @@ public final class OtryxRpcClient implements AutoCloseable {
         try {
             boolean completionTerminated =
                     responseCompletionExecutor.awaitTermination(
-                            remainingClientNanos(deadlineNanos),
+                            budget.remainingNanos(),
                             TimeUnit.NANOSECONDS);
             boolean deadlinesTerminated =
                     deadlineScheduler.awaitTermination(
-                            remainingClientNanos(deadlineNanos),
+                            budget.remainingNanos(),
                             TimeUnit.NANOSECONDS);
             progress.executorsTerminated =
                     completionTerminated && deadlinesTerminated;
@@ -1206,7 +1147,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             progress.failures.incrementAndGet();
         }
         try {
-            long remainingNanos = remainingClientNanos(deadlineNanos);
+            long remainingNanos = budget.remainingNanos();
             if (remainingNanos > 0L) {
                 CompletableFuture.allOf(settleCalls, directoryClose, transportClose)
                         .get(remainingNanos, TimeUnit.NANOSECONDS);
@@ -1218,13 +1159,9 @@ public final class OtryxRpcClient implements AutoCloseable {
             progress.failures.incrementAndGet();
         }
         result.complete(clientShutdownReport(
-                startedAtNanos,
+                budget.startedAtNanos(),
                 progress,
-                remainingClientNanos(deadlineNanos) == 0L));
-    }
-
-    private static long remainingClientNanos(long deadlineNanos) {
-        return Math.max(0L, deadlineNanos - System.nanoTime());
+                budget.remainingNanos() == 0L));
     }
 
     private RpcClientShutdownReport clientShutdownReport(

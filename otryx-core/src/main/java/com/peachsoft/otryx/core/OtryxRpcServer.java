@@ -1196,9 +1196,7 @@ public final class OtryxRpcServer implements AutoCloseable {
             return shutdownResult.get();
         }
         State previous = state.getAndSet(State.DRAINING);
-        long startedAtNanos = System.nanoTime();
-        long deadlineNanos =
-                startedAtNanos + options.totalTimeout().toNanos();
+        RpcShutdownBudget budget = RpcShutdownBudget.start(options);
         ShutdownProgress progress = new ShutdownProgress();
 
         // 超时哨兵独立于可能卡在外部 SDK 的协调器，保证 Stage 有界终态。
@@ -1208,15 +1206,14 @@ public final class OtryxRpcServer implements AutoCloseable {
                 .execute(() -> created.complete(
                         shutdownReport(
                                 progress,
-                                startedAtNanos,
+                                budget.startedAtNanos(),
                                 true)));
 
         Thread.ofVirtual()
                 .name("otryx-provider-shutdown")
                 .start(() -> runShutdown(
                         previous,
-                        deadlineNanos,
-                        startedAtNanos,
+                        budget,
                         progress,
                         created));
         return created;
@@ -1224,21 +1221,20 @@ public final class OtryxRpcServer implements AutoCloseable {
 
     private void runShutdown(
             State previous,
-            long deadlineNanos,
-            long startedAtNanos,
+            RpcShutdownBudget budget,
             ShutdownProgress progress,
             CompletableFuture<RpcShutdownReport> result) {
         try {
-            unregisterWithinBudget(deadlineNanos, progress);
+            unregisterWithinBudget(budget, progress);
             if (previous == State.STARTED
-                    && remainingNanos(deadlineNanos) > 0L) {
+                    && budget.remainingNanos() > 0L) {
                 try {
-                    long budget = Math.min(
-                            remainingNanos(deadlineNanos),
+                    long drainBudgetNanos = Math.min(
+                            budget.remainingNanos(),
                             drainTimeout.toNanos());
                     CompletionStage<Void> stage =
-                            transport.drain(Duration.ofNanos(budget));
-                    progress.drained = awaitWithin(stage, budget);
+                            transport.drain(Duration.ofNanos(drainBudgetNanos));
+                    progress.drained = awaitWithin(stage, drainBudgetNanos);
                     if (!progress.drained) {
                         progress.failures.incrementAndGet();
                         LOGGER.warn("RPC provider drain did not finish within shutdown budget");
@@ -1297,11 +1293,11 @@ public final class OtryxRpcServer implements AutoCloseable {
             try {
                 boolean virtualTerminated =
                         blockingExecutor.awaitTermination(
-                                remainingNanos(deadlineNanos),
+                                budget.remainingNanos(),
                                 TimeUnit.NANOSECONDS);
                 boolean cpuTerminated =
                         cpuExecutor.awaitTermination(
-                                remainingNanos(deadlineNanos),
+                                budget.remainingNanos(),
                                 TimeUnit.NANOSECONDS);
                 progress.executorsTerminated =
                         virtualTerminated && cpuTerminated;
@@ -1312,14 +1308,14 @@ public final class OtryxRpcServer implements AutoCloseable {
                 state.set(State.CLOSED);
                 result.complete(shutdownReport(
                         progress,
-                        startedAtNanos,
-                        remainingNanos(deadlineNanos) == 0L));
+                        budget.startedAtNanos(),
+                        budget.remainingNanos() == 0L));
             }
         }
     }
 
     private void unregisterWithinBudget(
-            long deadlineNanos,
+            RpcShutdownBudget budget,
             ShutdownProgress progress) {
         RpcEndpoint endpoint = advertisedEndpoint;
         if (endpoint == null || configuredInstances.isEmpty()) {
@@ -1328,7 +1324,7 @@ public final class OtryxRpcServer implements AutoCloseable {
         }
         List<CompletableFuture<Void>> pending = new ArrayList<>();
         for (ServiceInstance configured : configuredInstances) {
-            if (remainingNanos(deadlineNanos) == 0L) {
+            if (budget.remainingNanos() == 0L) {
                 break;
             }
             try {
@@ -1345,16 +1341,16 @@ public final class OtryxRpcServer implements AutoCloseable {
         if (pending.size() != configuredInstances.size()) {
             return;
         }
-        long budget = Math.min(
-                remainingNanos(deadlineNanos),
+        long unregisterBudgetNanos = Math.min(
+                budget.remainingNanos(),
                 controlPlaneTimeout.toNanos());
-        if (budget <= 0L) {
+        if (unregisterBudgetNanos <= 0L) {
             return;
         }
         boolean completed = awaitWithin(
                 CompletableFuture.allOf(pending.toArray(
                         CompletableFuture[]::new)),
-                budget);
+                unregisterBudgetNanos);
         progress.registrationsRemoved = completed
                 && pending.stream().allMatch(future ->
                         future.isDone() && !future.isCompletedExceptionally());
@@ -1381,10 +1377,6 @@ public final class OtryxRpcServer implements AutoCloseable {
         } catch (ExecutionException | TimeoutException error) {
             return false;
         }
-    }
-
-    private static long remainingNanos(long deadlineNanos) {
-        return Math.max(0L, deadlineNanos - System.nanoTime());
     }
 
     private RpcShutdownReport shutdownReport(

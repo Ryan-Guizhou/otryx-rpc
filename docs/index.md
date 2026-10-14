@@ -19,6 +19,8 @@
 
 [协议](protocol.md) · [安全](security.md) · [可观测性](observability.md) · [性能与限制](performance.md) · [Nacos 注册中心](reference/registry-nacos.md) · [Consul](reference/registry-consul.md) · [Eureka](reference/registry-eureka.md)
 
+资源所有权与关闭/重试决策：[运行时资源所有权](reference/runtime-ownership.md)。
+
 设计依据：[需求蓝图](design/requirements-blueprint.md) · [技术方案](design/technical-solution.md) · [详细设计](design/detailed-design.md) · [模块结构](design/project-structure.md) · [首发质量改造实施契约](engineering/plans/2026-10-12-open-source-quality-upgrade.md)。
 
 性能及工程证据：[性能证据](reference/performance-evidence.md) · [容量规划](reference/capacity-planning.md) · [Soak 验收](reference/soak-acceptance.md) · [分配剖析](reference/transport-allocation-profiling.md)。
