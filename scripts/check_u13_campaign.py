@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import tempfile
 import json
 import math
 import re
@@ -16,6 +17,7 @@ from pathlib import Path
 from check_soak_quality import check_soak
 from check_v2d2_runner_baseline import STABLE_KEYS, properties
 from manage_v2d2_evidence_manifest import files
+from summarize_v2d2_results import load_rows, write_csv
 from validate_v2d2_evidence import validate_matrix
 
 ORDER = ("baseline", "candidate", "candidate", "baseline", "baseline", "candidate")
@@ -124,6 +126,16 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
     validate_matrix(matrix_dir, "full", matrix_errors)
     require(not matrix_errors,
             f"Incomplete full-profile JMH matrix: {path}: {'; '.join(matrix_errors)}")
+    # Reconstruct the canonical CSV from the same raw JMH JSON outputs that
+    # the benchmark runner summarizes; a re-signed CSV without raw data fails.
+    raw_rows = load_rows(matrix_dir)
+    require(bool(raw_rows), f"Missing raw JMH result evidence: {path}")
+    with tempfile.TemporaryDirectory(prefix="otryx-u13-matrix-") as scratch:
+        regenerated = Path(scratch)
+        write_csv(regenerated, raw_rows)
+        require((regenerated / "summary.csv").read_bytes()
+                == (matrix_dir / "summary.csv").read_bytes(),
+                f"JMH CSV does not match raw benchmark evidence: {path}")
     require(load_json(path / "validation-report.json").get("status") == "PASS",
             f"Existing full matrix/soak validator failed: {path}")
     decision = load_json(path / "decision-inputs.json")
@@ -152,6 +164,14 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
             and not isinstance(soak["availableProcessors"], bool)
             and soak["availableProcessors"] > 0,
             f"Soak recorded invalid available processors: {path}")
+    for field in ("jvmArguments", "vmName", "os"):
+        require(isinstance(soak.get(field), str) and bool(soak[field].strip()),
+                f"Soak missing effective JVM/OS evidence ({field}): {path}")
+    effective_runtime = {
+        field: soak[field] for field in (
+            "javaVersion", "jvmArguments", "vmName", "os", "availableProcessors"
+        )
+    }
     require(isinstance(soak.get("durationSeconds"), (int, float))
             and math.isfinite(soak["durationSeconds"])
             and soak["durationSeconds"] >= MIN_SECONDS,
@@ -215,6 +235,7 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
         "runId": run_id,
         "commit": sha,
         "workload": workload,
+        "effectiveRuntime": effective_runtime,
         "capturedAt": captured_at.isoformat(),
         "completedAt": completed_at.isoformat(),
         "durationSeconds": soak["durationSeconds"],
@@ -241,6 +262,7 @@ def validate_campaign(config: dict, directory: Path) -> dict:
             "Run order must be baseline,candidate,candidate,baseline,baseline,candidate")
     stable = None
     fixed_workload: dict | None = None
+    fixed_effective_runtime: dict | None = None
     labels: set[str] = set()
     summaries: dict[str, list[dict]] = {"baseline": [], "candidate": []}
     previous_completed: datetime | None = None
@@ -266,6 +288,11 @@ def validate_campaign(config: dict, directory: Path) -> dict:
         else:
             require(summary["workload"] == fixed_workload,
                     f"Changed AB/BA soak workload in run {position}")
+        if fixed_effective_runtime is None:
+            fixed_effective_runtime = summary["effectiveRuntime"]
+        else:
+            require(summary["effectiveRuntime"] == fixed_effective_runtime,
+                    f"Changed effective CPU/JVM environment in run {position}")
         summaries[side].append(summary)
     metrics = {}
     for side, values in summaries.items():

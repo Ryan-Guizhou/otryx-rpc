@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import tempfile
@@ -13,6 +12,7 @@ from pathlib import Path
 
 from check_u13_campaign import validate_campaign
 from manage_v2d2_evidence_manifest import create
+from summarize_v2d2_results import load_rows, write_csv
 from validate_v2d2_evidence import PROFILES, RESILIENCE
 
 BASE = "a" * 40
@@ -36,11 +36,7 @@ def write_json(path: Path, data: dict) -> None:
 def write_full_matrix(path: Path) -> None:
     """Populate the complete synthetic JMH full profile for validation."""
     profile = PROFILES["full"]
-    fields = (
-        "family", "benchmark", "scenario", "security", "mode",
-        "payload_bytes", "connections", "threads", "alloc_b_op",
-    )
-    rows = []
+    raw: dict[str, list[dict]] = {}
 
     def add(family: str, **changes: object) -> None:
         item = {
@@ -50,7 +46,37 @@ def write_full_matrix(path: Path) -> None:
             "alloc_b_op": 128,
         }
         item.update(changes)
-        rows.append(item)
+        mode = item["mode"]
+        threads = item["threads"]
+        connections = item["connections"]
+        if family == "payload":
+            filename = (
+                f"{mode}-p{item['payload_bytes']}-c{connections}-t{threads}.json"
+            )
+        elif family == "scenario":
+            filename = (
+                f"scenario-{item['scenario']}-{mode}-c{connections}-t{threads}.json"
+            )
+        elif family == "security":
+            filename = (
+                f"security-{item['security']}-{mode}-p{item['payload_bytes']}"
+                f"-c{connections}-t{threads}.json"
+            )
+        else:
+            filename = f"resilience-{mode}-t{threads}.json"
+        raw.setdefault(filename, []).append({
+            "benchmark": f"synthetic.{item['benchmark']}",
+            "primaryMetric": {
+                "score": 1.0,
+                "scoreUnit": "us/op",
+                "scorePercentiles": {
+                    "50.0": 1.0, "99.0": 2.0, "99.9": 3.0
+                },
+            },
+            "secondaryMetrics": {
+                "gc.alloc.rate.norm": {"score": 128.0},
+            },
+        })
 
     for mode, size, connections, threads in product(
             profile["modes"], profile["payloads"],
@@ -72,10 +98,11 @@ def write_full_matrix(path: Path) -> None:
             RESILIENCE, profile["modes"], profile["resilience_threads"]):
         add("resilience", benchmark=benchmark, mode=mode, threads=threads)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(rows)
+    for filename, results in raw.items():
+        (path.parent / filename).write_text(
+            json.dumps(results) + "\n", encoding="utf-8"
+        )
+    write_csv(path.parent, load_rows(path.parent))
 
 
 def make_bundle(path: Path, run_id: str, commit: str, captured_at: datetime,
@@ -120,6 +147,9 @@ def make_bundle(path: Path, run_id: str, commit: str, captured_at: datetime,
         "hostFingerprintSha256": host,
         "jvmFlags": "-Xms4g -Xmx4g",
         "javaVersion": "21.0.9",
+        "jvmArguments": "-Xms4g -Xmx4g",
+        "vmName": "OpenJDK 64-Bit Server VM",
+        "os": "Linux amd64",
         "availableProcessors": 16,
         "completedAt": iso(completed_at),
         "concurrency": 10000,
@@ -239,6 +269,15 @@ def main() -> None:
         rejected(lambda: validate_campaign(dict(data, runs=data["runs"][:-1]), root))
 
         first = root / "run-1"
+        raw_path = first / "matrix" / "sample-p64-c1-t1.json"
+        saved_raw = raw_path.read_text(encoding="utf-8")
+        raw_path.unlink()
+        create(first)
+        rejected(lambda: validate_campaign(data, root))
+        raw_path.write_text(saved_raw, encoding="utf-8")
+        create(first)
+        assert validate_campaign(data, root)["integrity"] == "PASS"
+
         matrix_path = first / "matrix" / "summary.csv"
         matrix_path.write_text("tampered", encoding="utf-8")
         rejected(lambda: validate_campaign(data, root))
@@ -342,6 +381,24 @@ def main() -> None:
                 ("javaVersion", "17.0.21")):
             forged_soak = dict(saved_soak, **{field: incorrect})
             write_json(soak_path, forged_soak)
+            write_json(first_policy_path, dict(
+                original_policy,
+                soakSha256=hashlib.sha256(soak_path.read_bytes()).hexdigest()
+            ))
+            create(first)
+            rejected(lambda: validate_campaign(data, root))
+        write_json(soak_path, saved_soak)
+        write_json(first_policy_path, original_policy)
+        create(first)
+        assert validate_campaign(data, root)["integrity"] == "PASS"
+
+        # Effective JVM arguments and allocated processors must match A/B peers.
+        for field, incorrect in (
+                ("availableProcessors", 999),
+                ("jvmArguments", "-XX:ActiveProcessorCount=999"),
+                ("vmName", "Other VM"),
+                ("os", "Other OS")):
+            write_json(soak_path, dict(saved_soak, **{field: incorrect}))
             write_json(first_policy_path, dict(
                 original_policy,
                 soakSha256=hashlib.sha256(soak_path.read_bytes()).hexdigest()

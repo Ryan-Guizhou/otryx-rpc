@@ -200,7 +200,7 @@ python3 scripts/test_u13_campaign.py
 python3 scripts/check_u13_campaign.py --campaign target/u13-campaign.json --output-dir target/u13-report
 ~~~
 
-六轮实验还必须使用相同的预先声明 Workload（逻辑并发、Payload、连接数、预热、配置时长及调用超时）；各轮真实测量 `durationSeconds` 允许有少量差异。生成端把 Runner ID / Run ID / 主机指纹 / JVM Flags 直接嵌入 `soak.json`，校验端与根目录环境交叉比对。预检 `preflight.properties` 必须提前写入 Soak 工作负载和最大错误率、最低观测在途及可选 p99 阈值；事后生成的质量策略不得改写它们。报告与哈希只能证明文件自洽，真实性仍需独立审核。
+六轮实验还必须使用相同的预先声明 Workload（逻辑并发、Payload、连接数、预热、配置时长及调用超时）；各轮真实测量 `durationSeconds` 允许有少量差异。生成端把 Runner ID / Run ID / 主机指纹 / JVM Flags 直接嵌入 `soak.json`，校验端与根目录环境交叉比对。预检 `preflight.properties` 必须提前写入 Soak 工作负载和最大错误率、最低观测在途及可选 p99 阈值；事后生成的质量策略不得改写它们。矩阵校验会使用既有 JMH 汇总器从 `matrix/*.json` 原始实验记录重新生成 `summary.csv` 并逐字节对照，因此仅伪造完整 CSV 不能通过。Soak 还必须记录有效的 `javaVersion`、`jvmArguments`、`vmName`、`os` 和 `availableProcessors`，六轮有效运行条件应完全一致。报告与哈希只能证明文件自洽，真实性仍需独立审核。
 
 校验通过仍返回 `REPORT_ONLY`（原始数据未经过独立真实性审计），输出同硬件三次 Baseline/Candidate 中位 QPS、p99 和错误率；需人工评审独立的 `gc.alloc.rate.norm`、JFR/JVM 分配剖析、CPU/GC/heap、方差/置信区间、异常拒绝和端到端 p99/p99.9，再决定是否实施特定热点改造。对每个优化候选必须额外证明 Wire、限流、取消与资源 Lease 语义无回归。
 
