@@ -195,3 +195,46 @@ Schema 失配、健康空映射、Manifest 缺失、LKG 失效与关闭竞态；
 
 可在 JDK 21 环境执行 `./mvnw -B -ntp -pl otryx-core -am test` 与
 `./mvnw -B -ntp clean verify -Pquality`；CI 通过前不得标记 #130 完成。
+
+## 7. V2-04：Memory Application Registry 控制面
+
+> [Issue #131](https://github.com/Ryan-Guizhou/otryx-rpc/issues/131)。
+> 本阶段完成无网络控制面契约及测试，不将旧 MemoryRegistry/Client/Server
+> 的接口级注册路径误称为已经切换；真正的运行时与 Starter 生命周期分别由 #132、#137 实施。
+
+### 7.1 本地应用目录
+
+- `MemoryApplicationRegistry` 直接实现 `ApplicationRegistry` + `ApplicationRegistrar`：
+  Provider、Consumer、BOTH 均以 `ApplicationKey + instanceId` 登记，纯 Consumer
+  必须有应用成员而没有 RPC Endpoint。一个实例导出三个服务仍只有一条应用成员记录。
+- 内部同步保护原子成员更新与 Revision；`lookup` 返回完整不可变快照。
+  同值重复注册幂等，旧内容注销不删除新修订记录，关闭后所有操作明确失败。
+- `subscribe` 首次发送真实快照，随后按 Revision 去重通知，
+  使用幂等关闭的 `RegistrySubscription`，回调异常与数据修改隔离。
+  Memory 适配器通知目前在控制面调用线程同步发送，**不得在 EventLoop 阻塞使用**；
+  异步应用协调与调度边界在 #132 统一。
+- 容量限制：最大 512 Application、4,096 成员、每 Application 256 实例、2,048 订阅。
+  满容量拒绝，不进行未经验证的随机逐出。
+
+### 7.2 元数据与工厂
+
+- `MemoryApplicationManifestRepository` 按应用和内容 Revision 幂等保存字节；
+  同一 Revision 禁止改写、跨 Namespace 不泄漏、支持滚动多 Revision。
+  限制 1,024 份 Manifest、合计 32 MiB；关闭释放内存。安全 GC 不属于本模块。
+- `MemoryServiceMappingRepository` 继续采用 #130 的实例代数 fencing 和一对多 ServiceKey
+  映射，不以 `ServiceKey` 作为应用成员 Key。
+- `ApplicationRegistryFactory` 是应用级新扩展点；Memory 默认工厂由 ServiceLoader 装载。
+  每次 `create` 返回独立生命周期实例；同一 Runtime 内 Provider 和 Consumer
+  必须共享此实例。多次创建互相隔离的 MemoryRegistry 不会神奇地跨 JVM 发现服务。
+- 实现仍限于 JVM 内存，不提供网络可达性、真实租约、KV CAS、ACL 或生产持久性；
+  各远端 Adapter 在 #133–#136 实现，不能用本实现替代真实 E2E。
+
+### 7.3 验收
+
+`MemoryApplicationRegistryTest` 覆盖角色成员、幂等与失效注销、并发 96 实例、
+关闭拒绝、命名空间隔离、单应用导出三个接口、独立 Consumer 注册、
+三条业务 ServiceKey 经 Mapping/Directory/Manifest/Schema 解析为真实 Provider，
+Manifest 多修订号与 SPI ServiceLoader 工厂。
+
+验证命令：`./mvnw -B -ntp -pl otryx-core -am test`，
+`./mvnw -B -ntp clean verify -Pquality`。CI 全绿后再合并，并验证合并后 main 检查。

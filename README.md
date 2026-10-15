@@ -43,7 +43,7 @@
 
 **设计原则：** 控制面与数据面分离；可替换实现位于 Adapter/SPI；单次调用热路径不做注册中心 IO、SPI 扫描和动态解析。
 
-**V2 应用级注册改造（进行中）：** 已具备 Provider/Consumer 应用身份、Registry SPI、不可变 Manifest 与 ServiceMapping 控制面 SPI；映射端支持带 fencing 的实例所有权，Consumer 可通过本地快照严格筛选兼容的实际 Provider。当前 Runtime/真实 Adapter **仍使用旧发现链路**，待 #131–#139 迁移；不可误认为 V2 已生产可用。[设计与状态](docs/design/application-registry-v2.md)。
+**V2 应用级注册改造（进行中）：** 已具备 Provider/Consumer 应用身份、Registry SPI、不可变 Manifest 与 ServiceMapping 控制面 SPI；映射端支持带 fencing 的实例所有权，Memory 应用级 Registrar/Manifest 存储及独立 Consumer 成员已落地，Consumer 可通过本地快照严格筛选兼容的实际 Provider。当前 Runtime/真实远端 Adapter **仍使用旧发现链路**，待 #131–#139 迁移；不可误认为 V2 已生产可用。[设计与状态](docs/design/application-registry-v2.md)。
 
 <!-- doc-section:compatibility -->
 ## 兼容性与迁移
