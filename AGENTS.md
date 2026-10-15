@@ -74,3 +74,9 @@ MCP 为证据补全工具，不是无限授权。
 - Wire/Registry/Transport：相关单元与集成测试、Rolling Compatibility；性能改动另做 JMH/JFR 和可复现 Evidence。shared runner 的数值不等于生产容量结论。
 - 人工检查不可自动静态证明的规则，记录例外原因；不为保持 CI 绿色关闭必要检查。
 - 最终只陈述实际改动、PR、测试通过/失败与剩余风险。合并前核验准确的 PR Head，合并后分别核对 `main` 提交 SHA 与主分支 CI；若合并后 CI 失败，应停止继续合并并提交隔离修复或回滚方案。
+
+## V2 应用级注册强制约束（#127）
+
+- Provider/Consumer/BOTH 都必须按应用级身份注册，纯 Consumer 没有 RPC Endpoint，也不得以假端口加入 RPC Provider 池。
+- [应用级注册设计与当前迁移状态](docs/design/application-registry-v2.md) 是 V2 控制面目标和过渡范围的明确约束；新功能不得新增旧接口级 Registry 注册路径或兼容开关。
+- #139 是彻底删除旧 ServiceRegistrar / ServiceDiscovery(ServiceKey) / Registry Key 与历史文案的最终强制门禁；未完成不得宣布 V2 已正式支持应用级注册。
