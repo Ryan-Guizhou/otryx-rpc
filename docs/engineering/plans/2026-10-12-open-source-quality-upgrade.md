@@ -38,16 +38,16 @@
 
 **验收底线：** 保留独立 JVM 的 Consumer/Provider、TLS/mTLS、Registry 故障恢复、取消/关闭竞争与慢读负载回归。每项失败机制需可复现；不以共享 CI 冒烟数据宣称生产容量。按原方案继续使用精确 Head SHA、合并后 main CI、独立回滚和完整证据台账。
 
-## 0.3 2026-10-14 执行快照（与原始计划分开）
+## 0.3 2026-10-15 执行快照（与原始计划分开）
 
-本文 U00～U14 清单保留为实施契约和完整验收要求，不能把旧清单中的“待实施”解读为最新源码状态。**最终已验证状态以合并到 main 的准确 SHA 和本节中的外部证据边界为准。**
+本文 U00～U14 清单保留为实施契约和完整验收要求，不能把旧清单中的“待实施”解读为最新源码状态。**本节为 2026-10-15 复查快照，并非实时状态；最终已验证状态以合并到 main 的准确 SHA 和外部证据边界为准。** 复查基线：main `5b584779d58f87df7e4fb88b19672fd24bf3e653`，该 SHA 的主 CI、Java Style、Java Agent Quality、Agent Governance、文档预览均成功；GitHub 无开放 PR/Issue。
 
 | 阶段 | 当前工程证据 | 尚不可宣称 |
 |---|---|---|
 | U10 | PR #114（低基数）、#115（有界异步 Observer）、#116（JFR 出口与基准）已合并；相关 Head 与 main CI 有成功记录 | 固定物理 Runner 的完整 Trace/JFR 导出开销已经定量验收 |
 | U11 | PR #116 已合并；Maven Wrapper、Starter 覆盖、独立进程示例和 SPI 回归进入 CI | 所有全新 Windows/Linux 环境均已人工验证 |
 | U12 | PR #117 已合并；重试/关闭预算内部职责与并发回归保持原行为；main CI 成功 | 任意用户业务任务都可被强制安全停止 |
-| U13 | PR #123 引入 60 分钟 Soak、真实在途阈值、AB BA AB 六次受控 Evidence 校验工具及合成负面测试；必须以最终 Head CI 为准 | 真实固定硬件的六次 >=60 分钟运行已完成、公开的 QPS/Core、p99/p99.9 或 B/op 数值 |
+| U13 | PR #123 已 Squash 合并为 `5b584779`，准确 Head 与 main CI 均通过；60 分钟 Soak、AB BA AB 六次一致负载、Runner/JVM/CPU 证据、完整 JMH 原始矩阵及合成恶意用例具备自动校验 | 真实固定硬件六次 >=60 分钟运行、独立数据审查及官方 QPS/Core、p99/p99.9、B/op 数值 |
 | U14 | PR #118 已合并；RC1/GA 无发布 dry-run、SBOM/SHA256、OSV Scanner、发行版本 fail-closed 及文档；发布分支版本保持 `1.0.0-SNAPSHOT` | 已手动运行完整 RC/GA 构建、完成签名、Maven Namespace/商标审批或创建正式 Release |
 
 GitHub Dependency Graph 不可用时使用 OSV Base/PR 差异检查。为遵守版本冻结和减少 CI，计划在 PR #123 关闭常规 Dependabot 版本升级入口（保留可用的安全修复 PR）；自动提出但未经批准的升级 PR 不属于本轮功能。

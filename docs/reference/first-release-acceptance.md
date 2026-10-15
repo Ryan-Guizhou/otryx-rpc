@@ -9,7 +9,7 @@
 | U10 可观测性 | 有界 Observer、JFR 低基数出口、OpenTelemetry 回归、JMH 工具 | 已取得固定物理主机真实性能数据 |
 | U11 初次接入 | Maven Wrapper、Lite Starter、两进程及 SPI 示例 | 所有 Windows/Linux 首次安装环境均经人工验收 |
 | U12 运行时治理 | `ClientRetryController`、`RpcShutdownBudget`、Core CI 回归 | 任意业务线程都能被安全强制停止 |
-| U13 性能证据 | JMH/Matrix/10k Smoke 和 Evidence Tooling | 三轮 AB/BA、正式 60 分钟 Soak 已完成 |
+| U13 性能证据 | JMH/Matrix/10k Smoke、六轮 AB BA AB 受控证据校验、原始 JMH 可复算及负面测试；PR #123 与合并后 main CI 成功 | 真实固定 Runner 上完成六轮至少 60 分钟 Soak、工程师独立审查及生产性能指标 |
 | U14 构建/供应链 | 首发 Dry-run、CycloneDX、SHA256、恶意证据校验 | 已完成签名、Tag、Central 或 Namespace 授权 |
 
 PR/main CI 通过与手动运行完整 RC/GA Dry-run 是不同的验收信号。没有执行不得声称候选产物已验证。
@@ -53,4 +53,4 @@ flowchart LR
 
 ## U13 性能工具新增边界
 
-`check_u13_campaign.py` 以 AB BA AB 六个受控 Evidence Bundle 为输入校验源 Commit、固定 Runner 硬件/虚拟机指纹、JVM、每次至少 3600 秒 Soak、10000 逻辑并发、实际在途阈值和 SHA256 完整性。它仅提供 `REPORT_ONLY`；真实运行、风险阈值与人工性能评审仍是发布前的独立证据要求。
+`check_u13_campaign.py` 以 AB BA AB 六个受控 Evidence Bundle 为输入，校验原始 JMH JSON 重建矩阵、源 Commit、固定 Runner 主机指纹、有效 JVM/CPU、六次 Soak 负载一致性、预先声明的策略阈值、单轮至少 3600 秒 Soak、10000 逻辑并发、实际在途阈值和 SHA256 完整性。PR #123 已合并到 `main`（`5b584779`），主分支 CI 成功。工具仍仅提供 `REPORT_ONLY`；真实运行、数据真实性与人工性能评审尚未完成，不得宣称 GA 或生产性能数值。

@@ -13,6 +13,7 @@
 - U10：低基数遥测、有界 Observer、JFR Registry 标签脱敏和基准工具。
 - U11：Maven Wrapper、Lite Starter 自定义 Bean/SPI 接入测试和独立进程示例。
 - U12：重试决策及关闭总预算提取为可独立测试的内部职责；保持 Wire v1。
+- U13：PR #123 已并入主分支；补齐受控 60 分钟 Soak、固定 Runner/JVM/CPU 来源、AB BA AB 六轮负载一致性、原始 JMH 数据与矩阵重建、预声明阈值和恶意证据回归。工具输出仍为 `REPORT_ONLY`，**未完成真实固定硬件六轮测量，不能发布官方性能数据**。
 - U14：RC1/GA 无发布 Dry-run、CycloneDX SBOM、SHA256 清单、Dependency Review 与 Dependabot；**尚无发行 Tag、GPG 签名或 Central 上传**。
 
 ## Peach RPC 1.0.x 历史变更记录
