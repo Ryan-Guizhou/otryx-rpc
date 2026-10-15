@@ -8,9 +8,9 @@ import com.peachsoft.otryx.spring.annotation.OtryxRpcService;
 /**
  * 进程内 RPC Provider；演示按接口暴露真实 RPC 服务。
  *
- * @Author OTRYX RPC
- * @Version 1.0.0
- * @CreateTime 2026/10/15 14:00
+ * @Author Ryan
+ * @Version 1.0.0-SNAPSHOT
+ * @CreateTime 2026/10/15 14:41
  */
 @OtryxRpcService(interfaceClass = GreetingService.class, version = "1.0.0")
 public class MemoryGreetingServiceImpl implements GreetingService {

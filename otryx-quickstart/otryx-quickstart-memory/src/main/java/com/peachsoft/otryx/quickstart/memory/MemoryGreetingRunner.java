@@ -13,9 +13,9 @@ import org.springframework.stereotype.Component;
 /**
  * 进程内 RPC Consumer；在 Provider 生命周期启动后验证请求与响应。
  *
- * @Author OTRYX RPC
- * @Version 1.0.0
- * @CreateTime 2026/10/15 14:00
+ * @Author Ryan
+ * @Version 1.0.0-SNAPSHOT
+ * @CreateTime 2026/10/15 14:41
  */
 @Component
 public class MemoryGreetingRunner implements ApplicationRunner {

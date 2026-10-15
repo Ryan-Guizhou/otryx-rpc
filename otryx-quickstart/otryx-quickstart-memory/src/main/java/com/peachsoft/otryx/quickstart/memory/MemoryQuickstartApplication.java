@@ -6,9 +6,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 /**
  * 无外部注册中心的进程内 RPC 快速入门应用。
  *
- * @Author OTRYX RPC
- * @Version 1.0.0
- * @CreateTime 2026/10/15 14:00
+ * @Author Ryan
+ * @Version 1.0.0-SNAPSHOT
+ * @CreateTime 2026/10/15 14:41
  */
 @SpringBootApplication
 public class MemoryQuickstartApplication {
