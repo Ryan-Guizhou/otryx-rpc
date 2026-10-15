@@ -8,7 +8,7 @@
 
 | 你的目标 | 建议阅读 |
 |---|---|
-| 下载源码、编译、实际跑通 Provider / Consumer | [快速开始](getting-started.md) |
+| 下载源码、编译、实际跑通 Provider / Consumer | [Quickstart 实战](../otryx-quickstart/README.md) · [快速开始](getting-started.md) |
 | 第一次集成 Starter、写业务接口 | [用户指南](user-guide.md) |
 | Registry / 超时 / 背压 / TLS 等参数 | [配置参考](configuration.md) 和 [Starter](reference/starter.md) |
 | 排查运行失败、资源和监控问题 | [运行与排障](operations.md) 和 [FAQ](faq.md) |
