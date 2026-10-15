@@ -105,6 +105,7 @@ jobs:
           RUNNER_LABELS_JSON: ${{ inputs.runner_labels_json }}
           EXPECTED_RUNNER_ID: ${{ inputs.runner_id }}
           ACTUAL_RUNNER_ID: ${{ runner.name }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
           EXPECTED_HOST_FINGERPRINT_SHA256: ${{ inputs.host_fingerprint_sha256 }}
           JVM_FLAGS: ${{ inputs.jvm_flags }}
           RUN_ID: ${{ inputs.run_id }}
@@ -122,6 +123,10 @@ jobs:
             exit 1
           fi
           if [[ "$EVIDENCE_CLASS" != "controlled" ]]; then exit 0; fi
+          if [[ "$RUNNER_ENVIRONMENT" != "self-hosted" ]]; then
+            echo "Controlled evidence requires a verified self-hosted runner" >&2
+            exit 1
+          fi
           if [[ "$RUNNER_LABELS_JSON" == *"ubuntu-latest"* ]]; then echo "Controlled evidence cannot run on ubuntu-latest"; exit 1; fi
           if [[ -z "$EXPECTED_RUNNER_ID" || "$EXPECTED_RUNNER_ID" == "github-hosted-ephemeral" ]]; then echo "Controlled evidence requires an expected self-hosted runner name"; exit 1; fi
           if [[ "$ACTUAL_RUNNER_ID" != "$EXPECTED_RUNNER_ID" ]]; then echo "Controlled evidence runner mismatch: expected '$EXPECTED_RUNNER_ID', actual '$ACTUAL_RUNNER_ID'"; exit 1; fi

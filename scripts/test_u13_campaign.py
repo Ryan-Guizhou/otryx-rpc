@@ -82,7 +82,7 @@ def make_bundle(path: Path, run_id: str, commit: str, captured_at: datetime,
                 host: str = HOST) -> None:
     """Build structurally consistent, explicitly synthetic controlled evidence."""
     path.mkdir(parents=True)
-    completed_at = captured_at + timedelta(hours=1, seconds=20)
+    completed_at = captured_at + timedelta(hours=1, minutes=3)
     (path / "preflight.properties").write_text(
         f"schema_version=1\nstatus=PASS\ncaptured_at={iso(captured_at - timedelta(minutes=1))}\n"
         f"commit={commit}\nevidence_class=controlled\nrun_id={run_id}\n"
@@ -171,6 +171,11 @@ def main() -> None:
             "OTRYX_RPC_RUNNER_ID: ${{ runner.name }}",
             "OTRYX_RPC_RUNNER_LABELS: ${{ inputs.runner_labels_json }}"):
         assert mapping in matrix_step, f"JMH matrix workflow lost provenance: {mapping}"
+    guard_step = workflow.split("      - name: Guard controlled evidence\n", 1)[1].split(
+        "      - uses: actions/checkout@", 1
+    )[0]
+    assert "RUNNER_ENVIRONMENT: ${{ runner.environment }}" in guard_step
+    assert '"$RUNNER_ENVIRONMENT" != "self-hosted"' in guard_step
 
     with tempfile.TemporaryDirectory(prefix="otryx-u13-fixtures-") as temporary:
         root = Path(temporary)
@@ -274,6 +279,20 @@ def main() -> None:
         original_policy = json.loads(first_policy_path.read_text(encoding="utf-8"))
         write_json(soak_path, dict(
             saved_soak, throughputOpsPerSecond=100000.0
+        ))
+        write_json(first_policy_path, dict(
+            original_policy, soakSha256=hashlib.sha256(soak_path.read_bytes()).hexdigest()
+        ))
+        create(first)
+        rejected(lambda: validate_campaign(data, root))
+        write_json(soak_path, saved_soak)
+        write_json(first_policy_path, original_policy)
+        create(first)
+        assert validate_campaign(data, root)["integrity"] == "PASS"
+
+        # Even correctly hashed data cannot claim more soak time than elapsed.
+        write_json(soak_path, dict(
+            saved_soak, completedAt=iso(START + timedelta(minutes=59))
         ))
         write_json(first_policy_path, dict(
             original_policy, soakSha256=hashlib.sha256(soak_path.read_bytes()).hexdigest()

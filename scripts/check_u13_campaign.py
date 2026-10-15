@@ -142,6 +142,9 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
             and math.isfinite(soak["durationSeconds"])
             and soak["durationSeconds"] >= MIN_SECONDS,
             f"Controlled soak shorter than 60 minutes: {path}")
+    require((completed_at - matrix_captured_at).total_seconds()
+            >= soak["durationSeconds"],
+            f"Soak timestamps cannot cover the recorded measured duration: {path}")
     require(type(soak.get("concurrency")) is int
             and soak["concurrency"] >= MIN_CONCURRENCY,
             f"Not 10k logical concurrency: {path}")
