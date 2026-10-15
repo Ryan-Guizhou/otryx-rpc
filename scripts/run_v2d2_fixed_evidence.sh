@@ -71,11 +71,26 @@ fi
 export OTRYX_RPC_EVIDENCE_CLASS=controlled
 export OTRYX_RPC_BENCHMARK_COMMIT="$GIT_HEAD"
 export OTRYX_RPC_EVIDENCE_RUN_ID="$RUN_ID"
+export OTRYX_RPC_SOAK_CONCURRENCY="$CONCURRENCY"
+export OTRYX_RPC_SOAK_PAYLOAD_SIZE="$PAYLOAD_SIZE"
+export OTRYX_RPC_SOAK_CONNECTIONS="$CONNECTIONS"
+export OTRYX_RPC_SOAK_WARMUP_SECONDS="$WARMUP_SECONDS"
+export OTRYX_RPC_SOAK_DURATION_SECONDS="$DURATION_SECONDS"
+export OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS="$CLIENT_TIMEOUT_MS"
+export OTRYX_RPC_SOAK_MAX_ERROR_RATE="$MAX_ERROR_RATE"
+export OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT="$MIN_OBSERVED_INFLIGHT"
+export OTRYX_RPC_SOAK_MAX_P99_MICROS="$MAX_P99_MICROS"
 
 mkdir -p "$OUTPUT_DIR"
 
 bash scripts/preflight_v2d2_runner.sh "$OUTPUT_DIR"
 bash scripts/capture_v2d2_environment.sh "$OUTPUT_DIR"
+OTRYX_RPC_HOST_FINGERPRINT_SHA256="$(awk -F= '$1 == "host_fingerprint_sha256" {print $2; exit}' "$OUTPUT_DIR/environment.properties")"
+if [[ ! "$OTRYX_RPC_HOST_FINGERPRINT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Invalid controlled runner fingerprint in environment capture" >&2
+  exit 1
+fi
+export OTRYX_RPC_HOST_FINGERPRINT_SHA256
 
 if [[ -n "$BASELINE" ]]; then
   python3 scripts/check_v2d2_runner_baseline.py     --environment "$OUTPUT_DIR/environment.properties"     --baseline "$BASELINE"     --initialize-if-missing

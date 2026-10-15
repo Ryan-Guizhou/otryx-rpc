@@ -127,6 +127,15 @@ containerized=$CONTAINERIZED
 java_major=$JAVA_MAJOR
 maven_version=$MAVEN_VERSION
 jvm_flags=$JVM_FLAGS
+soak_concurrency=${OTRYX_RPC_SOAK_CONCURRENCY:-}
+soak_payload_size=${OTRYX_RPC_SOAK_PAYLOAD_SIZE:-}
+soak_connections=${OTRYX_RPC_SOAK_CONNECTIONS:-}
+soak_warmup_seconds=${OTRYX_RPC_SOAK_WARMUP_SECONDS:-}
+soak_duration_seconds=${OTRYX_RPC_SOAK_DURATION_SECONDS:-}
+soak_client_timeout_ms=${OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS:-}
+soak_max_error_rate=${OTRYX_RPC_SOAK_MAX_ERROR_RATE:-}
+soak_min_observed_inflight=${OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT:-}
+soak_max_p99_micros=${OTRYX_RPC_SOAK_MAX_P99_MICROS:-}
 EOF
 
 cat > "$OUTPUT_DIR/preflight.md" <<EOF

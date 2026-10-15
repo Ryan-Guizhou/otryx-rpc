@@ -87,7 +87,11 @@ def make_bundle(path: Path, run_id: str, commit: str, captured_at: datetime,
         f"schema_version=1\nstatus=PASS\ncaptured_at={iso(captured_at - timedelta(minutes=1))}\n"
         f"commit={commit}\nevidence_class=controlled\nrun_id={run_id}\n"
         f"runner_id=otryx-perf-fixture\nhost_fingerprint_sha256={host}\n"
-        "java_major=21\njvm_flags=-Xms4g -Xmx4g\n",
+        "java_major=21\njvm_flags=-Xms4g -Xmx4g\n"
+        "soak_concurrency=10000\nsoak_payload_size=256\nsoak_connections=4\n"
+        "soak_warmup_seconds=30\nsoak_duration_seconds=3600\n"
+        "soak_client_timeout_ms=15000\nsoak_max_error_rate=0.01\n"
+        "soak_min_observed_inflight=500\nsoak_max_p99_micros=500.0\n",
         encoding="utf-8",
     )
     (path / "environment.properties").write_text(
@@ -111,10 +115,19 @@ def make_bundle(path: Path, run_id: str, commit: str, captured_at: datetime,
     )
     soak = {
         "commit": commit,
+        "runnerId": "otryx-perf-fixture",
+        "runId": run_id,
+        "hostFingerprintSha256": host,
+        "jvmFlags": "-Xms4g -Xmx4g",
+        "javaVersion": "21.0.9",
+        "availableProcessors": 16,
         "completedAt": iso(completed_at),
         "concurrency": 10000,
         "payloadBytes": 256,
         "connectionsPerEndpoint": 4,
+        "warmupSeconds": 30,
+        "requestedDurationSeconds": 3600,
+        "clientTimeoutMillis": 15000,
         "durationSeconds": 3600.0,
         "throughputOpsPerSecond": 50000.0,
         "successes": 180000000,
@@ -176,6 +189,22 @@ def main() -> None:
     )[0]
     assert "RUNNER_ENVIRONMENT: ${{ runner.environment }}" in guard_step
     assert '"$RUNNER_ENVIRONMENT" != "self-hosted"' in guard_step
+    preflight_step = workflow.split("      - name: Preflight controlled runner\n", 1)[1].split(
+        "      - name: Capture evidence environment\n", 1
+    )[0]
+    soak_step = workflow.split("      - name: Run virtual-thread soak\n", 1)[1].split(
+        "      - name: Enforce predeclared controlled soak policy\n", 1
+    )[0]
+    for mapping in (
+            "OTRYX_RPC_RUNNER_ID: ${{ runner.name }}",
+            "OTRYX_RPC_EVIDENCE_RUN_ID: ${{ inputs.run_id }}",
+            "OTRYX_RPC_HOST_FINGERPRINT_SHA256: ${{ inputs.host_fingerprint_sha256 }}"):
+        assert mapping in soak_step, f"Soak lost runner identity: {mapping}"
+    for mapping in (
+            "OTRYX_RPC_SOAK_MAX_ERROR_RATE: ${{ inputs.soak_max_error_rate }}",
+            "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT: ${{ inputs.soak_min_observed_inflight }}",
+            "OTRYX_RPC_SOAK_MAX_P99_MICROS: ${{ inputs.soak_max_p99_micros }}"):
+        assert mapping in preflight_step, f"Preflight lost policy threshold: {mapping}"
 
     with tempfile.TemporaryDirectory(prefix="otryx-u13-fixtures-") as temporary:
         root = Path(temporary)
@@ -300,6 +329,57 @@ def main() -> None:
         create(first)
         rejected(lambda: validate_campaign(data, root))
         write_json(soak_path, saved_soak)
+        write_json(first_policy_path, original_policy)
+        create(first)
+        assert validate_campaign(data, root)["integrity"] == "PASS"
+
+        # A copied soak from a different runner cannot be re-signed as local.
+        for field, incorrect in (
+                ("runnerId", "foreign-runner"),
+                ("runId", "wrong-run"),
+                ("hostFingerprintSha256", "d" * 64),
+                ("jvmFlags", "-Xmx1g"),
+                ("javaVersion", "17.0.21")):
+            forged_soak = dict(saved_soak, **{field: incorrect})
+            write_json(soak_path, forged_soak)
+            write_json(first_policy_path, dict(
+                original_policy,
+                soakSha256=hashlib.sha256(soak_path.read_bytes()).hexdigest()
+            ))
+            create(first)
+            rejected(lambda: validate_campaign(data, root))
+        write_json(soak_path, saved_soak)
+        write_json(first_policy_path, original_policy)
+        create(first)
+        assert validate_campaign(data, root)["integrity"] == "PASS"
+
+        # Reject any changed workload, including identical values in policy.
+        for field, incorrect in (
+                ("concurrency", 20000),
+                ("payloadBytes", 1048576),
+                ("connectionsPerEndpoint", 8),
+                ("requestedDurationSeconds", 3700),
+                ("clientTimeoutMillis", 20000)):
+            forged_soak = dict(saved_soak, **{field: incorrect})
+            write_json(soak_path, forged_soak)
+            write_json(first_policy_path, dict(
+                original_policy,
+                soakSha256=hashlib.sha256(soak_path.read_bytes()).hexdigest()
+            ))
+            create(first)
+            rejected(lambda: validate_campaign(data, root))
+        write_json(soak_path, saved_soak)
+        write_json(first_policy_path, original_policy)
+        create(first)
+        assert validate_campaign(data, root)["integrity"] == "PASS"
+
+        # Changing post-soak thresholds cannot override the predeclared policy.
+        modified_policy = dict(original_policy, policy=dict(
+            original_policy["policy"], maxErrorRate=0.5
+        ))
+        write_json(first_policy_path, modified_policy)
+        create(first)
+        rejected(lambda: validate_campaign(data, root))
         write_json(first_policy_path, original_policy)
         create(first)
         assert validate_campaign(data, root)["integrity"] == "PASS"

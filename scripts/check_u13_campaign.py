@@ -138,6 +138,20 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
     require(completed_at > matrix_captured_at,
             f"Soak finished before nested matrix capture: {path}")
     require(soak.get("commit") == sha, f"Soak commit mismatch: {path}")
+    for field, key in (
+            ("runnerId", "runner_id"),
+            ("runId", "run_id"),
+            ("hostFingerprintSha256", "host_fingerprint_sha256"),
+            ("jvmFlags", "jvm_flags")):
+        require(soak.get(field) == env.get(key),
+                f"Soak/root environment mismatch ({field}): {path}")
+    require(isinstance(soak.get("javaVersion"), str)
+            and re.match(r"^21(?:[._+\-]|$)", soak["javaVersion"]) is not None,
+            f"Soak did not run on Java 21: {path}")
+    require(isinstance(soak.get("availableProcessors"), int)
+            and not isinstance(soak["availableProcessors"], bool)
+            and soak["availableProcessors"] > 0,
+            f"Soak recorded invalid available processors: {path}")
     require(isinstance(soak.get("durationSeconds"), (int, float))
             and math.isfinite(soak["durationSeconds"])
             and soak["durationSeconds"] >= MIN_SECONDS,
@@ -148,12 +162,42 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
     require(type(soak.get("concurrency")) is int
             and soak["concurrency"] >= MIN_CONCURRENCY,
             f"Not 10k logical concurrency: {path}")
+    workload_keys = (
+        ("concurrency", "soak_concurrency"),
+        ("payloadBytes", "soak_payload_size"),
+        ("connectionsPerEndpoint", "soak_connections"),
+        ("warmupSeconds", "soak_warmup_seconds"),
+        ("requestedDurationSeconds", "soak_duration_seconds"),
+        ("clientTimeoutMillis", "soak_client_timeout_ms"),
+    )
+    workload = {}
+    for soak_key, preflight_key in workload_keys:
+        actual_value = soak.get(soak_key)
+        require(type(actual_value) is int and actual_value > 0
+                if soak_key != "warmupSeconds"
+                else type(actual_value) is int and actual_value >= 0,
+                f"Missing or invalid configured soak workload ({soak_key}): {path}")
+        recorded = preflight.get(preflight_key, "")
+        require(recorded.isdecimal() and int(recorded) == actual_value,
+                f"Predeclared soak workload mismatch ({soak_key}): {path}")
+        workload[soak_key] = actual_value
     policy = load_json(path / "soak-policy" / "report.json")
     require(policy.get("status") == "POLICY_PASS", f"Unaccepted soak policy: {path}")
     require(policy.get("soakSha256") == hashlib.sha256(soak_bytes).hexdigest(),
             f"Stale policy checksum: {path}")
     thresholds = policy.get("policy", {})
     require(isinstance(thresholds, dict), f"Missing thresholds: {path}")
+    try:
+        max_error_rate = float(preflight["soak_max_error_rate"])
+        min_inflight = int(preflight["soak_min_observed_inflight"])
+        max_p99_raw = preflight.get("soak_max_p99_micros", "")
+        max_p99 = float(max_p99_raw) if max_p99_raw else None
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"Missing predeclared soak thresholds: {path}") from error
+    require(thresholds.get("maxErrorRate") == max_error_rate
+            and thresholds.get("minObservedLogicalInflight") == min_inflight
+            and thresholds.get("maxP99Micros") == max_p99,
+            f"Soak policy thresholds changed after preflight: {path}")
     result = check_soak(
         soak,
         "controlled",
@@ -170,6 +214,7 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
     return {key: env[key] for key in STABLE_KEYS}, {
         "runId": run_id,
         "commit": sha,
+        "workload": workload,
         "capturedAt": captured_at.isoformat(),
         "completedAt": completed_at.isoformat(),
         "durationSeconds": soak["durationSeconds"],
@@ -195,6 +240,7 @@ def validate_campaign(config: dict, directory: Path) -> dict:
     require(tuple(item.get("side") for item in runs) == ORDER,
             "Run order must be baseline,candidate,candidate,baseline,baseline,candidate")
     stable = None
+    fixed_workload: dict | None = None
     labels: set[str] = set()
     summaries: dict[str, list[dict]] = {"baseline": [], "candidate": []}
     previous_completed: datetime | None = None
@@ -215,6 +261,11 @@ def validate_campaign(config: dict, directory: Path) -> dict:
             stable = env
         else:
             require(env == stable, f"Changed hardware/JVM baseline in run {position}")
+        if fixed_workload is None:
+            fixed_workload = summary["workload"]
+        else:
+            require(summary["workload"] == fixed_workload,
+                    f"Changed AB/BA soak workload in run {position}")
         summaries[side].append(summary)
     metrics = {}
     for side, values in summaries.items():

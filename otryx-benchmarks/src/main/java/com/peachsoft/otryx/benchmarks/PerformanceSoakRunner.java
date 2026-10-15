@@ -59,6 +59,10 @@ public final class PerformanceSoakRunner {
     private static final String SYSTEM_OS_ARCH = "os.arch";
     private static final String ENV_BENCHMARK_COMMIT = "OTRYX_RPC_BENCHMARK_COMMIT";
     private static final String ENV_GITHUB_SHA = "GITHUB_SHA";
+    private static final String ENV_RUNNER_ID = "OTRYX_RPC_RUNNER_ID";
+    private static final String ENV_EVIDENCE_RUN_ID = "OTRYX_RPC_EVIDENCE_RUN_ID";
+    private static final String ENV_HOST_FINGERPRINT = "OTRYX_RPC_HOST_FINGERPRINT_SHA256";
+    private static final String ENV_JVM_FLAGS = "OTRYX_RPC_JVM_FLAGS";
     private static final String TRANSPORT_EXTENSION = "vertx";
     private static final String REGISTRY_EXTENSION = "memory";
 
@@ -587,6 +591,10 @@ public final class PerformanceSoakRunner {
                     "commit",
                     benchmarkCommit(),
                     true);
+            append(json, "runnerId", environment(ENV_RUNNER_ID), true);
+            append(json, "runId", environment(ENV_EVIDENCE_RUN_ID), true);
+            append(json, "hostFingerprintSha256", environment(ENV_HOST_FINGERPRINT), true);
+            append(json, "jvmFlags", environment(ENV_JVM_FLAGS), true);
             append(
                     json,
                     "javaVersion",
@@ -638,6 +646,16 @@ public final class PerformanceSoakRunner {
                     json,
                     "warmupSeconds",
                     config.warmupSeconds(),
+                    true);
+            append(
+                    json,
+                    "requestedDurationSeconds",
+                    config.durationSeconds(),
+                    true);
+            append(
+                    json,
+                    "clientTimeoutMillis",
+                    config.clientTimeoutMillis(),
                     true);
             append(
                     json,
@@ -754,6 +772,11 @@ public final class PerformanceSoakRunner {
             }
             return (after - before)
                     / (double) elapsedNanos;
+        }
+
+        private static String environment(String key) {
+            String value = System.getenv(key);
+            return value == null || value.isBlank() ? "unknown" : value;
         }
 
         private static String benchmarkCommit() {
