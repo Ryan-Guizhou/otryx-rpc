@@ -4,70 +4,47 @@
 
 ## 1. 引入
 
-### 1.1 新项目推荐：轻量 Starter
+### 1.1 唯一的 Spring Boot Starter
 
-轻量接入采用 `otryx-spring-boot-starter-lite`，默认是 **Memory Registry、JDK Proxy、Fory、Vert.x**，不额外带入 Etcd、Nacos、Consul、Eureka 或 CGLIB。它保留和完整 Starter 相同的注解、配置、Wire v1 与 Public Core API：
+目前只保留 **\`otryx-spring-boot-starter\`**，不区分 Lite/Full。Starter 本身不再传递 Etcd、Nacos 或 CGLIB SDK，默认依赖 Spring Boot AutoConfiguration、Core、Memory Registry、JDK Proxy、Fory、Vert.x，完整 RPC 能力与 Wire v1 不变。
 
-```xml
-<dependency>
-    <groupId>com.peachsoft.otryx</groupId>
-    <artifactId>otryx-spring-boot-starter-lite</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
-</dependency>
-```
-
-需要 Nacos 时仅增加对应 Adapter，并按下文配置 Registry：
-
-```xml
-<dependency>
-    <groupId>com.peachsoft.otryx</groupId>
-    <artifactId>otryx-registry-nacos</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
-</dependency>
-```
-
-Etcd 则引入 `otryx-registry-etcd`。Consul 或 Eureka 需要额外引入对应 `otryx-registry-consul` / `otryx-registry-eureka` Adapter，分别配置 `registry.type=consul` / `eureka`：
-
-```xml
-<dependency>
-    <groupId>com.peachsoft.otryx</groupId>
-    <artifactId>otryx-registry-consul</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
-</dependency>
-```
-
-将 `artifactId` 改为 `otryx-registry-eureka` 即可选择 Eureka；完整配置分别见 [Consul 接入](registry-consul.md)、[Eureka 接入](registry-eureka.md)。二者通过 `otryx-registry-http` 共享控制面，不需要单独声明 HTTP 子模块。
-
-CGLIB fallback 则引入 `otryx-proxy-cglib`，Byte Buddy 使用 `otryx-proxy-bytebuddy`。SPI 自动发现实际已安装的 Adapter；如果配置了未加入类路径的 `otryx.rpc.registry.type=nacos`，应按缺失 Adapter 处理，不能假设轻量 Starter 自带 SDK。
-
-### 1.2 兼容模式：完整 Starter
-
-已在使用的 `otryx-spring-boot-starter` **继续保留**原有 Etcd、Nacos、CGLIB 的传递依赖，避免在 1.0.x 期间破坏依赖兼容：
-
-```xml
+\`\`\`xml
 <dependency>
     <groupId>com.peachsoft.otryx</groupId>
     <artifactId>otryx-spring-boot-starter</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
-```
+\`\`\`
 
-两种 Starter 请选择一种，避免重复声明；不要同时依赖。当前版本仍处于源码 Release Prep，实际 Maven Central 可用性以正式发布结果为准。
+只有跨进程使用 Nacos 时，再在**具体业务项目**加入：
 
-```mermaid
+\`\`\`xml
+<dependency>
+    <groupId>com.peachsoft.otryx</groupId>
+    <artifactId>otryx-registry-nacos</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+</dependency>
+\`\`\`
+
+Etcd、Consul/Eureka、CGLIB、ByteBuddy 或遥测模块也按照需求独立引入：\`otryx-registry-etcd\`、\`otryx-registry-consul\`、\`otryx-registry-eureka\`、\`otryx-proxy-cglib\`、\`otryx-proxy-bytebuddy\`。Consul/Eureka 通过 \`otryx-registry-http\` 共享协议实现，无需自己重复添加 HTTP 子模块。SPI 自动发现实际安装的 Adapter；\`registry.type=nacos\` 却没有 \`otryx-registry-nacos\` 将在启动时明确失败。
+
+单一 Starter 只是依赖汇总，不复制运行时实现；Bean 自动装配与注解生命周期始终由 \`otryx-spring-boot-autoconfigure\` 提供。下图表示**默认依赖与显式可选依赖的边界**：
+
+\`\`\`mermaid
 flowchart LR
-    Lite[Starter Lite] --> Auto[AutoConfiguration]
-    Full[Legacy Full Starter] --> Auto
-    Full --> Etcd[Etcd Adapter]
-    Full --> Nacos[Nacos Adapter]
-    Full --> Cglib[CGLIB Adapter]
-    Auto --> Core[Core / JDK Proxy / Memory]
-    Auto --> Codec[Fory Codec]
-    Auto --> Transport[Vert.x Transport]
-```
+    Starter[Spring Boot Starter] --> Auto[AutoConfiguration]
+    Auto --> Core[Core / Memory Registry / JDK Proxy]
+    Auto --> Fory[Fory Codec]
+    Auto --> Vertx[Vert.x Transport]
+    App[业务应用] --> Starter
+    App -. 按需 .-> Nacos[Nacos / Etcd / Consul / Eureka]
+    App -. 按需 .-> Proxy[CGLIB / ByteBuddy]
+    App -. 按需 .-> Obs[Micrometer / OTel / JFR]
+\`\`\`
 
+**迁移说明**：本次调整发生于尚未正式发布的 \`1.0.0-SNAPSHOT\` 源码，若你的本地开发项目此前依赖旧 Lite 坐标，应改为上面的唯一 Starter，并按需显式加入原来由单一 Starter 传递的注册中心、代理 SDK。不创建别名或空壳兼容模块。
 
-### 1.3 零外部依赖的真实 RPC 冒烟
+### 1.2 零外部依赖的真实 RPC 冒烟
 
 仓库包含 `OtryxRpcAutoConfigurationTest.memoryRegistryShouldCompleteRealRpcWithoutExternalInfrastructure`，在一个 Spring 测试上下文内启动真实 Vert.x Provider/Consumer，使用内存 Registry、回环地址、随机端口完成 `DemoService.call()`。不依赖 Nacos、Etcd、Docker 或外部数据库。
 
@@ -79,7 +56,7 @@ mvn -B -ntp -pl otryx-spring-boot-autoconfigure -am \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-这是源码测试命令。若业务项目单独引用已发布的 Lite Starter，需先引入双方共享的 RPC 接口定义，然后分别声明 `@OtryxRpcService` 和 `@OtryxRpcReference`，单 JVM 内存模式适合本地冒烟，跨进程生产环境必须换用 Etcd、Nacos、Consul、Eureka 或等价的共享注册中心。
+这是源码测试命令。若业务项目单独引用已发布的 单一 Starter，需先引入双方共享的 RPC 接口定义，然后分别声明 `@OtryxRpcService` 和 `@OtryxRpcReference`，单 JVM 内存模式适合本地冒烟，跨进程生产环境必须换用 Etcd、Nacos、Consul、Eureka 或等价的共享注册中心。
 
 ## 2. Provider
 
@@ -296,7 +273,7 @@ Core 的 `RpcObserver`、`RpcTracingBridge`、`RpcMetadataPropagator` 不依赖�
 
 Spring Boot 完成 `otryx.rpc.*` 参数绑定时会立即校验 Registry、Transport、Fory、Consumer 与 Provider 的已启用选项，出现零超时、负数限额、非法端口、退避范围错误或无效的 Fory 严格白名单会终止启动。错误直接指出具体配置键，如 `Invalid otryx.rpc.client.timeout: must be positive`。未启用的 Consumer/Provider 的专属配置不参与对应校验，避免影响单一角色部署。
 
-无法找到已配置的 SPI 时（例如在 Lite Starter 上选择 `otryx.rpc.registry.type=nacos`，却未加入 `otryx-registry-nacos` 依赖），启动异常会指出配置键，并建议加入对应 Adapter。可用扩展列表来自实际 Classpath，不硬编码在诊断器中。
+无法找到已配置的 SPI 时（例如在 单一 Starter 上选择 `otryx.rpc.registry.type=nacos`，却未加入 `otryx-registry-nacos` 依赖），启动异常会指出配置键，并建议加入对应 Adapter。可用扩展列表来自实际 Classpath，不硬编码在诊断器中。
 
 启动时输出 Registry、Transport、Proxy、Fory 安全模式、TLS 模式、启用角色与限额摘要，**不记录注册中心 username/password、密钥、证书或其文件内容**。默认的 `PLAINTEXT` 与 `TRUSTED_COMPATIBILITY` 会发出安全提醒；提醒不阻止本地开发，但面向不可信网络应开启 TLS/mTLS 与严格 Fory allowlist。
 
@@ -337,12 +314,12 @@ ServiceKey/MethodId 生成 `RpcAuthorizationContext`；若容器中声明
 
 ## 可运行的自定义 Observer 接入示例（U11）
 
-Consumer 示例中的 [ExampleCallObserver](../../otryx-examples/otryx-example-consumer/src/main/java/com/peachsoft/otryx/examples/consumer/ExampleCallObserver.java) 直接实现 Core `RpcObserver` 并注册为 Spring `@Component`，按逻辑请求终态以 `LongAdder` 统计成功/失败次数。
+Consumer 示例中的 [QuickstartCallObserver](../../otryx-quickstart/otryx-quickstart-consumer/src/main/java/com/peachsoft/otryx/examples/consumer/QuickstartCallObserver.java) 直接实现 Core `RpcObserver` 并注册为 Spring `@Component`，按逻辑请求终态以 `LongAdder` 统计成功/失败次数。
 它不读取请求 Payload、不记录异常内容，也不在 RPC 线程执行 I/O。
 
 - Spring 可通过已注册的自定义 `RpcObserver` Bean 汇入 Coordinator 的复合 Observer；业务无需修改协议或 Core。
 - 自定义 `RpcTransportFactory` Bean 可覆盖 SPI 名称选择；已有 Bean 时 `@ConditionalOnMissingBean` 不再创建默认工厂。
 - 对可能阻塞的第三方遥测出口，使用 `new BoundedAsyncRpcObserver(delegate, queueCapacity)` 并明确关闭所有权；队列溢出丢弃遥测，不反向压制 RPC 业务。
-- [ExampleCallObserverTest](../../otryx-examples/otryx-example-consumer/src/test/java/com/peachsoft/otryx/examples/consumer/ExampleCallObserverTest.java) 与 `OtryxRpcAutoConfigurationTest` 校验计数和覆盖行为。
+- [QuickstartCallObserverTest](../../otryx-quickstart/otryx-quickstart-consumer/src/test/java/com/peachsoft/otryx/examples/consumer/QuickstartCallObserverTest.java) 与 `OtryxRpcAutoConfigurationTest` 校验计数和覆盖行为。
 
 本示例不包含持久化、Exactly-once 审计或网络外部 Exporter；直接在隔离开发环境运行上述双 JVM 示例即可触发回调。

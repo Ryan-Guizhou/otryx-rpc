@@ -54,9 +54,8 @@ otryx-rpc (root parent)
 │   └── otryx-observability-jfr
 ├── otryx-spring-boot
 │   ├── otryx-spring-boot-autoconfigure
-│   ├── otryx-spring-boot-starter
-│   └── otryx-spring-boot-starter-lite
-├── otryx-examples
+│   └── otryx-spring-boot-starter
+├── otryx-quickstart
 └── otryx-benchmarks
 ```
 
@@ -114,7 +113,7 @@ python3 scripts/check_central_publication.py \
 - 默认 `autoPublish=false`；
 - 默认等待到 `validated`；
 - Central 要求的 checksum；
-- 对 examples / benchmarks 的发布排除。
+- 对 quickstart / benchmarks 的发布排除。
 
 公开发布模块：
 
@@ -128,10 +127,11 @@ python3 scripts/check_central_publication.py \
 
 不发布：
 
-- `otryx-examples`；
-- `otryx-example-api`；
-- `otryx-example-provider`；
-- `otryx-example-consumer`；
+- `otryx-quickstart`；
+- `otryx-quickstart-api`；
+- `otryx-quickstart-provider`；
+- `otryx-quickstart-consumer`；
+- `otryx-quickstart-memory`；
 - `otryx-benchmarks`。
 
 ### 5.1 纯依赖 Starter 的 Source/Javadoc
