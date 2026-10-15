@@ -13,7 +13,7 @@ command_required() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
-for command_name in git java mvn python3 openssl lscpu awk getconf sha256sum; do
+for command_name in git java python3 openssl lscpu awk getconf sha256sum; do
   command_required "$command_name"
 done
 
@@ -60,7 +60,9 @@ if [[ -z "$JAVA_MAJOR" ]]; then
 fi
 [[ "$JAVA_MAJOR" == "21" ]] || fail "JDK 21 is required, found: $JAVA_LINE"
 
-MAVEN_LINE="$(mvn -version 2>&1 | head -n 1)"
+[[ -x ./mvnw ]] || fail "Controlled run must use the checked-in executable ./mvnw"
+MAVEN_VERSION_OUTPUT="$(./mvnw -version 2>&1)" || fail "Maven Wrapper failed"
+MAVEN_LINE="$(printf '%s\n' "$MAVEN_VERSION_OUTPUT" | grep -m1 '^Apache Maven ')"
 MAVEN_VERSION="$(printf '%s' "$MAVEN_LINE" | awk '{print $3}')"
 MAVEN_MAJOR="$(printf '%s' "$MAVEN_VERSION" | cut -d. -f1)"
 MAVEN_MINOR="$(printf '%s' "$MAVEN_VERSION" | cut -d. -f2)"
@@ -125,6 +127,15 @@ containerized=$CONTAINERIZED
 java_major=$JAVA_MAJOR
 maven_version=$MAVEN_VERSION
 jvm_flags=$JVM_FLAGS
+soak_concurrency=${OTRYX_RPC_SOAK_CONCURRENCY:-}
+soak_payload_size=${OTRYX_RPC_SOAK_PAYLOAD_SIZE:-}
+soak_connections=${OTRYX_RPC_SOAK_CONNECTIONS:-}
+soak_warmup_seconds=${OTRYX_RPC_SOAK_WARMUP_SECONDS:-}
+soak_duration_seconds=${OTRYX_RPC_SOAK_DURATION_SECONDS:-}
+soak_client_timeout_ms=${OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS:-}
+soak_max_error_rate=${OTRYX_RPC_SOAK_MAX_ERROR_RATE:-}
+soak_min_observed_inflight=${OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT:-}
+soak_max_p99_micros=${OTRYX_RPC_SOAK_MAX_P99_MICROS:-}
 EOF
 
 cat > "$OUTPUT_DIR/preflight.md" <<EOF

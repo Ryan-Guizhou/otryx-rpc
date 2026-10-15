@@ -44,6 +44,6 @@ python3 scripts/check_java_doc_metadata.py --audit --report target/java-javadoc-
 ## 依赖与首发候选贡献规范（U14）
 
 - OSV Scanner 新增依赖漏洞告警先评估可达性与修复方案；例外须由维护者记录风险、责任人、期限，不通过关闭检查绕过。
-- Maven/GitHub Actions 依赖使用 Dependabot 月度分组，以减少无意义的 CI；不要在同一个 PR 混合无关升级。
+- 首发版本冻结期间，Dependabot 的 Maven/Actions 常规版本升级 PR 暂停，仅保留安全更新入口；任何依赖升级须先确认兼容性与维护者授权，避免重复 CI。
 - `first-release-dry-run.yml` 只提供无凭据 RC/GA 构建证据，**不包括发布、签名或 Tag**。代码合并不授权实际发行。
 - 所有提交须通过准确 Head 和合并后 main CI；Fixed Runner 受控性能证据与共享 Runner Smoke 严格区分。

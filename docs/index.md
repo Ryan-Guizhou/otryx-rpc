@@ -23,7 +23,7 @@
 
 设计依据：[需求蓝图](design/requirements-blueprint.md) · [技术方案](design/technical-solution.md) · [详细设计](design/detailed-design.md) · [模块结构](design/project-structure.md) · [首发质量改造实施契约](engineering/plans/2026-10-12-open-source-quality-upgrade.md)。
 
-性能及工程证据：[性能证据](reference/performance-evidence.md) · [容量规划](reference/capacity-planning.md) · [Soak 验收](reference/soak-acceptance.md) · [分配剖析](reference/transport-allocation-profiling.md)。
+性能及工程证据：[性能证据](reference/performance-evidence.md) · [容量规划](reference/capacity-planning.md) · [Soak 验收与 AB/BA 三轮证据](reference/soak-acceptance.md) · [分配剖析](reference/transport-allocation-profiling.md)。
 
 ## 发布与项目管理
 

@@ -407,13 +407,13 @@ def main() -> int:
 
         mismatch = temp / "run-mismatch"
         write_bundle(mismatch, 1.0, commit="different-commit")
+        # Same runner and JVM must support A/B commits without changing hardware baseline.
         run(
             "scripts/check_v2d2_runner_baseline.py",
             "--environment",
             str(mismatch / "environment.properties"),
             "--baseline",
             str(baseline_path),
-            expect_success=False,
         )
         run(
             "scripts/compare_v2d2_evidence.py",

@@ -37,7 +37,7 @@ flowchart LR
 
 `python3 scripts/test_first_release_dry_run.py` 覆盖错误阶段/版本、缺失 Sources、错误 SBOM 版本、无效 SHA 与开发状态漂移。脚本只检验本地产物，**不能**替代 GPG 签名和 Central Portal 验证。
 
-`dependency-review.yml` 通过 OSV Scanner 比较 Base/PR，阻断新引入的已知依赖漏洞，不要求开启 GitHub Dependency Graph；暂时无法修复时维护者必须记录可达性、影响、责任人及复核期限。Dependabot 按月分组 Maven/Actions 更新；新增工作流 Actions 固定完整 Commit SHA。
+`dependency-review.yml` 通过 OSV Scanner 比较 Base/PR，阻断新引入的已知依赖漏洞，不要求开启 GitHub Dependency Graph；暂时无法修复时维护者必须记录可达性、影响、责任人及复核期限。Dependabot 在 GA 前暂停常规 Maven/Actions 版本升级，仅保留分组安全更新入口；新增工作流 Actions 固定完整 Commit SHA。
 
 ## 尚未关闭的外部和性能门槛
 
@@ -49,3 +49,8 @@ flowchart LR
 相关：[公开发布核查](../publication-readiness.md) · [性能证据](performance-evidence.md) · [历史发行边界](../archive/releases/release-readiness.md)。
 
 **当前结论：候选构建具有执行入口，不等于 GA Ready 或 Published。**
+
+
+## U13 性能工具新增边界
+
+`check_u13_campaign.py` 以 AB BA AB 六个受控 Evidence Bundle 为输入校验源 Commit、固定 Runner 硬件/虚拟机指纹、JVM、每次至少 3600 秒 Soak、10000 逻辑并发、实际在途阈值和 SHA256 完整性。它仅提供 `REPORT_ONLY`；真实运行、风险阈值与人工性能评审仍是发布前的独立证据要求。

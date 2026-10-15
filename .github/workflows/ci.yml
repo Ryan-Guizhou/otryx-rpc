@@ -113,6 +113,9 @@ jobs:
       - name: Verify V2-D.2-E2 and V2-D.4 gates
         run: python3 scripts/test_v2d2_e2_d4_tools.py
 
+      - name: Verify U13 controlled AB-BA evidence gates and adversarial fixtures
+        run: python3 scripts/test_u13_campaign.py
+
       - name: Verify V2-D.2 benchmark harness
         env:
           OTRYX_RPC_JVM_FLAGS: "-Xms256m -Xmx256m"

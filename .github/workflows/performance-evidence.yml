@@ -61,9 +61,9 @@ on:
         default: "10000"
         type: string
       soak_duration_seconds:
-        description: Soak measurement duration
+        description: Soak measurement duration; controlled campaigns require at least 3600 seconds
         required: true
-        default: "1800"
+        default: "3600"
         type: string
       soak_payload_size:
         description: Soak payload bytes
@@ -75,11 +75,28 @@ on:
         required: true
         default: "4"
         type: string
+      soak_max_error_rate:
+        description: Explicit max error ratio (0..1); required before controlled runs
+        required: false
+        default: ""
+        type: string
+      soak_min_observed_inflight:
+        description: Required observed logical inflight; configured 10k alone is insufficient
+        required: false
+        default: ""
+        type: string
+      soak_max_p99_micros:
+        description: Optional maximum p99 latency in microseconds
+        required: false
+        default: ""
+        type: string
 
 jobs:
   evidence:
     runs-on: ${{ fromJSON(inputs.runner_labels_json) }}
     timeout-minutes: 360
+    env:
+      EVIDENCE_DIR: target/v2d2-evidence-${{ inputs.run_id }}
     steps:
       - name: Guard controlled evidence
         shell: bash
@@ -88,6 +105,7 @@ jobs:
           RUNNER_LABELS_JSON: ${{ inputs.runner_labels_json }}
           EXPECTED_RUNNER_ID: ${{ inputs.runner_id }}
           ACTUAL_RUNNER_ID: ${{ runner.name }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
           EXPECTED_HOST_FINGERPRINT_SHA256: ${{ inputs.host_fingerprint_sha256 }}
           JVM_FLAGS: ${{ inputs.jvm_flags }}
           RUN_ID: ${{ inputs.run_id }}
@@ -96,8 +114,19 @@ jobs:
           RUN_SOAK: ${{ inputs.run_soak }}
           SOAK_CONCURRENCY: ${{ inputs.soak_concurrency }}
           SOAK_DURATION_SECONDS: ${{ inputs.soak_duration_seconds }}
+          MAX_ERROR_RATE: ${{ inputs.soak_max_error_rate }}
+          MIN_OBSERVED_INFLIGHT: ${{ inputs.soak_min_observed_inflight }}
+          MAX_P99_MICROS: ${{ inputs.soak_max_p99_micros }}
         run: |
+          if [[ ! "$RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,48}$ ]]; then
+            echo "Evidence run_id must be a safe short filename component" >&2
+            exit 1
+          fi
           if [[ "$EVIDENCE_CLASS" != "controlled" ]]; then exit 0; fi
+          if [[ "$RUNNER_ENVIRONMENT" != "self-hosted" ]]; then
+            echo "Controlled evidence requires a verified self-hosted runner" >&2
+            exit 1
+          fi
           if [[ "$RUNNER_LABELS_JSON" == *"ubuntu-latest"* ]]; then echo "Controlled evidence cannot run on ubuntu-latest"; exit 1; fi
           if [[ -z "$EXPECTED_RUNNER_ID" || "$EXPECTED_RUNNER_ID" == "github-hosted-ephemeral" ]]; then echo "Controlled evidence requires an expected self-hosted runner name"; exit 1; fi
           if [[ "$ACTUAL_RUNNER_ID" != "$EXPECTED_RUNNER_ID" ]]; then echo "Controlled evidence runner mismatch: expected '$EXPECTED_RUNNER_ID', actual '$ACTUAL_RUNNER_ID'"; exit 1; fi
@@ -105,10 +134,28 @@ jobs:
           if [[ -z "$JVM_FLAGS" ]]; then echo "Controlled evidence requires explicit JVM flags"; exit 1; fi
           if [[ -z "$RUN_ID" || "$RUN_ID" == "manual-run" ]]; then echo "Controlled evidence requires a unique run_id such as run-1"; exit 1; fi
           if [[ "$MATRIX_PROFILE" != "full" || "$RUN_MATRIX" != "true" || "$RUN_SOAK" != "true" ]]; then echo "Controlled evidence requires full matrix and soak"; exit 1; fi
-          if (( SOAK_CONCURRENCY < 10000 || SOAK_DURATION_SECONDS < 1800 )); then echo "Controlled evidence requires >=10000 concurrency and >=1800s soak"; exit 1; fi
-      - uses: actions/checkout@v7
+          if (( SOAK_CONCURRENCY < 10000 || SOAK_DURATION_SECONDS < 3600 )); then echo "Controlled evidence requires >=10000 concurrency and >=3600s soak"; exit 1; fi
+          if [[ -z "$MAX_ERROR_RATE" || -z "$MIN_OBSERVED_INFLIGHT" ]]; then
+            echo "Controlled soak requires predeclared max error rate and observed inflight floor" >&2
+            exit 1
+          fi
+          python3 - "$MAX_ERROR_RATE" "$MIN_OBSERVED_INFLIGHT" "$SOAK_CONCURRENCY" "$MAX_P99_MICROS" <<'PY'
+          import math
+          import sys
+          rate = float(sys.argv[1])
+          floor = int(sys.argv[2])
+          callers = int(sys.argv[3])
+          p99 = sys.argv[4]
+          if not math.isfinite(rate) or not 0 <= rate <= 1:
+              raise SystemExit("Invalid controlled max error rate")
+          if not 1 <= floor <= callers:
+              raise SystemExit("Invalid observed inflight floor")
+          if p99 and (not math.isfinite(float(p99)) or float(p99) <= 0):
+              raise SystemExit("Invalid p99 limit")
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: '21'
@@ -125,7 +172,16 @@ jobs:
           OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256: ${{ inputs.host_fingerprint_sha256 }}
           OTRYX_RPC_JVM_FLAGS: ${{ inputs.jvm_flags }}
           OTRYX_RPC_RUNNER_LABELS: ${{ inputs.runner_labels_json }}
-        run: bash scripts/preflight_v2d2_runner.sh "target/v2d2-evidence-${{ inputs.run_id }}"
+          OTRYX_RPC_SOAK_CONCURRENCY: ${{ inputs.soak_concurrency }}
+          OTRYX_RPC_SOAK_PAYLOAD_SIZE: ${{ inputs.soak_payload_size }}
+          OTRYX_RPC_SOAK_CONNECTIONS: ${{ inputs.soak_connections }}
+          OTRYX_RPC_SOAK_WARMUP_SECONDS: "30"
+          OTRYX_RPC_SOAK_DURATION_SECONDS: ${{ inputs.soak_duration_seconds }}
+          OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS: "15000"
+          OTRYX_RPC_SOAK_MAX_ERROR_RATE: ${{ inputs.soak_max_error_rate }}
+          OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT: ${{ inputs.soak_min_observed_inflight }}
+          OTRYX_RPC_SOAK_MAX_P99_MICROS: ${{ inputs.soak_max_p99_micros }}
+        run: bash scripts/preflight_v2d2_runner.sh "$EVIDENCE_DIR"
 
       - name: Capture evidence environment
         env:
@@ -135,34 +191,59 @@ jobs:
           OTRYX_RPC_RUNNER_ID: ${{ runner.name }}
           OTRYX_RPC_RUNNER_LABELS: ${{ inputs.runner_labels_json }}
           OTRYX_RPC_JVM_FLAGS: ${{ inputs.jvm_flags }}
-        run: bash scripts/capture_v2d2_environment.sh "target/v2d2-evidence-${{ inputs.run_id }}"
+        run: bash scripts/capture_v2d2_environment.sh "$EVIDENCE_DIR"
 
       - name: Build benchmark runtime
-        run: mvn -B -ntp -pl otryx-benchmarks -am clean package -DskipTests
+        run: ./mvnw -B -ntp -pl otryx-benchmarks -am clean package -DskipTests
 
       - name: Run JMH matrix
         if: ${{ inputs.run_matrix }}
         env:
           OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.sha }}
+          OTRYX_RPC_EVIDENCE_CLASS: ${{ inputs.evidence_class }}
+          OTRYX_RPC_EVIDENCE_RUN_ID: ${{ inputs.run_id }}
+          OTRYX_RPC_RUNNER_ID: ${{ runner.name }}
+          OTRYX_RPC_RUNNER_LABELS: ${{ inputs.runner_labels_json }}
           OTRYX_RPC_JVM_FLAGS: ${{ inputs.jvm_flags }}
         run: >
           bash scripts/run_v2d2_benchmark_matrix.sh
           "${{ inputs.matrix_profile }}"
-          target/v2d2-evidence-${{ inputs.run_id }}/matrix
+          "$EVIDENCE_DIR"/matrix
 
       - name: Run virtual-thread soak
         if: ${{ inputs.run_soak }}
         env:
           OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.sha }}
+          OTRYX_RPC_RUNNER_ID: ${{ runner.name }}
+          OTRYX_RPC_EVIDENCE_RUN_ID: ${{ inputs.run_id }}
+          OTRYX_RPC_HOST_FINGERPRINT_SHA256: ${{ inputs.host_fingerprint_sha256 }}
           OTRYX_RPC_SOAK_CONCURRENCY: ${{ inputs.soak_concurrency }}
           OTRYX_RPC_SOAK_DURATION_SECONDS: ${{ inputs.soak_duration_seconds }}
           OTRYX_RPC_SOAK_PAYLOAD_SIZE: ${{ inputs.soak_payload_size }}
           OTRYX_RPC_SOAK_CONNECTIONS: ${{ inputs.soak_connections }}
           OTRYX_RPC_SOAK_WARMUP_SECONDS: "30"
           OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS: "15000"
-          OTRYX_RPC_SOAK_OUTPUT: target/v2d2-evidence-${{ inputs.run_id }}/soak.json
+          OTRYX_RPC_SOAK_OUTPUT: ${{ env.EVIDENCE_DIR }}/soak.json
           OTRYX_RPC_JVM_FLAGS: ${{ inputs.jvm_flags }}
         run: bash scripts/run_v2d2_soak.sh
+
+      - name: Enforce predeclared controlled soak policy
+        if: ${{ inputs.evidence_class == 'controlled' && inputs.run_soak }}
+        shell: bash
+        env:
+          MAX_ERROR_RATE: ${{ inputs.soak_max_error_rate }}
+          MIN_OBSERVED_INFLIGHT: ${{ inputs.soak_min_observed_inflight }}
+          MAX_P99_MICROS: ${{ inputs.soak_max_p99_micros }}
+        run: |
+          args=(--soak "$EVIDENCE_DIR/soak.json"
+                --mode controlled
+                --max-error-rate "$MAX_ERROR_RATE"
+                --min-observed-inflight "$MIN_OBSERVED_INFLIGHT"
+                --output-dir "$EVIDENCE_DIR/soak-policy")
+          if [[ -n "$MAX_P99_MICROS" ]]; then
+            args+=(--max-p99-micros "$MAX_P99_MICROS")
+          fi
+          python3 scripts/check_soak_quality.py "${args[@]}"
 
       - name: Validate evidence bundle
         if: always()
@@ -175,9 +256,9 @@ jobs:
           SOAK_DURATION_SECONDS: ${{ inputs.soak_duration_seconds }}
           SOAK_CONCURRENCY: ${{ inputs.soak_concurrency }}
         run: |
-          args=(--environment target/v2d2-evidence-${{ inputs.run_id }}/environment.properties --profile "$MATRIX_PROFILE" --output-dir target/v2d2-evidence-${{ inputs.run_id }})
-          if [[ "$RUN_MATRIX" == "true" ]]; then args+=(--require-matrix --matrix-dir target/v2d2-evidence-${{ inputs.run_id }}/matrix); fi
-          if [[ "$RUN_SOAK" == "true" ]]; then args+=(--require-soak --soak target/v2d2-evidence-${{ inputs.run_id }}/soak.json --min-soak-seconds "$SOAK_DURATION_SECONDS" --min-concurrency "$SOAK_CONCURRENCY"); fi
+          args=(--environment "$EVIDENCE_DIR"/environment.properties --profile "$MATRIX_PROFILE" --output-dir "$EVIDENCE_DIR")
+          if [[ "$RUN_MATRIX" == "true" ]]; then args+=(--require-matrix --matrix-dir "$EVIDENCE_DIR"/matrix); fi
+          if [[ "$RUN_SOAK" == "true" ]]; then args+=(--require-soak --soak "$EVIDENCE_DIR"/soak.json --min-soak-seconds "$SOAK_DURATION_SECONDS" --min-concurrency "$SOAK_CONCURRENCY"); fi
           if [[ "$EVIDENCE_CLASS" == "controlled" ]]; then args+=(--require-controlled); fi
           python3 scripts/validate_v2d2_evidence.py "${args[@]}"
 
@@ -188,22 +269,22 @@ jobs:
           RUN_MATRIX: ${{ inputs.run_matrix }}
           RUN_SOAK: ${{ inputs.run_soak }}
         run: |
-          args=(--environment target/v2d2-evidence-${{ inputs.run_id }}/environment.properties --output-dir target/v2d2-evidence-${{ inputs.run_id }})
-          if [[ "$RUN_MATRIX" == "true" ]]; then args+=(--matrix-summary target/v2d2-evidence-${{ inputs.run_id }}/matrix/summary.csv); fi
-          if [[ "$RUN_SOAK" == "true" ]]; then args+=(--soak target/v2d2-evidence-${{ inputs.run_id }}/soak.json); fi
+          args=(--environment "$EVIDENCE_DIR"/environment.properties --output-dir "$EVIDENCE_DIR")
+          if [[ "$RUN_MATRIX" == "true" ]]; then args+=(--matrix-summary "$EVIDENCE_DIR"/matrix/summary.csv); fi
+          if [[ "$RUN_SOAK" == "true" ]]; then args+=(--soak "$EVIDENCE_DIR"/soak.json); fi
           python3 scripts/generate_v2d2_decision_report.py "${args[@]}"
 
       - name: Create and verify evidence manifest
         if: success()
         run: |
-          python3 scripts/manage_v2d2_evidence_manifest.py create --bundle "target/v2d2-evidence-${{ inputs.run_id }}"
-          python3 scripts/manage_v2d2_evidence_manifest.py verify --bundle "target/v2d2-evidence-${{ inputs.run_id }}"
+          python3 scripts/manage_v2d2_evidence_manifest.py create --bundle "$EVIDENCE_DIR"
+          python3 scripts/manage_v2d2_evidence_manifest.py verify --bundle "$EVIDENCE_DIR"
 
       - name: Upload performance evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: v2d2-performance-evidence-${{ inputs.run_id }}-${{ github.run_id }}
-          path: target/v2d2-evidence-${{ inputs.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
           if-no-files-found: warn
           retention-days: 90

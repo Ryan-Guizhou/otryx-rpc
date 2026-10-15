@@ -169,3 +169,39 @@ java -jar otryx-benchmarks/target/benchmarks.jar ObservabilityPathBenchmark -pro
 当前已有 JMH、Allocation Profiling、Benchmark Matrix、共享 Runner 10k logical concurrency Smoke 和证据校验工具。**尚无可核验的固定物理主机、同一版本至少三轮 AB/BA 和 60 分钟正式 Soak 原始证据**，因此不宣称 U13 受控性能验收完成，也不发布官方 QPS/Core、p99/p99.9、B/op 或容量数字。
 
 需要维护者指定真实物理主机及环境指纹、JDK/JVM 参数、负载矩阵和测前确定的验收阈值，才可运行受控实验并审批 Evidence Report。没有测量证据时不应引入猜测性的零拷贝或压缩优化；Shared Runner Smoke 仅证明工具可运行。
+
+
+## 14. U13 三轮 AB/BA 固定主机证据审查
+
+`scripts/run_v2d2_fixed_evidence.sh` 现在要求至少 **3600 秒**连续测量和 **10000 逻辑并发调用者**。`performance-evidence.yml` 的 controlled 路径要求自托管 Runner、固定主机指纹、Full Matrix、正式 Soak 和测前定义的 `soak_max_error_rate` / `soak_min_observed_inflight` / 可选 `soak_max_p99_micros`；原先受控工作流缺失的 Soak Policy Report 已被补齐。
+
+单次运行仍不能证明低尾延迟和分配稳定性。收集两个完整 Commit 在同一硬件上的六份不可覆盖 Evidence Bundle，按 **A B B A A B** 顺序，建议把下方 JSON 存为 `target/u13-campaign.json`：
+
+~~~json
+{
+  "schemaVersion": 1,
+  "baselineSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "candidateSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "runs": [
+    {"side": "baseline", "path": "u13-A1"},
+    {"side": "candidate", "path": "u13-B1"},
+    {"side": "candidate", "path": "u13-B2"},
+    {"side": "baseline", "path": "u13-A2"},
+    {"side": "baseline", "path": "u13-A3"},
+    {"side": "candidate", "path": "u13-B3"}
+  ]
+}
+~~~
+
+这里的 SHA 仅为**格式占位符**，实际执行必须替换为两个不同的 Git 完整 SHA；六个 `path` 都相对于 Campaign JSON 所在目录。矩阵目录的 `environment.properties` 必须记录 `profile=full`，且 Commit、Run ID、Runner、主机、JDK/JVM 等固定环境属性与证据包根目录一致；GitHub 手动 `performance-evidence.yml` 的 JMH Matrix 步骤必须显式传入 Evidence Class、Run ID、Runner ID 和 Runner Labels，防止嵌套环境退回 `shared-ci` 或 `unknown`；Soak `throughputOpsPerSecond` 必须与 `successes / durationSeconds` 在数值容差内一致，且 `completedAt` 与矩阵采集时间之间必须容得下真实记录的 `durationSeconds`；GitHub controlled 工作流还必须由 `runner.environment=self-hosted` 明确确认机器类型，不能仅凭 `ubuntu-latest` 等标签推断。每个 Bundle 必须包含有效的 `preflight.properties`（含 JDK 主版本 21 与固定主机标识）、`environment.properties`（含带时区的 `captured_at`）、`matrix/summary.csv`、`soak.json`（含带时区的 `completedAt`）、`soak-policy/report.json`、`validation-report.json`、`decision-inputs.json` 和 `evidence-manifest.json`。校验器重新执行现有 `validate_matrix(..., "full", ...)` 完整矩阵验证，即使篡改者重新生成 Manifest 并伪造 `validation-report.json` 的 `PASS`，缺失 JMH 测试点仍必须拒绝；同时要求各轮 `environment.captured_at` 与真实 Soak `completedAt` 时间顺序严格递增、运行之间不重叠；环境 Java 版本必须解析出准确的主版本 21，不能按子串判断。
+
+~~~bash
+python3 scripts/test_u13_campaign.py
+python3 scripts/check_u13_campaign.py --campaign target/u13-campaign.json --output-dir target/u13-report
+~~~
+
+六轮实验还必须使用相同的预先声明 Workload（逻辑并发、Payload、连接数、预热、配置时长及调用超时）；各轮真实测量 `durationSeconds` 允许有少量差异。生成端把 Runner ID / Run ID / 主机指纹 / JVM Flags 直接嵌入 `soak.json`，校验端与根目录环境交叉比对。预检 `preflight.properties` 必须提前写入 Soak 工作负载和最大错误率、最低观测在途及可选 p99 阈值；事后生成的质量策略不得改写它们。矩阵校验会使用既有 JMH 汇总器从 `matrix/*.json` 原始实验记录重新生成 `summary.csv` 并逐字节对照，因此仅伪造完整 CSV 不能通过。Soak 还必须记录有效的 `javaVersion`、`jvmArguments`、`vmName`、`os` 和 `availableProcessors`，六轮有效运行条件应完全一致。报告与哈希只能证明文件自洽，真实性仍需独立审核。
+
+校验通过仍返回 `REPORT_ONLY`（原始数据未经过独立真实性审计），输出同硬件三次 Baseline/Candidate 中位 QPS、p99 和错误率；需人工评审独立的 `gc.alloc.rate.norm`、JFR/JVM 分配剖析、CPU/GC/heap、方差/置信区间、异常拒绝和端到端 p99/p99.9，再决定是否实施特定热点改造。对每个优化候选必须额外证明 Wire、限流、取消与资源 Lease 语义无回归。
+
+**当前工程状态：验收工具实现，真实固定 Runner 的六次长稳试验尚未执行。** 不得将测试用合成 Fixtures 或 Shared CI Smoke 表述为性能数字。
