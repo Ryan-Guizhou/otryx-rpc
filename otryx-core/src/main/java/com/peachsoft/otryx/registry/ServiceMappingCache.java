@@ -2,11 +2,13 @@ package com.peachsoft.otryx.registry;
 
 import java.time.Duration;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 
@@ -25,13 +27,15 @@ public final class ServiceMappingCache implements AutoCloseable {
 
     private static final int MAX_ENTRIES = 2048;
     private static final int MAX_CONCURRENT_REFRESH = 64;
+    private static final long REFRESH_TIMEOUT_SECONDS = 20L;
     private final ServiceMappingRepository repository;
     private final long staleNanos;
     private final long retryNanos;
     private final LongSupplier clock;
     private final ConcurrentHashMap<ServiceMappingKey, Entry> entries = new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final java.util.concurrent.atomic.AtomicInteger running = new java.util.concurrent.atomic.AtomicInteger();
+    private final AtomicInteger running = new AtomicInteger();
+    private final AtomicInteger allocated = new AtomicInteger();
 
     /**
      * 使用单调时间源建立缓存，所有时间参数必须非负且可转换为纳秒。
@@ -45,7 +49,14 @@ public final class ServiceMappingCache implements AutoCloseable {
         this(repository, maxStale, minRetry, System::nanoTime);
     }
 
-    /** 注入单调时钟方便复现失联、负缓存和并发时序。 */
+    /**
+     * 注入单调时钟方便复现失联、负缓存和并发时序。
+     *
+     * @param repository 应用服务映射仓库
+     * @param maxStale 失败后允许的最长 LKG 时长
+     * @param minRetry 失败后的最小重试间隔
+     * @param clock 单调时间来源
+     */
     public ServiceMappingCache(
             ServiceMappingRepository repository,
             Duration maxStale,
@@ -73,8 +84,8 @@ public final class ServiceMappingCache implements AutoCloseable {
             return java.util.Optional.empty();
         }
         State state = entry.state.get();
-        if (state.snapshot() == null || state.failureSince() != null
-                && elapsed(clock.getAsLong(), state.failureSince()) >= staleNanos) {
+        if (state.snapshot() == null || (state.failureSince() != null
+                && elapsed(clock.getAsLong(), state.failureSince()) >= staleNanos)) {
             return java.util.Optional.empty();
         }
         return java.util.Optional.of(state.snapshot());
@@ -92,11 +103,13 @@ public final class ServiceMappingCache implements AutoCloseable {
             return CompletableFuture.failedFuture(new IllegalStateException("Mapping cache closed"));
         }
         Entry entry = entries.computeIfAbsent(key, ignored -> {
-            if (entries.size() >= MAX_ENTRIES) {
+            if (allocated.incrementAndGet() > MAX_ENTRIES) {
+                allocated.decrementAndGet();
                 throw new IllegalStateException("Mapping cache entry limit exceeded");
             }
             return new Entry();
         });
+        CompletableFuture<ServiceMappingSnapshot> future;
         synchronized (entry) {
             if (entry.inflight != null) {
                 return entry.inflight;
@@ -109,37 +122,65 @@ public final class ServiceMappingCache implements AutoCloseable {
                 running.decrementAndGet();
                 return CompletableFuture.failedFuture(new IllegalStateException("Mapping refresh capacity exceeded"));
             }
-            CompletableFuture<ServiceMappingSnapshot> future = new CompletableFuture<>();
+            future = new CompletableFuture<>();
             entry.inflight = future;
-            CompletionStage<ServiceMappingSnapshot> stage;
-            try {
-                stage = repository.lookupVerified(key);
-            } catch (RuntimeException failure) {
-                stage = CompletableFuture.failedFuture(failure);
-            }
-            stage.whenComplete((snapshot, error) -> {
-                synchronized (entry) {
-                    if (closed.get()) {
-                        future.completeExceptionally(new IllegalStateException("Mapping cache closed"));
-                    } else if (error != null || snapshot == null) {
-                        long failureTime = clock.getAsLong();
-                        entry.lastFailure = failureTime;
-                        entry.state.updateAndGet(previous -> new State(previous.snapshot(),
-                                previous.failureSince() == null ? failureTime : previous.failureSince()));
-                        future.completeExceptionally(error != null ? error :
-                                new IllegalStateException("Null mapping snapshot"));
-                    } else {
-                        entry.lastFailure = null;
-                        entry.state.updateAndGet(previous -> previous.snapshot() != null
-                                && snapshot.revision() < previous.snapshot().revision()
-                                ? previous : new State(snapshot, null));
-                        future.complete(entry.state.get().snapshot());
-                    }
-                    entry.inflight = null;
-                    running.decrementAndGet();
-                }
-            });
+        }
+        if (closed.get()) {
+            complete(entry, future, null, new IllegalStateException("Mapping cache closed"));
             return future;
+        }
+        CompletionStage<ServiceMappingSnapshot> source;
+        try {
+            source = Objects.requireNonNull(repository.lookupVerified(key), "lookup result");
+        } catch (Throwable error) {
+            complete(entry, future, null, error);
+            return future;
+        }
+        source.whenComplete((snapshot, error) -> complete(entry, future, snapshot, error));
+        if (!future.isDone()) {
+            CompletableFuture.delayedExecutor(REFRESH_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() ->
+                    complete(entry, future, null, new TimeoutException("Mapping refresh timed out")));
+        }
+        return future;
+    }
+
+    private void complete(
+            Entry entry,
+            CompletableFuture<ServiceMappingSnapshot> future,
+            ServiceMappingSnapshot snapshot,
+            Throwable error) {
+        ServiceMappingSnapshot valid = snapshot;
+        Throwable failure = error;
+        synchronized (entry) {
+            if (entry.inflight != future) {
+                return;
+            }
+            if (closed.get()) {
+                failure = new IllegalStateException("Mapping cache closed");
+            }
+            if (failure != null || valid == null) {
+                if (failure == null) {
+                    failure = new IllegalStateException("Null mapping snapshot");
+                }
+                long now = clock.getAsLong();
+                entry.lastFailure = now;
+                entry.state.updateAndGet(previous -> new State(previous.snapshot(),
+                        previous.failureSince() == null ? now : previous.failureSince()));
+            } else {
+                entry.lastFailure = null;
+                ServiceMappingSnapshot accepted = valid;
+                entry.state.updateAndGet(previous -> previous.snapshot() != null
+                        && accepted.revision() < previous.snapshot().revision()
+                        ? previous : new State(accepted, null));
+                valid = entry.state.get().snapshot();
+            }
+            entry.inflight = null;
+            running.decrementAndGet();
+        }
+        if (failure != null) {
+            future.completeExceptionally(failure);
+        } else {
+            future.complete(valid);
         }
     }
 
@@ -163,7 +204,21 @@ public final class ServiceMappingCache implements AutoCloseable {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
+            for (Entry entry : entries.values()) {
+                CompletableFuture<ServiceMappingSnapshot> waiting;
+                synchronized (entry) {
+                    waiting = entry.inflight;
+                    if (waiting != null) {
+                        entry.inflight = null;
+                        running.decrementAndGet();
+                    }
+                }
+                if (waiting != null) {
+                    waiting.completeExceptionally(new IllegalStateException("Mapping cache closed"));
+                }
+            }
             entries.clear();
+            allocated.set(0);
         }
     }
 

@@ -34,6 +34,10 @@ public final class MemoryServiceMappingRepository implements ServiceMappingRepos
     private long generation;
     private long revision;
 
+    /** 创建隔离的内存映射仓库，不与其他进程共享所有权。 */
+    public MemoryServiceMappingRepository() {
+    }
+
     /** 原子发放 fencing generation；重复 claim 废止同实例的旧 token。 */
     @Override
     public synchronized CompletionStage<ServiceMappingOwner> claim(
