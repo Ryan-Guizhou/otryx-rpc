@@ -5,7 +5,7 @@ otryx:
       fory:
         mode: STRICT_ALLOWLIST
         allowed-class-patterns:
-          - com.peachsoft.otryx.examples.api.*
+          - com.peachsoft.otryx.quickstart.api.*
     transport:
       security:
         mode: MTLS

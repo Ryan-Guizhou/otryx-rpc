@@ -1,6 +1,6 @@
 spring:
   application:
-    name: otryx-example-consumer
+    name: otryx-quickstart-provider
 
 otryx:
   rpc:
@@ -13,7 +13,10 @@ otryx:
       nacos:
         group: OTRYX_RPC
         cluster: DEFAULT
-    client:
-      timeout: 3s
-      resilience:
-        max-attempts: 2
+    server:
+      host: 0.0.0.0
+      port: 19090
+      advertised-host: 127.0.0.1
+      advertised-port: 19090
+      drain-timeout: 5s
+      control-plane-timeout: 3s
