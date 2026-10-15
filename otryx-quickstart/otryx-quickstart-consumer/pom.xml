@@ -9,18 +9,22 @@
         <version>${revision}</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
-    <artifactId>otryx-example-consumer</artifactId>
-    <name>otryx-example-consumer</name>
+    <artifactId>otryx-quickstart-consumer</artifactId>
+    <name>otryx-quickstart-consumer</name>
     <description>Standalone OTRYX RPC consumer example.</description>
     <dependencies>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
-            <artifactId>otryx-example-api</artifactId>
+            <artifactId>otryx-quickstart-api</artifactId>
             <version>${revision}</version>
         </dependency>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
             <artifactId>otryx-spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.peachsoft.otryx</groupId>
+            <artifactId>otryx-registry-nacos</artifactId>
         </dependency>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
@@ -32,7 +36,7 @@
         </dependency>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
-            <artifactId>otryx-example-provider</artifactId>
+            <artifactId>otryx-quickstart-provider</artifactId>
             <version>${revision}</version>
             <scope>test</scope>
         </dependency>

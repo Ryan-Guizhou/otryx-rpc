@@ -9,18 +9,22 @@
         <version>${revision}</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
-    <artifactId>otryx-example-provider</artifactId>
-    <name>otryx-example-provider</name>
+    <artifactId>otryx-quickstart-provider</artifactId>
+    <name>otryx-quickstart-provider</name>
     <description>Standalone OTRYX RPC provider example.</description>
     <dependencies>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
-            <artifactId>otryx-example-api</artifactId>
+            <artifactId>otryx-quickstart-api</artifactId>
             <version>${revision}</version>
         </dependency>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
             <artifactId>otryx-spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.peachsoft.otryx</groupId>
+            <artifactId>otryx-registry-nacos</artifactId>
         </dependency>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>

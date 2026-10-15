@@ -1,13 +1,13 @@
-package com.peachsoft.otryx.examples.provider;
+package com.peachsoft.otryx.quickstart.provider;
 
 import com.peachsoft.otryx.core.RpcCallContext;
 import com.peachsoft.otryx.core.RpcCallOptions;
 import com.peachsoft.otryx.core.RpcCallScope;
-import com.peachsoft.otryx.examples.api.ExampleDeadlineMetadata;
-import com.peachsoft.otryx.examples.api.GreetingReply;
-import com.peachsoft.otryx.examples.api.GreetingRequest;
-import com.peachsoft.otryx.examples.api.GreetingService;
-import com.peachsoft.otryx.examples.api.RelayGreetingService;
+import com.peachsoft.otryx.quickstart.api.QuickstartDeadlineMetadata;
+import com.peachsoft.otryx.quickstart.api.GreetingReply;
+import com.peachsoft.otryx.quickstart.api.GreetingRequest;
+import com.peachsoft.otryx.quickstart.api.GreetingService;
+import com.peachsoft.otryx.quickstart.api.RelayGreetingService;
 import com.peachsoft.otryx.spring.annotation.OtryxRpcReference;
 import com.peachsoft.otryx.spring.annotation.OtryxRpcService;
 import java.util.Map;
@@ -22,7 +22,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
  * @CreateTime 2026/10/13 17:03
  */
 @OtryxRpcService(interfaceClass = RelayGreetingService.class, version = "1.0.0")
-@ConditionalOnProperty(prefix = "otryx.rpc.example", name = "role", havingValue = "relay")
+@ConditionalOnProperty(prefix = "otryx.rpc.quickstart", name = "role", havingValue = "relay")
 public class RelayGreetingServiceImpl implements RelayGreetingService {
 
     private static final long MAX_RELAY_DELAY_MILLIS = 1_000L;
@@ -34,7 +34,7 @@ public class RelayGreetingServiceImpl implements RelayGreetingService {
     @OtryxRpcReference(version = "1.0.0")
     private GreetingService downstream;
 
-    @Value("${otryx.rpc.example.relay-delay-millis:0}")
+    @Value("${otryx.rpc.quickstart.relay-delay-millis:0}")
     private long relayDelayMillis;
 
     /**
@@ -61,8 +61,8 @@ public class RelayGreetingServiceImpl implements RelayGreetingService {
         }
         try (RpcCallScope ignored = RpcCallContext.open(
                 new RpcCallOptions(null, Map.of(
-                        ExampleDeadlineMetadata.RELAY_KEY,
-                        ExampleDeadlineMetadata.RELAY_VALUE)))) {
+                        QuickstartDeadlineMetadata.RELAY_KEY,
+                        QuickstartDeadlineMetadata.RELAY_VALUE)))) {
             return downstream.hello(request);
         }
     }

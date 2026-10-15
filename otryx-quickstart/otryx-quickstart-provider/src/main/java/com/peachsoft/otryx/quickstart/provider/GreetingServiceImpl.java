@@ -1,10 +1,10 @@
-package com.peachsoft.otryx.examples.provider;
+package com.peachsoft.otryx.quickstart.provider;
 
 import com.peachsoft.otryx.core.RpcCallContext;
-import com.peachsoft.otryx.examples.api.ExampleDeadlineMetadata;
-import com.peachsoft.otryx.examples.api.GreetingReply;
-import com.peachsoft.otryx.examples.api.GreetingRequest;
-import com.peachsoft.otryx.examples.api.GreetingService;
+import com.peachsoft.otryx.quickstart.api.QuickstartDeadlineMetadata;
+import com.peachsoft.otryx.quickstart.api.GreetingReply;
+import com.peachsoft.otryx.quickstart.api.GreetingRequest;
+import com.peachsoft.otryx.quickstart.api.GreetingService;
 import com.peachsoft.otryx.spring.annotation.OtryxRpcService;
 import java.util.concurrent.TimeUnit;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -19,7 +19,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 @OtryxRpcService(
         interfaceClass = GreetingService.class,
         version = "1.0.0")
-@ConditionalOnProperty(prefix = "otryx.rpc.example", name = "role",
+@ConditionalOnProperty(prefix = "otryx.rpc.quickstart", name = "role",
         havingValue = "leaf", matchIfMissing = true)
 public class GreetingServiceImpl implements GreetingService {
 
@@ -30,12 +30,12 @@ public class GreetingServiceImpl implements GreetingService {
     @Override
     public GreetingReply hello(GreetingRequest request) {
         RpcCallContext context = RpcCallContext.current();
-        if (context != null && ExampleDeadlineMetadata.E2E_VALUE.equals(
-                context.metadata().get(ExampleDeadlineMetadata.E2E_KEY))) {
-            if (!ExampleDeadlineMetadata.RELAY_VALUE.equals(
-                    context.metadata().get(ExampleDeadlineMetadata.RELAY_KEY))
-                    || !ExampleDeadlineMetadata.TENANT_VALUE.equals(
-                    context.metadata().get(ExampleDeadlineMetadata.TENANT_KEY))) {
+        if (context != null && QuickstartDeadlineMetadata.E2E_VALUE.equals(
+                context.metadata().get(QuickstartDeadlineMetadata.E2E_KEY))) {
+            if (!QuickstartDeadlineMetadata.RELAY_VALUE.equals(
+                    context.metadata().get(QuickstartDeadlineMetadata.RELAY_KEY))
+                    || !QuickstartDeadlineMetadata.TENANT_VALUE.equals(
+                    context.metadata().get(QuickstartDeadlineMetadata.TENANT_KEY))) {
                 throw new IllegalStateException("Relay context metadata was not preserved");
             }
             long remainingMillis = TimeUnit.NANOSECONDS.toMillis(context.remainingNanos());

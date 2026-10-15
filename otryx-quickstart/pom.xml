@@ -8,13 +8,14 @@
         <artifactId>otryx-rpc</artifactId>
         <version>${revision}</version>
     </parent>
-    <artifactId>otryx-examples</artifactId>
+    <artifactId>otryx-quickstart</artifactId>
     <packaging>pom</packaging>
-    <name>otryx-examples</name>
-    <description>Runnable OTRYX RPC provider and consumer examples.</description>
+    <name>otryx-quickstart</name>
+    <description>Runnable OTRYX RPC Provider, Consumer and single-JVM Memory Quickstart applications.</description>
     <modules>
-        <module>otryx-example-api</module>
-        <module>otryx-example-provider</module>
-        <module>otryx-example-consumer</module>
+        <module>otryx-quickstart-api</module>
+        <module>otryx-quickstart-provider</module>
+        <module>otryx-quickstart-consumer</module>
+        <module>otryx-quickstart-memory</module>
     </modules>
 </project>

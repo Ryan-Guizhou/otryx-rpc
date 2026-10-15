@@ -1,4 +1,4 @@
-package com.peachsoft.otryx.examples.provider;
+package com.peachsoft.otryx.quickstart.provider;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

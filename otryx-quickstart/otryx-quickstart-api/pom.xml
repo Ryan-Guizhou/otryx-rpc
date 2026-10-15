@@ -9,8 +9,8 @@
         <version>${revision}</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
-    <artifactId>otryx-example-api</artifactId>
-    <name>otryx-example-api</name>
+    <artifactId>otryx-quickstart-api</artifactId>
+    <name>otryx-quickstart-api</name>
     <description>Shared RPC contract for OTRYX RPC examples.</description>
     <dependencies>
         <dependency>

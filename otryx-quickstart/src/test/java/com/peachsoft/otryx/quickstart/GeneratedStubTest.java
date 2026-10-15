@@ -1,4 +1,4 @@
-package com.peachsoft.otryx.examples;
+package com.peachsoft.otryx.quickstart;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
