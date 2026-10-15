@@ -43,7 +43,7 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 
 **Design**: control-plane/data-plane isolation; SPI and adapters for implementations; no registry I/O, SPI scan or dynamic parsing per request.
 
-**V2 application-level registry migration (in progress):** Shared Provider/Consumer application identity and registry SPI contracts have been added, but runtime and adapters still require migration in #129–#139. The new SPIs are not yet on the active call path. [Design contract](docs/design/application-registry-v2.md).
+**V2 application-level registry migration (in progress):** Shared Provider/Consumer identity, registry SPIs, and bounded versioned Manifest/Metadata Repository contracts are implemented. Runtime and persistent adapters still require migration in #130–#139; the new APIs are not on the active call path. [Design and status](docs/design/application-registry-v2.md).
 
 <!-- doc-section:compatibility -->
 ## Compatibility and migration
