@@ -1,6 +1,6 @@
 # OTRYX RPC 用户指南
 
-本页提供最短可验证集成路径。运行命令来自仓库中的 Maven Reactor 与官方独立 JVM Examples。
+本页提供最短可验证集成路径。运行命令来自仓库中的 Maven Reactor 与官方独立 JVM Quickstart。
 
 ## 环境与版本
 
@@ -30,7 +30,7 @@ java -jar otryx-quickstart/otryx-quickstart-provider/target/*-exec.jar
 java -jar otryx-quickstart/otryx-quickstart-consumer/target/*-exec.jar
 ```
 
-**重要**：独立进程示例默认依赖 Nacos 服务与对应配置。请在启动前先按 [快速开始](getting-started.md) 和 [Examples README](../otryx-quickstart/README.md) 完成 Nacos 启动、确认端口与启动顺序。也可以直接通过 `bash scripts/run_example_process_e2e.sh` 运行项目现有的独立进程自动化验收（需满足脚本运行环境）。
+**重要**：独立进程示例默认依赖 Nacos 服务与对应配置。请在启动前先按 [快速开始](getting-started.md) 和 [Quickstart README](../otryx-quickstart/README.md) 完成 Nacos 启动、确认端口与启动顺序。也可以直接通过 `bash scripts/run_quickstart_process_e2e.sh` 运行项目现有的独立进程自动化验收（需满足脚本运行环境）。
 
 ## 在已有 Spring Boot 项目中引用
 
