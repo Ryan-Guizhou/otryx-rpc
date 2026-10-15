@@ -186,6 +186,10 @@ jobs:
         if: ${{ inputs.run_matrix }}
         env:
           OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.sha }}
+          OTRYX_RPC_EVIDENCE_CLASS: ${{ inputs.evidence_class }}
+          OTRYX_RPC_EVIDENCE_RUN_ID: ${{ inputs.run_id }}
+          OTRYX_RPC_RUNNER_ID: ${{ runner.name }}
+          OTRYX_RPC_RUNNER_LABELS: ${{ inputs.runner_labels_json }}
           OTRYX_RPC_JVM_FLAGS: ${{ inputs.jvm_flags }}
         run: >
           bash scripts/run_v2d2_benchmark_matrix.sh

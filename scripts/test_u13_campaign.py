@@ -157,6 +157,21 @@ def rejected(action) -> None:
 
 
 def main() -> None:
+    workflow_path = (
+        Path(__file__).resolve().parents[1]
+        / ".github" / "workflows" / "performance-evidence.yml"
+    )
+    workflow = workflow_path.read_text(encoding="utf-8")
+    matrix_step = workflow.split("      - name: Run JMH matrix\n", 1)[1].split(
+        "      - name: Run virtual-thread soak\n", 1
+    )[0]
+    for mapping in (
+            "OTRYX_RPC_EVIDENCE_CLASS: ${{ inputs.evidence_class }}",
+            "OTRYX_RPC_EVIDENCE_RUN_ID: ${{ inputs.run_id }}",
+            "OTRYX_RPC_RUNNER_ID: ${{ runner.name }}",
+            "OTRYX_RPC_RUNNER_LABELS: ${{ inputs.runner_labels_json }}"):
+        assert mapping in matrix_step, f"JMH matrix workflow lost provenance: {mapping}"
+
     with tempfile.TemporaryDirectory(prefix="otryx-u13-fixtures-") as temporary:
         root = Path(temporary)
         data = {
