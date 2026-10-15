@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: otryx-quickstart-consumer
+
+otryx:
+  rpc:
+    # Only for isolated developer demonstrations; never expose to untrusted networks.
+    security-profile: TRUSTED_DEVELOPMENT
+    registry:
+      type: nacos
+      endpoints: 127.0.0.1:8848
+      namespace: public
+      nacos:
+        group: OTRYX_RPC
+        cluster: DEFAULT
+    client:
+      timeout: 3s
+      resilience:
+        max-attempts: 2

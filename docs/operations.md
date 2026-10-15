@@ -9,10 +9,12 @@
 ```bash
 python3 scripts/check_project.py
 mvn -B -ntp clean verify -Pquality
-bash scripts/run_example_process_e2e.sh
+bash scripts/run_quickstart_memory.sh
+# 先按 Quickstart 启动本地 Nacos，再运行多进程恢复验证：
+bash scripts/run_quickstart_process_e2e.sh
 ```
 
-第三条命令运行独立 JVM 示例；其外部服务、端口和前置条件以 [Examples](../otryx-examples/README.md) 和脚本为准。CI 中还包含 Nacos Integration、Compatibility、Chaos、Benchmark Smoke 等独立工作流；不代表每次本地运行均执行了这些测试。
+第三条命令运行独立 JVM Quickstart；其外部服务、端口和前置条件以 [Quickstart](../otryx-quickstart/README.md) 和脚本为准。CI 中还包含 Nacos Integration、Compatibility、Chaos、Benchmark Smoke 等独立工作流；不代表每次本地运行均执行了这些测试。
 
 ## 2. 常见失败的定位次序
 

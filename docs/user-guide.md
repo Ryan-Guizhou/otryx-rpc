@@ -1,6 +1,6 @@
 # OTRYX RPC 用户指南
 
-本页提供最短可验证集成路径。运行命令来自仓库中的 Maven Reactor 与官方独立 JVM Examples。
+本页提供最短可验证集成路径。运行命令来自仓库中的 Maven Reactor 与官方独立 JVM Quickstart。
 
 ## 环境与版本
 
@@ -10,45 +10,47 @@
 
 ## 先运行真实 RPC
 
-在仓库根目录：
+在仓库根目录，推荐先运行无外部注册中心的 [Memory Quickstart](../otryx-quickstart/README.md)：
 
 ```bash
 mvn -B -ntp clean install -DskipTests
-mvn -B -ntp -pl otryx-examples -am clean package
+mvn -B -ntp -pl otryx-quickstart -am clean package
+bash scripts/run_quickstart_memory.sh
 ```
 
-Provider 和 Consumer 请分别在两个终端启动，使用仓库的 Nacos 示例环境和官方配置：
+如果需要跨进程真实服务发现，再先启动 Nacos，然后在两个终端分别运行 Provider 和 Consumer（完整步骤见 [Quickstart](../otryx-quickstart/README.md)）：
 
 ```bash
 # Provider terminal
-java -jar otryx-examples/otryx-example-provider/target/*-exec.jar
+java -jar otryx-quickstart/otryx-quickstart-provider/target/*-exec.jar
 ```
 
 ```bash
 # Consumer terminal
-java -jar otryx-examples/otryx-example-consumer/target/*-exec.jar
+java -jar otryx-quickstart/otryx-quickstart-consumer/target/*-exec.jar
 ```
 
-**重要**：独立进程示例默认依赖 Nacos 服务与对应配置。请在启动前先按 [快速开始](getting-started.md) 和 [Examples README](../otryx-examples/README.md) 完成 Nacos 启动、确认端口与启动顺序。也可以直接通过 `bash scripts/run_example_process_e2e.sh` 运行项目现有的独立进程自动化验收（需满足脚本运行环境）。
+**重要**：独立进程示例默认依赖 Nacos 服务与对应配置。请在启动前先按 [快速开始](getting-started.md) 和 [Quickstart README](../otryx-quickstart/README.md) 完成 Nacos 启动、确认端口与启动顺序。也可以直接通过 `bash scripts/run_quickstart_process_e2e.sh` 运行项目现有的独立进程自动化验收（需满足脚本运行环境）。
 
 ## 在已有 Spring Boot 项目中引用
 
-推荐先使用轻量 Starter，完整 Starter 的扩展与替代关系见 [Starter 细节](reference/starter.md)。
+只有一个默认轻量的 Starter；Registry 等 Adapter 需按需单独引入，详见 [Starter 细节](reference/starter.md)。
 
 ```xml
 <dependency>
     <groupId>com.peachsoft.otryx</groupId>
-    <artifactId>otryx-spring-boot-starter-lite</artifactId>
+    <artifactId>otryx-spring-boot-starter</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
 ```
 
-示例内存 Registry 配置（单节点本地验证；不是跨进程注册中心）：
+单进程 Memory 配置（不需要 Nacos/Docker；跨 JVM 必须使用共享注册中心）：
 
 ```yaml
 otryx:
   rpc:
     enabled: true
+    security-profile: TRUSTED_DEVELOPMENT
     registry:
       type: memory
 ```

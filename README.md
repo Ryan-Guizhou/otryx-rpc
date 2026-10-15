@@ -67,7 +67,7 @@ Wire Protocol v1 的 32 字节 Header、消息和 Codec 标识、历史 Registry
 
 Windows CMD/PowerShell 使用 `mvnw.cmd` 替代 `./mvnw`，无需预装全局 Maven。
 
-真实的 Provider / Consumer 独立进程示例见 [otryx-examples](otryx-examples/README.md)；详细启动方式见 [快速入门](docs/getting-started.md)。Consumer 示例内的 `ExampleCallObserver` 演示可验证的自定义遥测 SPI 注入。
+推荐先运行**无 Docker 的单 JVM Memory Quickstart**，再运行 Nacos 双独立进程与 A→B→C Deadline，见 [otryx-quickstart](otryx-quickstart/README.md)；详细启动方式见 [快速入门](docs/getting-started.md)。Consumer 示例内的 `QuickstartCallObserver` 演示可验证的自定义遥测 SPI 注入。
 
 <!-- doc-section:dependency -->
 ## Maven 坐标
@@ -77,12 +77,12 @@ Windows CMD/PowerShell 使用 `mvnw.cmd` 替代 `./mvnw`，无需预装全局 Ma
 ~~~xml
 <dependency>
     <groupId>com.peachsoft.otryx</groupId>
-    <artifactId>otryx-spring-boot-starter-lite</artifactId>
+    <artifactId>otryx-spring-boot-starter</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
 ~~~
 
-完整 Starter：otryx-spring-boot-starter。**1.0.0-SNAPSHOT 并未声明已发布到 Maven Central。**
+单一 Starter 默认仅引入 AutoConfiguration、Core/Memory Registry/JDK Proxy/Fory/Vert.x；Nacos、Etcd、Consul/Eureka、CGLIB/ByteBuddy 与遥测 Adapter 按需显式添加。**1.0.0-SNAPSHOT 尚未发布到 Maven Central。**
 
 首发 RC/GA 仅提供 [无发布 Dry-run](docs/reference/first-release-acceptance.md)：核验 Main、Sources、Javadoc、SBOM 与 SHA256 清单，**不签名、不创建 Tag、不上传 Central**。首次发行仍须核实品牌与 Maven Namespace 授权。
 

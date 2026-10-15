@@ -11,7 +11,7 @@ OTRYX RPC 的模块不是按“功能名越细越好”拆分，而是按**第�
 1. Core 只定义稳定契约和运行时；
 2. 第三方技术进入独立 Adapter；
 3. 编译期能力与运行时能力分离；
-4. Examples/Benchmarks 不成为业务依赖；
+4. Quickstart/Benchmarks 不成为业务依赖；
 5. Starter 只负责组装，不重新发明 Core 语义；
 6. 文档、测试和发布门禁与代码同步演进。
 
@@ -26,9 +26,9 @@ OTRYX RPC 的模块不是按“功能名越细越好”拆分，而是按**第�
 | otryx-transport | otryx-transport-vertx |
 | otryx-proxy | otryx-proxy-cglib、otryx-proxy-bytebuddy |
 | otryx-observability | otryx-observability-micrometer、otryx-observability-opentelemetry、otryx-observability-jfr |
-| otryx-spring-boot | otryx-spring-boot-autoconfigure、otryx-spring-boot-starter、otryx-spring-boot-starter-lite |
+| otryx-spring-boot | otryx-spring-boot-autoconfigure、otryx-spring-boot-starter |
 
-另保留独立模块 otryx-core、otryx-codegen、otryx-examples、otryx-benchmarks。能力族只负责聚合，不引入额外运行时依赖。
+另保留独立模块 otryx-core、otryx-codegen、otryx-quickstart、otryx-benchmarks。能力族只负责聚合，不引入额外运行时依赖。
 
 ## 3. 依赖方向
 
@@ -49,9 +49,8 @@ flowchart TB
     OTel[observability-opentelemetry]
     Jfr[observability-jfr]
     Auto[Spring Boot autoconfigure]
-    Starter[Spring Boot full starter]
-    Lite[Spring Boot lite starter]
-    Examples[examples]
+    Starter[Spring Boot Starter]
+    Quickstart[quickstart]
     Bench[benchmarks]
 
     Codegen --> Core
@@ -71,11 +70,10 @@ flowchart TB
     Auto --> Fory
     Auto --> Vertx
     Starter --> Auto
-    Starter --> Etcd
-    Starter --> Nacos
-    Starter --> Cglib
-    Lite --> Auto
-    Examples --> Starter
+    Quickstart --> Starter
+    Quickstart --> Nacos
+    Quickstart --> Consul
+    Quickstart --> Eureka
     Bench --> Core
 ```
 
@@ -118,19 +116,19 @@ Runtime
 
 把能够在编译期确定的信息提前生成，减少运行时反射和动态装配。
 
-## 6. Starter 的位置
+## 6. 单一 Starter 的位置
 
-已有项目使用兼容完整 Starter；新项目推荐使用轻量 Starter（Memory/JDK Proxy/Fory/Vert.x），再按需加入 Registry/Proxy Adapter：
+默认推荐唯一的 `otryx-spring-boot-starter`，只带入 AutoConfiguration / Core / Memory Registry / JDK Proxy / Fory / Vert.x；Etcd、Nacos、Consul/Eureka、CGLIB、ByteBuddy 和可观测性实现通过可选 Adapter 添加：
 
 ```xml
 <dependency>
     <groupId>com.peachsoft.otryx</groupId>
-    <artifactId>otryx-spring-boot-starter-lite</artifactId>
+    <artifactId>otryx-spring-boot-starter</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
 ```
 
-完整 Starter 保留历史 Adapter 传递依赖；轻量 Starter 不带入 Etcd、Nacos、CGLIB。两者都复用同一个 AutoConfiguration，业务仍可以直接依赖 Core + 指定 Adapter 进行非 Spring 使用。
+Quickstart 的 Memory 单进程模块只使用 Starter；Nacos 双 JVM 模块另加 `otryx-registry-nacos`。该分层避免 SDK 依赖膨胀，同时保持 Provider/Consumer 注解、Core API、Wire v1 和安全策略一致。非 Spring 用法仍可直接使用 Core 与对应 Adapter。
 
 ## 7. 测试结构
 
@@ -139,7 +137,7 @@ Runtime
 - Registry Contract TestKit；
 - TLS/mTLS；
 - OpenTelemetry real RPC trace；
-- Independent JVM Example E2E；
+- Independent JVM Quickstart E2E；
 - Etcd Chaos；
 - Nacos Chaos；
 - Rolling Compatibility；

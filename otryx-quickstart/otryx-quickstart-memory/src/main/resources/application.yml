@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: otryx-quickstart-memory
+
+otryx:
+  rpc:
+    enabled: true
+    # Isolated developer-only profile. Never expose to an untrusted network.
+    security-profile: TRUSTED_DEVELOPMENT
+    registry:
+      type: memory
+    server:
+      host: 127.0.0.1
+      port: 0
+    client:
+      timeout: 3s

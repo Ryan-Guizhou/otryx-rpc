@@ -28,14 +28,14 @@ PUBLIC_MODULES = (
     "otryx-observability-jfr",
     "otryx-spring-boot-autoconfigure",
     "otryx-spring-boot-starter",
-    "otryx-spring-boot-starter-lite",
 )
 
 NON_PUBLIC_ARTIFACTS = {
-    "otryx-examples",
-    "otryx-example-api",
-    "otryx-example-provider",
-    "otryx-example-consumer",
+    "otryx-quickstart",
+    "otryx-quickstart-api",
+    "otryx-quickstart-provider",
+    "otryx-quickstart-consumer",
+    "otryx-quickstart-memory",
     "otryx-benchmarks",
 }
 
@@ -206,10 +206,7 @@ def check_profiles(root: ET.Element) -> None:
 
 
 def check_dependency_only_starter() -> None:
-    for module in (
-        "otryx-spring-boot-starter",
-        "otryx-spring-boot-starter-lite",
-    ):
+    for module in ("otryx-spring-boot-starter",):
         starter_pom_path = ROOT / module_path(module) / "pom.xml"
         starter = ET.parse(starter_pom_path).getroot()
         release = profile(starter, "release")
@@ -275,6 +272,7 @@ def check_dependency_only_starter() -> None:
             )
 
 def check_starter_dependency_boundaries() -> None:
+    """Single Starter must expose Core defaults without optional SDK adapters."""
     def direct_artifacts(module: str) -> set[str]:
         pom = ET.parse(ROOT / module_path(module) / "pom.xml").getroot()
         return {
@@ -285,28 +283,25 @@ def check_starter_dependency_boundaries() -> None:
             if node.text
         }
 
-    full = direct_artifacts("otryx-spring-boot-starter")
-    lite = direct_artifacts("otryx-spring-boot-starter-lite")
+    starter = direct_artifacts("otryx-spring-boot-starter")
     auto = direct_artifacts("otryx-spring-boot-autoconfigure")
     optional = {
-        "otryx-registry-etcd",
-        "otryx-registry-nacos",
-        "otryx-proxy-cglib",
-        "otryx-proxy-bytebuddy",
+        "otryx-registry-etcd", "otryx-registry-nacos",
+        "otryx-registry-consul", "otryx-registry-eureka",
+        "otryx-proxy-cglib", "otryx-proxy-bytebuddy",
     }
-    if optional.intersection(lite) or optional.intersection(auto):
-        fail("Minimal Starter / AutoConfiguration must not pull optional adapters")
+    if optional.intersection(starter | auto):
+        fail("Single Starter / AutoConfiguration must not pull optional adapters")
+    if starter != {"otryx-spring-boot-autoconfigure", "spring-boot-starter"}:
+        fail("Starter must have only autoconfigure and Boot dependencies")
     if not {
-        "otryx-registry-etcd",
-        "otryx-registry-nacos",
-        "otryx-proxy-cglib",
-    }.issubset(full):
-        fail("Legacy full Starter must retain its original adapter capabilities")
-    if not {
-        "otryx-spring-boot-autoconfigure",
-        "spring-boot-starter",
-    }.issubset(lite):
-        fail("Minimal Starter must provide auto-configuration and Boot starter")
+        "otryx-core", "otryx-serialization-fory",
+        "otryx-transport-vertx",
+    }.issubset(auto):
+        fail("AutoConfiguration must retain Core/Fory/Vert.x defaults")
+    if (ROOT / "otryx-spring-boot"
+            / "otryx-spring-boot-starter-lite").exists():
+        fail("The retired Lite Starter module must not remain")
 
 
 def check_modules() -> None:

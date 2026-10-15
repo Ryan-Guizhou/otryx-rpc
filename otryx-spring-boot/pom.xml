@@ -9,6 +9,5 @@
     <modules>
         <module>otryx-spring-boot-autoconfigure</module>
         <module>otryx-spring-boot-starter</module>
-        <module>otryx-spring-boot-starter-lite</module>
     </modules>
 </project>

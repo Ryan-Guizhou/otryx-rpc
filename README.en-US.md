@@ -67,7 +67,7 @@ Requires **JDK 21 and Spring Boot 3.5.4**. The checked-in Maven Wrapper pins Mav
 
 Use `mvnw.cmd` on Windows CMD/PowerShell; a globally installed Maven is optional.
 
-Run the independent Provider / Consumer example from [otryx-examples](otryx-examples/README.md); see [Getting started](docs/getting-started.md) for complete setup. The consumer's `ExampleCallObserver` demonstrates a safe, Spring-managed custom observability SPI.
+Start with the **no-Docker single-JVM Memory Quickstart**, then Nacos Provider/Consumer and A→B→C Deadline walkthroughs in [otryx-quickstart](otryx-quickstart/README.md); see [Getting started](docs/getting-started.md) for complete setup. The consumer's `QuickstartCallObserver` demonstrates a safe, Spring-managed custom observability SPI.
 
 <!-- doc-section:dependency -->
 ## Maven coordinates
@@ -77,12 +77,12 @@ Development version:
 ~~~xml
 <dependency>
     <groupId>com.peachsoft.otryx</groupId>
-    <artifactId>otryx-spring-boot-starter-lite</artifactId>
+    <artifactId>otryx-spring-boot-starter</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
 ~~~
 
-The full starter is otryx-spring-boot-starter. **No Maven Central release is claimed for this snapshot.**
+The **only Starter** defaults to AutoConfiguration, Core/Memory Registry/JDK Proxy/Fory/Vert.x. Add Nacos, Etcd, Consul/Eureka, CGLIB/ByteBuddy or observability adapters explicitly when needed. **No Maven Central release is claimed for this snapshot.**
 
 First-release RC/GA candidates use an [unsigned non-publishing dry-run](docs/reference/first-release-acceptance.md) to verify main JARs, sources, Javadocs, SBOM and SHA256 checksums. It **does not sign, tag or upload to Central**. Trademark and Maven namespace clearance remain external release gates.
 

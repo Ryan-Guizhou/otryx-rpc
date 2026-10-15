@@ -1,5 +1,7 @@
 # OTRYX RPC 高质量开源项目改造实施方案
 
+> 2026-10-15 追加说明：Issue #125 将后续使用入口统一为单一 Spring Boot Starter，并将独立 JVM 入门工程集中到 `otryx-quickstart`。本文旧阶段清单是历史合同，实际模块结构以根 `pom.xml` 和 [Quickstart](../../../otryx-quickstart/README.md) 为准。
+
 > **For agentic workers:** 实施时遵循仓库 `AGENTS.md` 与相关工程规范，逐项记录 PR、失败机制、命令及 CI 证据。下列复选框表示计划工作，并不自动表示已通过验收。
 
 **Goal:** 将当前 Java 21 Unary RPC 框架推进为契约明确、资源有界、故障可恢复、用户可接入、产物可验证的开源首发版本。
@@ -367,7 +369,7 @@ flowchart LR
 
 **目标/理由：** 降低首次运行和外部贡献门槛，准确描述默认依赖。
 
-**Files:** 修改两个 Starter POM、AutoConfiguration/Properties/RuntimeCoordinator；扩展 AutoConfigurationTest；修改 `otryx-examples/README.md`、`docs/getting-started.md`、`docs/reference/starter.md`、双语 README；新增 `.mvn/wrapper/maven-wrapper.properties`、`mvnw`、`mvnw.cmd`，按选定 Wrapper 模式生成必要资源。
+**Files:** 修改两个 Starter POM、AutoConfiguration/Properties/RuntimeCoordinator；扩展 AutoConfigurationTest；修改 `otryx-quickstart/README.md`、`docs/getting-started.md`、`docs/reference/starter.md`、双语 README；新增 `.mvn/wrapper/maven-wrapper.properties`、`mvnw`、`mvnw.cmd`，按选定 Wrapper 模式生成必要资源。
 
 **Interfaces:** Lite 明确仍包含 Vert.x/Fory，并减少 Registry/Proxy附加依赖；本轮不把它改名为完全无 Adapter Starter。`@ConditionalOnMissingBean` 自定义覆盖行为须稳定。
 
@@ -453,9 +455,9 @@ mvn -B -ntp clean verify -Pquality
 mvn -B -ntp -pl otryx-core -am test
 mvn -B -ntp -pl otryx-transport/otryx-transport-vertx -am test
 mvn -B -ntp -pl otryx-serialization/otryx-serialization-fory -am test
-mvn -B -ntp -pl otryx-codegen,otryx-examples -am test
+mvn -B -ntp -pl otryx-codegen,otryx-quickstart -am test
 mvn -B -ntp -pl otryx-spring-boot/otryx-spring-boot-autoconfigure -am test
-bash scripts/run_example_process_e2e.sh
+bash scripts/run_quickstart_process_e2e.sh
 ```
 
 Registry运行对应模块的测试并配置真实外部服务；TLS/OTel相关模块加入 Reactor。独立进程脚本使用其要求的安装/打包前置，不把未构建产物缺失解释为业务失败。Windows shell不能执行 bash时使用已配置 Git Bash/WSL或记录未执行，不伪造成功。

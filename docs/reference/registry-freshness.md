@@ -79,9 +79,9 @@ Consumer `OtryxRpcClient.attempt()` 无可选节点时生成 `RpcUnavailableExce
 
 ```bash
 mvn -B -ntp clean verify -Pquality
-mvn -B -ntp -pl otryx-examples -am clean package
+mvn -B -ntp -pl otryx-quickstart -am clean package
 OTRYX_RPC_E2E_RESTART_NACOS=true OTRYX_RPC_E2E_MAX_STALENESS=3s \
-  bash scripts/run_example_process_e2e.sh
+  bash scripts/run_quickstart_process_e2e.sh
 ```
 
 E2E 保持两个独立 Java 进程中的长生命周期 Consumer/Provider，包含 Provider 重启、
