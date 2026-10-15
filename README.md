@@ -43,6 +43,8 @@
 
 **设计原则：** 控制面与数据面分离；可替换实现位于 Adapter/SPI；单次调用热路径不做注册中心 IO、SPI 扫描和动态解析。
 
+**V2 应用级注册改造（进行中）：** 已新增 Provider/Consumer 共用的应用身份与 Registry SPI 契约。运行时和各 Adapter 仍待 #129–#139 切换；新 SPI 当前尚未投入实际调用链。[设计说明](docs/design/application-registry-v2.md)。
+
 <!-- doc-section:compatibility -->
 ## 兼容性与迁移
 
