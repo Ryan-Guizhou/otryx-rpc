@@ -10,6 +10,7 @@ import math
 import re
 import statistics
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from check_soak_quality import check_soak
@@ -21,12 +22,35 @@ MIN_SECONDS = 3600
 MIN_CONCURRENCY = 10000
 GIT_SHA = re.compile(r"[0-9a-f]{40}\Z")
 HOST_SHA = re.compile(r"[0-9a-f]{64}\Z")
+JAVA_VERSION = re.compile(
+    r'^\s*(?:openjdk|java)(?:\s+version)?\s+"?(\d+)(?=[.\s"+_-]|$)', re.IGNORECASE
+)
 
 
 def require(condition: bool, message: str) -> None:
     """Reject missing or invalid evidence rather than silently excluding a run."""
     if not condition:
         raise ValueError(message)
+
+
+def parse_timestamp(value: object, field: str) -> datetime:
+    """Require an unambiguous timezone-aware evidence timestamp."""
+    require(isinstance(value, str) and bool(value.strip()),
+            f"Missing {field}")
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"Invalid {field}: expected ISO-8601 timestamp") from error
+    require(parsed.tzinfo is not None and parsed.utcoffset() is not None,
+            f"Timezone missing for {field}")
+    return parsed.astimezone(timezone.utc)
+
+
+def recorded_java_major(raw: object) -> int:
+    """Parse the runtime's major version rather than a numeric substring."""
+    match = JAVA_VERSION.match(raw) if isinstance(raw, str) else None
+    require(match is not None, "Unable to parse recorded Java runtime version")
+    return int(match.group(1))
 
 
 def load_json(path: Path) -> dict:
@@ -37,7 +61,7 @@ def load_json(path: Path) -> dict:
     return data
 
 
-def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict]:
+def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict, datetime, datetime]:
     """Recheck provenance, hashes, thresholds and observed soak duration."""
     require(path.is_dir(), f"Missing controlled bundle: {path}")
     manifest = load_json(path / "evidence-manifest.json")
@@ -58,7 +82,22 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict]
     require(bool(env.get("runner_id")) and env["runner_id"] != "unknown",
             f"Missing fixed runner ID: {path}")
     require(bool(env.get("jvm_flags")), f"Unspecified JVM flags: {path}")
-    require("21" in env.get("java", ""), f"JDK 21 not recorded: {path}")
+    require(recorded_java_major(env.get("java")) == 21,
+            f"JDK 21 not recorded: {path}")
+    preflight_path = path / "preflight.properties"
+    require(preflight_path.is_file(), f"Missing controlled runner preflight: {path}")
+    preflight = properties(preflight_path)
+    require(preflight.get("status") == "PASS" and preflight.get("java_major") == "21",
+            f"Invalid JDK 21 runner preflight: {path}")
+    for key in ("commit", "run_id", "runner_id", "host_fingerprint_sha256",
+                "evidence_class", "jvm_flags"):
+        require(preflight.get(key) == env.get(key),
+                f"Runner preflight/environment mismatch ({key}): {path}")
+    captured_at = parse_timestamp(env.get("captured_at"), f"environment.captured_at: {path}")
+    preflight_at = parse_timestamp(
+        preflight.get("captured_at"), f"preflight.captured_at: {path}"
+    )
+    require(preflight_at <= captured_at, f"Preflight is later than environment capture: {path}")
     require(all(env.get(key) not in (None, "", "unknown") for key in STABLE_KEYS),
             f"Unrecorded stable runner attribute: {path}")
     run_id = env.get("run_id", "")
@@ -73,6 +112,8 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict]
     soak_path = path / "soak.json"
     soak_bytes = soak_path.read_bytes()
     soak = load_json(soak_path)
+    completed_at = parse_timestamp(soak.get("completedAt"), f"soak.completedAt: {path}")
+    require(completed_at > captured_at, f"Soak finished before capture: {path}")
     require(soak.get("commit") == sha, f"Soak commit mismatch: {path}")
     require(isinstance(soak.get("durationSeconds"), (int, float))
             and math.isfinite(soak["durationSeconds"])
@@ -99,12 +140,14 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict]
     return {key: env[key] for key in STABLE_KEYS}, {
         "runId": run_id,
         "commit": sha,
+        "capturedAt": captured_at.isoformat(),
+        "completedAt": completed_at.isoformat(),
         "durationSeconds": soak["durationSeconds"],
         "observedInflight": soak["maxLogicalInflight"],
         "qps": soak["throughputOpsPerSecond"],
         "p99Micros": soak["p99Micros"],
         "errorRate": soak["errorRate"],
-    }
+    }, captured_at, completed_at
 
 
 def validate_campaign(config: dict, directory: Path) -> dict:
@@ -118,20 +161,26 @@ def validate_campaign(config: dict, directory: Path) -> dict:
     runs = config.get("runs")
     require(isinstance(runs, list) and len(runs) == len(ORDER),
             "Exactly six AB/BA run bundles are required")
+    require(all(isinstance(item, dict) for item in runs), "Invalid campaign run entries")
     require(tuple(item.get("side") for item in runs) == ORDER,
             "Run order must be baseline,candidate,candidate,baseline,baseline,candidate")
     stable = None
     labels: set[str] = set()
     summaries: dict[str, list[dict]] = {"baseline": [], "candidate": []}
+    previous_completed: datetime | None = None
     for position, run in enumerate(runs, start=1):
         raw_path = run.get("path")
         require(isinstance(raw_path, str) and raw_path.strip(),
                 f"Invalid bundle path at run {position}")
         bundle = (directory / raw_path).resolve()
         side = run["side"]
-        env, summary = inspect_bundle(
+        env, summary, captured_at, completed_at = inspect_bundle(
             bundle, baseline if side == "baseline" else candidate, labels
         )
+        if previous_completed is not None:
+            require(captured_at > previous_completed,
+                    f"Runs overlap or are not chronological at position {position}")
+        previous_completed = completed_at
         if stable is None:
             stable = env
         else:
