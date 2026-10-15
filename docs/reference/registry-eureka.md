@@ -60,6 +60,6 @@ Eureka Lease 是最终一致控制面，不等于单次 RPC 热路径心跳。Co
 mvn -B -ntp -pl otryx-registry-eureka -am test
 ```
 
-进程内 Mock REST Server 测试覆盖 POST/GET/PUT/DELETE、Basic Auth、UP-only、404 后自恢复及共享 Registry Contract。**这些并不替代真实 Eureka Server（例如 Spring Cloud Netflix Eureka Server）的版本兼容、Self-Preservation/Lease、集群节点失联或独立进程 RPC 测试**。独立 Provider/Consumer 运行方式参见 [Examples](../../otryx-examples/README.md)。
+进程内 Mock REST Server 测试覆盖 POST/GET/PUT/DELETE、Basic Auth、UP-only、404 后自恢复及共享 Registry Contract。**这些并不替代真实 Eureka Server（例如 Spring Cloud Netflix Eureka Server）的版本兼容、Self-Preservation/Lease、集群节点失联或独立进程 RPC 测试**。独立 Provider/Consumer 运行方式参见 [Examples](../../otryx-quickstart/README.md)。
 
 Eureka REST 参考：[Netflix Eureka REST Operations](https://github.com/Netflix/eureka/wiki/Eureka-REST-operations)。

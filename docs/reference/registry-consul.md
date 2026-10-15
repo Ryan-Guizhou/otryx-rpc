@@ -63,6 +63,6 @@ Provider 仍需配置面向 Consumer 的 `server.advertised-host` 与 `server.ad
 mvn -B -ntp -pl otryx-registry-consul -am test
 ```
 
-测试使用进程内 Mock HTTP Agent 验证注册、TTL Passing、健康视图、404 重注册、注销、ACL Header 与共享 Registry Contract。**Mock 测试不是正式 Consul Server 实例的集成/Chaos 验证**；生产部署前还应使用实际目标 Consul 版本单独验证 Agent 故障转移、ACL、TLS、Session/TTL、跨机可路由地址及独立进程 RPC。可通过 [Examples](../../otryx-examples/README.md) 启动独立 Provider/Consumer。
+测试使用进程内 Mock HTTP Agent 验证注册、TTL Passing、健康视图、404 重注册、注销、ACL Header 与共享 Registry Contract。**Mock 测试不是正式 Consul Server 实例的集成/Chaos 验证**；生产部署前还应使用实际目标 Consul 版本单独验证 Agent 故障转移、ACL、TLS、Session/TTL、跨机可路由地址及独立进程 RPC。可通过 [Examples](../../otryx-quickstart/README.md) 启动独立 Provider/Consumer。
 
 Consul API 官方文档：[Agent Service](https://developer.hashicorp.com/consul/api-docs/agent/service) · [Health](https://developer.hashicorp.com/consul/api-docs/health)。
