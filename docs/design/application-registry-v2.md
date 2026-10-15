@@ -59,3 +59,84 @@ Provider/BOTH 必须包含实际 RPC Endpoint、正整数权重及 Manifest Revi
 - 按 AGENTS.md 运行相关 Maven/JUnit、Java 格式/文档门禁。
 
 后续任何 Agent 应当根据当前源码和 Issue 的真实状态判断完成度，不得把已提交的接口定义误报为 Provider/Consumer 已经使用应用级注册。
+
+## 5. V2-02：版本化 Manifest 与元数据仓库（Core 契约已实现）
+
+> **当前状态：Core API、二进制编解码和单元测试已实现；运行时/后端尚未接入。**
+> 关联 [Issue #129](https://github.com/Ryan-Guizhou/otryx-rpc/issues/129)。
+> 应用映射 #130、Memory #131 和其它 Registry #133–#136 负责后续接入。
+
+### 5.1 模型与职责
+
+| 类型 | 当前实际职责 |
+| --- | --- |
+| ApplicationManifest | 单应用的不可变导出服务快照，确定性排序 |
+| ExportedService | ServiceKey、serviceId、methodIds、Schema Fingerprint |
+| ApplicationManifestCodec | Manifest 专用确定性二进制格式，完全独立于 Unary Wire v1 |
+| ApplicationManifestRepository | 异步不可变发布、读取及严格身份验证 SPI |
+
+Provider 在完成 Service Binding 后，可通过 ExportedService.fromContract(serviceKey, api)
+创建真实导出项，使用 ApplicationManifest.create(applicationKey, exports)
+组成完整清单。服务和方法 ID 沿用 RpcContractMethods / RpcIds 的现有规则。
+同一个接口的不同版本、group 可以共存；重复 ServiceKey 和 Service ID 冲突必须拒绝。
+多个实例可以共享一个 Revision，也可以在灰度和滚动发布期间指向不同 Revision。
+
+**Manifest 不内联进应用实例注册元数据。** Provider 的 ApplicationInstance 只发布
+manifestRevision；纯 Consumer 不发布 Manifest，更不会成为 RPC 可路由 Provider。
+
+### 5.2 标准编码及容量
+
+独立 Metadata 格式采用 Big Endian int32 和 int32 长度前缀 UTF-8，字段顺序为：
+
+1. Magic = 0x4f4d464d，Manifest 格式版本 = 1，当前 Wire 协议版本 = 1、RpcSchemaFingerprint 规范版本 = 1；
+2. Application namespace、applicationName、serviceCount；
+3. 按 ServiceKey(interface/version/group) 排序的 interfaceName、version、group、serviceId、
+   schemaFingerprint、methodCount、排序后的 methodIds。
+
+Revision = SHA-256 对**完整标准二进制**计算后的 sha256: + 64 位小写十六进制；
+内容、接口版本、分组、应用身份、Wire/Schema/Manifest 格式的变更均会影响 Revision。
+此格式版本不修改原有 Wire v1。
+
+- 每份 Manifest 最多 512 个接口，每接口最多 1024 个方法；标准编码总量不超过 256 KiB；
+- 接口名称最长 256 字符，版本和分组各不超过 128 字符；指纹必须为 64 个小写 hex；
+- ServiceKey 在 Manifest 中要求安全的接口二进制名称、版本和分组，拒绝路径字符或冒号造成的 Key 歧义；
+- 不存在递归任意对象图，所有集合计数、字段长度、解码空间都有固定上限；
+- 解码拒绝未知版本、错误 Magic、截断、额外尾部字节、非标准排序、
+  重复 ServiceKey/Service ID/Method ID、错误 UTF-8 和超限字段；
+- Manifest 单对象容量限制不等于总缓存容量。后续 Consumer Directory /
+  Registry Adapter **必须**增加总缓存大小、SingleFlight、并发队列与 TTL/LKG 限制。
+
+### 5.3 Repository 的一致性与安全
+
+publish 必须幂等创建，不得以同一个 ApplicationKey + Revision 覆盖不同字节。
+lookup 缺失返回 Optional.empty；失败必须异常完成而不是误报不存在。
+lookupVerified 必须校验请求的 ApplicationKey 和完整 Revision；
+即使仓库返回内容存在，但不能匹配期望身份，也必须拒绝，不得退回接口级发现或其他 Revision。
+
+SHA-256 只提供内容一致性，**不是发布方身份验证机制**；
+实际后端需可信配置源、鉴权、ACL、命名空间隔离与审计。
+
+### 5.4 多 Revision 与安全回收策略
+
+本阶段有意不提供任意删除 Manifest 的方法。在新的 Registrar/Mapping 尚未具有
+可靠的跨进程引用所有权和原子版本校验之前，简单 TTL 或 LRU 删除会破坏滚动升级与回滚，
+因此**保留已发布 Revision 是当前的安全默认行为**，不是自动 GC 已实现。
+
+后续 Registry Adapter 如果实现 GC，必须证明：
+- 从权威成员目录和部署状态确认没有存活实例、进行中的发布或回滚流程引用；
+- 超过可配置保留窗口，该窗口覆盖 Lease、发现缓存最大陈旧期及回滚保护期；
+- 原子引用复核或 generation fencing 防止检查与删除之间出现新的引用；
+- 删除失败时保持保留，存储空间不足则拒绝新发布，不能删除仍在使用的 Revision；
+- 具备并发发布、重启、灰度和异常回滚的真实存储集成测试。
+
+### 5.5 验证覆盖
+
+- ApplicationManifestTest：方法 ID / Schema 规则、版本和 group、确定性顺序、
+  深拷贝、非法输入、冲突与总体大小边界。
+- ApplicationManifestCodecTest：标准二进制往返、未知版本、截断/尾随、
+  非标准方法/服务次序、重复方法及畸形 UTF-8。
+- ApplicationManifestRepositoryTest：独立 Revision 并存、并发幂等、
+  未命中返回空、错误应用或修订号 fail closed。
+
+**注意：** Repository 测试使用隔离的测试存储；Memory、Nacos、Etcd、Consul、Eureka
+真实元数据后端和安全 GC 将分别由后续 Issue 交付，不能宣称已经上线。
