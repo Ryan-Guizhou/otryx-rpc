@@ -40,7 +40,8 @@ Task Intake → Source/Impact Analysis → Complexity Gate → Implementation Co
 - Core 不得反向依赖 Vert.x/Nacos/Etcd/Fory/Spring 等 Adapter；参见 ArchUnit 架构门禁。
 - EventLoop 禁止阻塞 IO、Thread.sleep、同步等待 Future 或可任意阻塞的业务回调；线程/取消/超时边界必须有测试。
 - 新 Executor、队列、连接、Pending Map、inflight bytes 和缓存必须有容量/有界策略、拒绝、取消、超时、关闭和释放契约。
-- 全仓 Java 生产代码遵守协议、配置、Header、SPI、Metrics、状态和容量/时序魔法字面量治理，优先局部具名常量或已有 enum/API；不得以全局万能 Constants 类、误报忽略或机械抽取普通文案绕过治理。见 docs/engineering/java-coding-standard.md。\n- 不吞异常、不忽略 InterruptedException，不默认重试非幂等操作。纯规范 PR 禁止偷偷改变公开/私有运行语义；若需调整需另立行为 PR。
+- 全仓 Java 生产代码遵守协议、配置、Header、SPI、Metrics、状态和容量/时序魔法字面量治理，优先局部具名常量或已有 enum/API；不得以全局万能 Constants 类、误报忽略或机械抽取普通文案绕过治理。见 docs/engineering/java-coding-standard.md。
+- 不吞异常、不忽略 InterruptedException，不默认重试非幂等操作。纯规范 PR 禁止偷偷改变公开/私有运行语义；若需调整需另立行为 PR。
 - 未正式发布不要求与 Peach RPC/旧 OTRYX 开发版本兼容；但所有修改后的协议、Codec、Schema/Type ID、Registry Metadata 和 Starter 装配必须当前版本内部自洽且可被测试证明。
 
 ## MCP 与权限

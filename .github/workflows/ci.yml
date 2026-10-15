@@ -50,6 +50,9 @@ jobs:
       - name: Repository checks
         run: python3 scripts/check_project.py
 
+      - name: Verify squash-safe merged branch cleanup
+        run: python3 scripts/test_cleanup_merged_branches.py
+
       - name: Verify magic-literal policy fixtures
         run: python3 scripts/test_java_magic_literals.py
 

@@ -1,6 +1,6 @@
 name: Safe merged branch cleanup
 
-# This repository-controlled job only prunes confirmed merged main ancestors.
+# Prune only main ancestors or exact GitHub-confirmed squash-merged PR heads.
 # Open PR heads and stable/release/support/maintenance/archive branches remain protected.
 # Updating this file intentionally triggers one safe post-merge cleanup pass.
 
@@ -36,7 +36,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: Snapshot open PR heads and clean merged ancestors
+      - name: Snapshot open PRs, verified merged heads and clean safely
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -46,5 +46,10 @@ jobs:
           gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100" \
             --jq '.[].head.ref' > "${RUNNER_TEMP}/otryx-open-pr-heads.txt"
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/pulls?state=closed&per_page=100" \
+            --jq '.[] | select(.merged_at != null and .base.ref == "main" and .head.repo.full_name == .base.repo.full_name and .merge_commit_sha != null) | [.head.ref, .head.sha, .merge_commit_sha] | @tsv' \
+            > "${RUNNER_TEMP}/otryx-merged-pr-heads.tsv"
           OPEN_PR_HEAD_FILE="${RUNNER_TEMP}/otryx-open-pr-heads.txt" \
+          MERGED_PR_HEAD_FILE="${RUNNER_TEMP}/otryx-merged-pr-heads.tsv" \
             bash scripts/cleanup_merged_branches.sh

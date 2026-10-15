@@ -5,6 +5,7 @@ REMOTE="${GIT_REMOTE:-origin}"
 PRIMARY="${PRIMARY_BRANCH:-main}"
 MODE="${CLEANUP_MODE:-dry-run}"
 PR_HEADS="${OPEN_PR_HEAD_FILE:-}"
+MERGED_HEADS="${MERGED_PR_HEAD_FILE:-}"
 
 if [[ "$MODE" != "apply" && "$MODE" != "dry-run" ]]; then
     echo "Invalid cleanup mode: $MODE" >&2
@@ -16,6 +17,14 @@ if [[ "$MODE" == "apply" && -z "$PR_HEADS" ]]; then
 fi
 if [[ -n "$PR_HEADS" && ! -f "$PR_HEADS" ]]; then
     echo "Missing open PR head snapshot" >&2
+    exit 2
+fi
+if [[ "$MODE" == "apply" && -z "$MERGED_HEADS" ]]; then
+    echo "Apply mode requires a complete merged PR head snapshot" >&2
+    exit 2
+fi
+if [[ -n "$MERGED_HEADS" && ! -f "$MERGED_HEADS" ]]; then
+    echo "Missing merged PR head snapshot" >&2
     exit 2
 fi
 
@@ -45,7 +54,23 @@ while IFS= read -r ref; do
         continue
     fi
     sha="$(git rev-parse --verify "${ref}^{commit}")"
-    if ! git merge-base --is-ancestor "$sha" "$main_sha"; then
+    # Preserve squash-merged branches unless GitHub proves the exact topic
+    # branch SHA was merged to main and that merge commit is still reachable.
+    # This also preserves closed/unmerged PRs, advanced branches and old work.
+    eligible=false
+    if git merge-base --is-ancestor "$sha" "$main_sha"; then
+        eligible=true
+    elif [[ -n "$MERGED_HEADS" ]]; then
+        while IFS=$'\t' read -r merged_name merged_head merged_commit; do
+            if [[ "$merged_name" == "$name" && "$merged_head" == "$sha" &&
+                  "$merged_commit" =~ ^[0-9a-f]{40}$ ]] &&
+                    git merge-base --is-ancestor "$merged_commit" "$main_sha"; then
+                eligible=true
+                break
+            fi
+        done < "$MERGED_HEADS"
+    fi
+    if [[ "$eligible" != true ]]; then
         skipped=$((skipped + 1))
         continue
     fi
