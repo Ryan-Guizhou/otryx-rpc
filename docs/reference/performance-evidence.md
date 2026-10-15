@@ -193,7 +193,7 @@ java -jar otryx-benchmarks/target/benchmarks.jar ObservabilityPathBenchmark -pro
 }
 ~~~
 
-这里的 SHA 仅为**格式占位符**，实际执行必须替换为两个不同的 Git 完整 SHA；六个 `path` 都相对于 Campaign JSON 所在目录。每个 Bundle 必须包含有效的 `preflight.properties`（含 JDK 主版本 21 与固定主机标识）、`environment.properties`（含带时区的 `captured_at`）、`matrix/summary.csv`、`soak.json`（含带时区的 `completedAt`）、`soak-policy/report.json`、`validation-report.json`、`decision-inputs.json` 和 `evidence-manifest.json`。校验器不仅检查 A/B 标签，还要求各轮 `environment.captured_at` 与真实 Soak `completedAt` 时间顺序严格递增、运行之间不重叠；环境 Java 版本必须解析出准确的主版本 21，不能按子串判断。
+这里的 SHA 仅为**格式占位符**，实际执行必须替换为两个不同的 Git 完整 SHA；六个 `path` 都相对于 Campaign JSON 所在目录。每个 Bundle 必须包含有效的 `preflight.properties`（含 JDK 主版本 21 与固定主机标识）、`environment.properties`（含带时区的 `captured_at`）、`matrix/summary.csv`、`soak.json`（含带时区的 `completedAt`）、`soak-policy/report.json`、`validation-report.json`、`decision-inputs.json` 和 `evidence-manifest.json`。校验器重新执行现有 `validate_matrix(..., "full", ...)` 完整矩阵验证，即使篡改者重新生成 Manifest 并伪造 `validation-report.json` 的 `PASS`，缺失 JMH 测试点仍必须拒绝；同时要求各轮 `environment.captured_at` 与真实 Soak `completedAt` 时间顺序严格递增、运行之间不重叠；环境 Java 版本必须解析出准确的主版本 21，不能按子串判断。
 
 ~~~bash
 python3 scripts/test_u13_campaign.py

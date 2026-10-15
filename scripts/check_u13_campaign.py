@@ -16,6 +16,7 @@ from pathlib import Path
 from check_soak_quality import check_soak
 from check_v2d2_runner_baseline import STABLE_KEYS, properties
 from manage_v2d2_evidence_manifest import files
+from validate_v2d2_evidence import validate_matrix
 
 ORDER = ("baseline", "candidate", "candidate", "baseline", "baseline", "candidate")
 MIN_SECONDS = 3600
@@ -103,8 +104,10 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
     run_id = env.get("run_id", "")
     require(bool(run_id) and run_id not in run_ids, f"Duplicate/missing run ID: {path}")
     run_ids.add(run_id)
-    require((path / "matrix" / "summary.csv").is_file(),
-            f"Missing JMH matrix summary: {path}")
+    matrix_errors: list[str] = []
+    validate_matrix(path / "matrix", "full", matrix_errors)
+    require(not matrix_errors,
+            f"Incomplete full-profile JMH matrix: {path}: {'; '.join(matrix_errors)}")
     require(load_json(path / "validation-report.json").get("status") == "PASS",
             f"Existing full matrix/soak validator failed: {path}")
     require(load_json(path / "decision-inputs.json").get("evidenceClass") == "controlled",
