@@ -77,6 +77,7 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
     require(env.get("commit") == sha, f"Unexpected commit: {path}")
     require(manifest.get("commit") == sha, f"Manifest commit mismatch: {path}")
     require(manifest.get("runnerId") == env.get("runner_id"), f"Runner mismatch: {path}")
+    require(manifest.get("runId") == env.get("run_id"), f"Manifest run ID mismatch: {path}")
     require(manifest.get("evidenceClass") == "controlled", f"Manifest class mismatch: {path}")
     require(bool(HOST_SHA.fullmatch(env.get("host_fingerprint_sha256", ""))),
             f"Missing stable host fingerprint: {path}")
@@ -104,19 +105,38 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
     run_id = env.get("run_id", "")
     require(bool(run_id) and run_id not in run_ids, f"Duplicate/missing run ID: {path}")
     run_ids.add(run_id)
+    matrix_dir = path / "matrix"
+    matrix_environment_path = matrix_dir / "environment.properties"
+    require(matrix_environment_path.is_file(),
+            f"Missing nested JMH matrix environment provenance: {path}")
+    matrix_environment = properties(matrix_environment_path)
+    require(matrix_environment.get("profile") == "full",
+            f"Nested JMH matrix is not the full profile: {path}")
+    for key in (*STABLE_KEYS, "commit", "run_id"):
+        require(matrix_environment.get(key) == env.get(key),
+                f"Matrix/root environment mismatch ({key}): {path}")
+    matrix_captured_at = parse_timestamp(
+        matrix_environment.get("captured_at"), f"matrix.captured_at: {path}"
+    )
+    require(matrix_captured_at >= captured_at,
+            f"Matrix capture predates bundle environment: {path}")
     matrix_errors: list[str] = []
-    validate_matrix(path / "matrix", "full", matrix_errors)
+    validate_matrix(matrix_dir, "full", matrix_errors)
     require(not matrix_errors,
             f"Incomplete full-profile JMH matrix: {path}: {'; '.join(matrix_errors)}")
     require(load_json(path / "validation-report.json").get("status") == "PASS",
             f"Existing full matrix/soak validator failed: {path}")
-    require(load_json(path / "decision-inputs.json").get("evidenceClass") == "controlled",
-            f"Missing controlled decision evidence: {path}")
+    decision = load_json(path / "decision-inputs.json")
+    require(decision.get("evidenceClass") == "controlled"
+            and decision.get("commit") == sha
+            and decision.get("runnerId") == env.get("runner_id"),
+            f"Controlled decision evidence provenance mismatch: {path}")
     soak_path = path / "soak.json"
     soak_bytes = soak_path.read_bytes()
     soak = load_json(soak_path)
     completed_at = parse_timestamp(soak.get("completedAt"), f"soak.completedAt: {path}")
-    require(completed_at > captured_at, f"Soak finished before capture: {path}")
+    require(completed_at > matrix_captured_at,
+            f"Soak finished before nested matrix capture: {path}")
     require(soak.get("commit") == sha, f"Soak commit mismatch: {path}")
     require(isinstance(soak.get("durationSeconds"), (int, float))
             and math.isfinite(soak["durationSeconds"])
@@ -140,6 +160,10 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
     )
     require(result["status"] == "POLICY_PASS",
             f"Soak no longer satisfies predeclared thresholds: {path}")
+    expected_qps = soak["successes"] / soak["durationSeconds"]
+    require(math.isclose(soak["throughputOpsPerSecond"], expected_qps,
+                         rel_tol=1e-6, abs_tol=1e-6),
+            f"Soak QPS does not match successful calls / duration: {path}")
     return {key: env[key] for key in STABLE_KEYS}, {
         "runId": run_id,
         "commit": sha,

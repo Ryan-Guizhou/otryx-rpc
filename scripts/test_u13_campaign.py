@@ -101,6 +101,14 @@ def make_bundle(path: Path, run_id: str, commit: str, captured_at: datetime,
         encoding="utf-8",
     )
     write_full_matrix(path / "matrix" / "summary.csv")
+    root_environment = (path / "environment.properties").read_text(encoding="utf-8")
+    matrix_environment = root_environment.replace(
+        f"captured_at={iso(captured_at)}",
+        f"captured_at={iso(captured_at + timedelta(minutes=2))}",
+    )
+    (path / "matrix" / "environment.properties").write_text(
+        matrix_environment + "profile=full\n", encoding="utf-8"
+    )
     soak = {
         "commit": commit,
         "completedAt": iso(completed_at),
@@ -109,7 +117,7 @@ def make_bundle(path: Path, run_id: str, commit: str, captured_at: datetime,
         "connectionsPerEndpoint": 4,
         "durationSeconds": 3600.0,
         "throughputOpsPerSecond": 50000.0,
-        "successes": 100000,
+        "successes": 180000000,
         "errors": 0,
         "errorRate": 0.0,
         "maxLogicalInflight": 1000,
@@ -123,7 +131,10 @@ def make_bundle(path: Path, run_id: str, commit: str, captured_at: datetime,
     }
     write_json(path / "soak.json", soak)
     write_json(path / "validation-report.json", {"status": "PASS"})
-    write_json(path / "decision-inputs.json", {"evidenceClass": "controlled"})
+    write_json(path / "decision-inputs.json", {
+        "evidenceClass": "controlled", "commit": commit,
+        "runnerId": "otryx-perf-fixture",
+    })
     write_json(path / "soak-policy" / "report.json", {
         "status": "POLICY_PASS",
         "soakSha256": hashlib.sha256((path / "soak.json").read_bytes()).hexdigest(),
@@ -216,6 +227,47 @@ def main() -> None:
         rejected(lambda: validate_campaign(data, root))
         (second / "environment.properties").write_text(env, encoding="utf-8")
         create(second)
+        assert validate_campaign(data, root)["integrity"] == "PASS"
+
+        # A copied JMH matrix from another build must fail even with a new manifest.
+        matrix_environment_path = second / "matrix" / "environment.properties"
+        original_matrix_environment = matrix_environment_path.read_text(encoding="utf-8")
+        for expected, incorrect in (
+                (f"commit={CANDIDATE}", f"commit={BASE}"),
+                (f"host_fingerprint_sha256={HOST}",
+                 f"host_fingerprint_sha256={'d' * 64}"),
+                ("runner_id=otryx-perf-fixture", "runner_id=wrong-runner"),
+                ("jvm_flags=-Xms4g -Xmx4g", "jvm_flags=-Xms2g -Xmx2g"),
+                ("profile=full", "profile=standard")):
+            assert expected in original_matrix_environment
+            matrix_environment_path.write_text(
+                original_matrix_environment.replace(expected, incorrect),
+                encoding="utf-8",
+            )
+            create(second)
+            rejected(lambda: validate_campaign(data, root))
+        matrix_environment_path.write_text(
+            original_matrix_environment, encoding="utf-8"
+        )
+        create(second)
+        assert validate_campaign(data, root)["integrity"] == "PASS"
+
+        # Re-signing a fabricated throughput report must not bias A/B medians.
+        soak_path = first / "soak.json"
+        saved_soak = json.loads(soak_path.read_text(encoding="utf-8"))
+        first_policy_path = first / "soak-policy" / "report.json"
+        original_policy = json.loads(first_policy_path.read_text(encoding="utf-8"))
+        write_json(soak_path, dict(
+            saved_soak, throughputOpsPerSecond=100000.0
+        ))
+        write_json(first_policy_path, dict(
+            original_policy, soakSha256=hashlib.sha256(soak_path.read_bytes()).hexdigest()
+        ))
+        create(first)
+        rejected(lambda: validate_campaign(data, root))
+        write_json(soak_path, saved_soak)
+        write_json(first_policy_path, original_policy)
+        create(first)
         assert validate_campaign(data, root)["integrity"] == "PASS"
 
         initial_environment = (first / "environment.properties").read_text(encoding="utf-8")
