@@ -1,8 +1,8 @@
 # OTRYX V2：应用级注册身份与 SPI 契约
 
-> **当前状态：V2-01 新 API 阶段；应用级运行时尚未实现。**
+> **当前状态：V2-01/02 契约及 V2-03 控制面实现；应用级运行时尚未接入。**
 >
-> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#128](https://github.com/Ryan-Guizhou/otryx-rpc/issues/128)。
+> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#130](https://github.com/Ryan-Guizhou/otryx-rpc/issues/130)。
 > 版本 JDK 21、Spring Boot 3.5.4、1.0.0-SNAPSHOT、Wire v1 均保持不变。
 
 ## 1. 核心决策
@@ -140,3 +140,58 @@ SHA-256 只提供内容一致性，**不是发布方身份验证机制**；
 
 **注意：** Repository 测试使用隔离的测试存储；Memory、Nacos、Etcd、Consul、Eureka
 真实元数据后端和安全 GC 将分别由后续 Issue 交付，不能宣称已经上线。
+
+## 6. V2-03：ServiceMapping 与本地严格 Provider 解析
+
+> 关联 [#130](https://github.com/Ryan-Guizhou/otryx-rpc/issues/130)。本阶段只交付 Core SPI、
+> Memory 控制面仓库及 Resolver，不声称 MemoryRegistry/Client/Server 已切换；后续工作依赖 #131–#139。
+
+### 6.1 真实应用映射及所有权
+
+- `ServiceMappingKey(namespace, ServiceKey)` 保持 ServiceKey 的业务标识语义，与 Registry ApplicationKey 分离。
+- `ServiceMappingRepository.claim(application, instanceId)` 原子取得由仓库颁发的 fencing generation；
+  `publish(owner, fullExportSet)` 原子替换**该实例**接口集合；
+  `revoke(owner)` 只能撤销完全一致 generation 的实例发布，不能误删其他活跃实例或应用。
+- `lookupVerified` 严格验证命名空间、返回映射 Key 和原子快照。
+  多应用可以提供相同 ServiceKey；健康空映射与远端错误有严格区别。
+- `MemoryServiceMappingRepository` 实现上述原子语义；Etcd/Nacos/Consul/Eureka 的真正
+  跨进程 CAS、租约、ACL、owner fencing 和持久化由后续 Issue 提供，不能复用内存锁宣称分布式一致。
+
+### 6.2 Consumer 控制面与 RPC 数据面分离
+
+```mermaid
+flowchart LR
+  C[Control-plane refresh] --> M[ServiceMapping Snapshot]
+  M --> A[Application Directory]
+  A --> R[Revision-specific Manifest]
+  R --> V[Schema and Wire verification]
+  V --> P[Atomic VerifiedProviderSnapshot]
+  H[RPC hot path] --> P
+  P --> L[Router and Load Balancer]
+```
+
+- 控制面使用 `ServiceMappingCache.refresh` 与 `ApplicationServiceResolver.refresh`。
+  `ServiceMappingCache.current` / `ApplicationServiceResolver.current` 不执行远端 IO；
+  最后一步成功才一次性发布完整不可变 Provider 快照。未就绪、合法空、限期 LKG、超时陈旧、关闭可区分。
+- 目录实例必须属于该 Application。纯 Consumer、无 RPC Endpoint、0 端口或通配监听地址
+  不得进入候选池；每个实例的 Manifest Revision 必须存在、归属匹配，
+  且确实导出目标 ServiceKey + 预期 Schema Fingerprint + 当前 Wire 版本。
+- `ManifestSnapshotCache` 单飞按 (ApplicationKey,Revision) 缓存：最多 256 Key、
+  32 并行获取、16 MiB 已缓存字节；正缓存 10 分钟、负缓存 2 秒，
+  单次未决获取 15 秒超时。失败不伪装成缓存空结果；
+  未被引用的 Revision 不通过此缓存直接删除远端仓库数据。
+- 本地 Resolver 上限为 512 个 Service/Schema 组合、32 并行刷新、单次最多 1024 候选节点，
+  30 秒本地刷新上限。失联是否继续使用快照由配置 `maxStale` 决定；
+  这是独立控制面 API，尚**没有**接线到旧 `OtryxRpcClient`。
+- 当前 Manifest 内容寻址只验证完整性，不构成身份认证与运行时授权。
+  远端 ACL、身份、真实证书授权仍属 #133–#140，不可弱化。
+
+### 6.3 回归与后续边界
+
+`ApplicationServiceResolverTest` 验证多 Application / 多 Revision、纯 Consumer 排除、
+Schema 失配、健康空映射、Manifest 缺失、LKG 失效与关闭竞态；
+`ApplicationMappingCacheTest` 验证 SingleFlight、负缓存过期、失败缓存与取消；
+`ServiceMappingV2Test` 验证多实例共享所有权与旧代数隔离。
+
+可在 JDK 21 环境执行 `./mvnw -B -ntp -pl otryx-core -am test` 与
+`./mvnw -B -ntp clean verify -Pquality`；CI 通过前不得标记 #130 完成。
