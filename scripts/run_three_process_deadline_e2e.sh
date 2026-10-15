@@ -2,12 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROVIDER_JAR="$(find "$ROOT_DIR/otryx-examples/otryx-example-provider/target" -maxdepth 1 -name '*-exec.jar' -print -quit)"
-CONSUMER_JAR="$(find "$ROOT_DIR/otryx-examples/otryx-example-consumer/target" -maxdepth 1 -name '*-exec.jar' -print -quit)"
+PROVIDER_JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-provider/target" -maxdepth 1 -name '*-exec.jar' -print -quit)"
+CONSUMER_JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-consumer/target" -maxdepth 1 -name '*-exec.jar' -print -quit)"
 NACOS_ENDPOINT="${NACOS_TEST_ENDPOINT:-127.0.0.1:8848}"
 
 if [[ -z "$PROVIDER_JAR" || -z "$CONSUMER_JAR" ]]; then
-  echo "Executable example jars missing; build otryx-examples first." >&2
+  echo "Executable Quickstart JARs missing; build otryx-quickstart first." >&2
   exit 1
 fi
 
@@ -32,11 +32,11 @@ start_provider() {
   local port="$2"
   local log="$LOG_DIR/$role.log"
   java -jar "$PROVIDER_JAR" \
-    --otryx.rpc.example.role="$role" \
+    --otryx.rpc.quickstart.role="$role" \
     --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
     --otryx.rpc.server.port="$port" \
     --otryx.rpc.server.advertised-port="$port" \
-    --otryx.rpc.example.relay-delay-millis=250 \
+    --otryx.rpc.quickstart.relay-delay-millis=250 \
     --otryx.rpc.client.timeout=10s \
     >"$log" 2>&1 &
   local pid=$!
@@ -68,7 +68,7 @@ start_provider relay 19091
 
 java -jar "$CONSUMER_JAR" \
   --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-  --otryx.rpc.example.use-relay=true \
+  --otryx.rpc.quickstart.use-relay=true \
   >"$LOG_DIR/consumer.log" 2>&1 &
 CONSUMER_PID=$!
 

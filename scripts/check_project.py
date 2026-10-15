@@ -29,7 +29,7 @@ EXPECTED_MODULES = (
     "otryx-proxy",
     "otryx-observability",
     "otryx-spring-boot",
-    "otryx-examples",
+    "otryx-quickstart",
     "otryx-benchmarks",
 )
 

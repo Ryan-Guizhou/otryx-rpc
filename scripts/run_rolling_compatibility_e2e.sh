@@ -9,13 +9,13 @@ PORT="${OTRYX_RPC_COMPAT_PORT:-19090}"
 find_exec() {
   local root="$1"
   local module="$2"
-  find "$root/otryx-examples/$module/target"     -maxdepth 1     -name '*-exec.jar'     -print     -quit
+  find "$root/otryx-quickstart/$module/target"     -maxdepth 1     -name '*-exec.jar'     -print     -quit
 }
 
-OLD_PROVIDER="$(find_exec "$OLD_ROOT" otryx-example-provider)"
-OLD_CONSUMER="$(find_exec "$OLD_ROOT" otryx-example-consumer)"
-NEW_PROVIDER="$(find_exec "$NEW_ROOT" otryx-example-provider)"
-NEW_CONSUMER="$(find_exec "$NEW_ROOT" otryx-example-consumer)"
+OLD_PROVIDER="$(find_exec "$OLD_ROOT" otryx-quickstart-provider)"
+OLD_CONSUMER="$(find_exec "$OLD_ROOT" otryx-quickstart-consumer)"
+NEW_PROVIDER="$(find_exec "$NEW_ROOT" otryx-quickstart-provider)"
+NEW_CONSUMER="$(find_exec "$NEW_ROOT" otryx-quickstart-consumer)"
 
 for jar in "$OLD_PROVIDER" "$OLD_CONSUMER" "$NEW_PROVIDER" "$NEW_CONSUMER"; do
   if [[ -z "$jar" || ! -f "$jar" ]]; then
@@ -97,7 +97,7 @@ run_consumer() {
     CONSUMER_PID=$!
 
     for _ in {1..300}; do
-      if grep -q         "RPC demo completed successfully: Hello, OTRYX RPC!"         "$CONSUMER_LOG"; then
+      if grep -q         "RPC quickstart completed successfully: Hello, OTRYX RPC!"         "$CONSUMER_LOG"; then
         stop_consumer
         echo "Compatibility PASS: $label"
         return

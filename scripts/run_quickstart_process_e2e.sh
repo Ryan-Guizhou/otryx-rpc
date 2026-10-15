@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROVIDER_JAR="$(find "$ROOT_DIR/otryx-examples/otryx-example-provider/target" \
+PROVIDER_JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-provider/target" \
   -maxdepth 1 -name '*-exec.jar' -print -quit)"
-CONSUMER_JAR="$(find "$ROOT_DIR/otryx-examples/otryx-example-consumer/target" \
+CONSUMER_JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-consumer/target" \
   -maxdepth 1 -name '*-exec.jar' -print -quit)"
 NACOS_ENDPOINT="${NACOS_TEST_ENDPOINT:-127.0.0.1:8848}"
 RESTART_NACOS="${OTRYX_RPC_E2E_RESTART_NACOS:-${CI:-false}}"
@@ -12,7 +12,7 @@ RESTART_NACOS="${OTRYX_RPC_E2E_RESTART_NACOS:-${CI:-false}}"
 MAX_STALENESS="${OTRYX_RPC_E2E_MAX_STALENESS:-3s}"
 
 if [[ -z "$PROVIDER_JAR" || -z "$CONSUMER_JAR" ]]; then
-  echo "Executable example JARs were not found. Build the reactor first." >&2
+  echo "Executable Quickstart JARs were not found. Build the reactor first." >&2
   exit 1
 fi
 
@@ -75,7 +75,7 @@ stop_provider() {
 }
 
 success_count() {
-  grep -c "RPC demo completed successfully: Hello, OTRYX RPC!" "$CONSUMER_LOG" || true
+  grep -c "RPC quickstart completed successfully: Hello, OTRYX RPC!" "$CONSUMER_LOG" || true
 }
 
 wait_for_success_count() {
@@ -127,7 +127,7 @@ probe_fresh_consumer() {
     probe_pid=$!
 
     for _ in {1..150}; do
-      if grep -q "RPC demo completed successfully: Hello, OTRYX RPC!" "$probe_log"; then
+      if grep -q "RPC quickstart completed successfully: Hello, OTRYX RPC!" "$probe_log"; then
         kill "$probe_pid" 2>/dev/null || true
         wait "$probe_pid" 2>/dev/null || true
         rm -f "$probe_log"
@@ -155,7 +155,7 @@ start_provider 19090
 java -jar "$CONSUMER_JAR" \
   --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
   --otryx.rpc.client.directory-max-staleness="$MAX_STALENESS" \
-  --otryx.rpc.example.repeat-interval-millis=200 \
+  --otryx.rpc.quickstart.repeat-interval-millis=200 \
   --otryx.rpc.client.resilience.circuit-open-duration=500ms \
   --otryx.rpc.client.resilience.outlier-ejection-duration=500ms \
   >"$CONSUMER_LOG" 2>&1 &
