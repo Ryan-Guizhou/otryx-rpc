@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -242,14 +243,14 @@ public final class MemoryApplicationRegistry implements ApplicationRegistry, App
     private static final class Subscriber {
         private final ApplicationRegistryListener listener;
         private long delivered = -1;
-        private boolean closed;
+        private final AtomicBoolean stopped = new AtomicBoolean();
 
         private Subscriber(ApplicationRegistryListener listener) {
             this.listener = listener;
         }
 
         private synchronized void deliver(ApplicationDirectorySnapshot snapshot) {
-            if (closed || snapshot.revision() <= delivered) {
+            if (stopped.get() || snapshot.revision() <= delivered) {
                 return;
             }
             delivered = snapshot.revision();
@@ -262,8 +263,8 @@ public final class MemoryApplicationRegistry implements ApplicationRegistry, App
             }
         }
 
-        private synchronized void stop() {
-            closed = true;
+        private void stop() {
+            stopped.set(true);
         }
     }
 }

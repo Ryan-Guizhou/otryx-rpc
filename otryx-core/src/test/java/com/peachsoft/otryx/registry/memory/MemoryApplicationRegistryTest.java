@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CompletionException;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
@@ -134,6 +136,34 @@ class MemoryApplicationRegistryTest {
                 assertTrue(registry.lookup(caller).toCompletableFuture().join()
                         .instances().contains(consumer));
             }
+        }
+    }
+
+    @Test
+    void closeDoesNotWaitOnAlreadyRunningSubscriberCallback() throws Exception {
+        MemoryApplicationRegistry registry = new MemoryApplicationRegistry();
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch allowCallbackToFinish = new CountDownLatch(1);
+        registry.subscribe(APP, snapshot -> {
+            if (snapshot.instances().isEmpty()) {
+                return;
+            }
+            callbackEntered.countDown();
+            try {
+                allowCallbackToFinish.await();
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        CompletableFuture<Void> registration = CompletableFuture.runAsync(() ->
+                registry.register(consumer(APP, "consumer")).toCompletableFuture().join());
+        try {
+            assertTrue(callbackEntered.await(2, TimeUnit.SECONDS));
+            CompletableFuture<Void> closing = CompletableFuture.runAsync(registry::close);
+            closing.get(2, TimeUnit.SECONDS);
+        } finally {
+            allowCallbackToFinish.countDown();
+            registration.get(3, TimeUnit.SECONDS);
         }
     }
 
