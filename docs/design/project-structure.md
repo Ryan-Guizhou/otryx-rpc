@@ -118,17 +118,17 @@ Runtime
 
 ## 6. 单一 Starter 的位置
 
-默认推荐唯一的 \`otryx-spring-boot-starter\`，只带入 AutoConfiguration / Core / Memory Registry / JDK Proxy / Fory / Vert.x；Etcd、Nacos、Consul/Eureka、CGLIB、ByteBuddy 和可观测性实现通过可选 Adapter 添加：
+默认推荐唯一的 `otryx-spring-boot-starter`，只带入 AutoConfiguration / Core / Memory Registry / JDK Proxy / Fory / Vert.x；Etcd、Nacos、Consul/Eureka、CGLIB、ByteBuddy 和可观测性实现通过可选 Adapter 添加：
 
-\`\`\`xml
+```xml
 <dependency>
     <groupId>com.peachsoft.otryx</groupId>
     <artifactId>otryx-spring-boot-starter</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
-\`\`\`
+```
 
-Quickstart 的 Memory 单进程模块只使用 Starter；Nacos 双 JVM 模块另加 \`otryx-registry-nacos\`。该分层避免 SDK 依赖膨胀，同时保持 Provider/Consumer 注解、Core API、Wire v1 和安全策略一致。非 Spring 用法仍可直接使用 Core 与对应 Adapter。
+Quickstart 的 Memory 单进程模块只使用 Starter；Nacos 双 JVM 模块另加 `otryx-registry-nacos`。该分层避免 SDK 依赖膨胀，同时保持 Provider/Consumer 注解、Core API、Wire v1 和安全策略一致。非 Spring 用法仍可直接使用 Core 与对应 Adapter。
 
 ## 7. 测试结构
 

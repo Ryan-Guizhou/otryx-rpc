@@ -6,31 +6,31 @@
 
 ### 1.1 唯一的 Spring Boot Starter
 
-目前只保留 **\`otryx-spring-boot-starter\`**，不区分 Lite/Full。Starter 本身不再传递 Etcd、Nacos 或 CGLIB SDK，默认依赖 Spring Boot AutoConfiguration、Core、Memory Registry、JDK Proxy、Fory、Vert.x，完整 RPC 能力与 Wire v1 不变。
+目前只保留 **`otryx-spring-boot-starter`**，不区分 Lite/Full。Starter 本身不再传递 Etcd、Nacos 或 CGLIB SDK，默认依赖 Spring Boot AutoConfiguration、Core、Memory Registry、JDK Proxy、Fory、Vert.x，完整 RPC 能力与 Wire v1 不变。
 
-\`\`\`xml
+```xml
 <dependency>
     <groupId>com.peachsoft.otryx</groupId>
     <artifactId>otryx-spring-boot-starter</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
-\`\`\`
+```
 
 只有跨进程使用 Nacos 时，再在**具体业务项目**加入：
 
-\`\`\`xml
+```xml
 <dependency>
     <groupId>com.peachsoft.otryx</groupId>
     <artifactId>otryx-registry-nacos</artifactId>
     <version>1.0.0-SNAPSHOT</version>
 </dependency>
-\`\`\`
+```
 
-Etcd、Consul/Eureka、CGLIB、ByteBuddy 或遥测模块也按照需求独立引入：\`otryx-registry-etcd\`、\`otryx-registry-consul\`、\`otryx-registry-eureka\`、\`otryx-proxy-cglib\`、\`otryx-proxy-bytebuddy\`。Consul/Eureka 通过 \`otryx-registry-http\` 共享协议实现，无需自己重复添加 HTTP 子模块。SPI 自动发现实际安装的 Adapter；\`registry.type=nacos\` 却没有 \`otryx-registry-nacos\` 将在启动时明确失败。
+Etcd、Consul/Eureka、CGLIB、ByteBuddy 或遥测模块也按照需求独立引入：`otryx-registry-etcd`、`otryx-registry-consul`、`otryx-registry-eureka`、`otryx-proxy-cglib`、`otryx-proxy-bytebuddy`。Consul/Eureka 通过 `otryx-registry-http` 共享协议实现，无需自己重复添加 HTTP 子模块。SPI 自动发现实际安装的 Adapter；`registry.type=nacos` 却没有 `otryx-registry-nacos` 将在启动时明确失败。
 
-单一 Starter 只是依赖汇总，不复制运行时实现；Bean 自动装配与注解生命周期始终由 \`otryx-spring-boot-autoconfigure\` 提供。下图表示**默认依赖与显式可选依赖的边界**：
+单一 Starter 只是依赖汇总，不复制运行时实现；Bean 自动装配与注解生命周期始终由 `otryx-spring-boot-autoconfigure` 提供。下图表示**默认依赖与显式可选依赖的边界**：
 
-\`\`\`mermaid
+```mermaid
 flowchart LR
     Starter[Spring Boot Starter] --> Auto[AutoConfiguration]
     Auto --> Core[Core / Memory Registry / JDK Proxy]
@@ -40,9 +40,9 @@ flowchart LR
     App -. 按需 .-> Nacos[Nacos / Etcd / Consul / Eureka]
     App -. 按需 .-> Proxy[CGLIB / ByteBuddy]
     App -. 按需 .-> Obs[Micrometer / OTel / JFR]
-\`\`\`
+```
 
-**迁移说明**：本次调整发生于尚未正式发布的 \`1.0.0-SNAPSHOT\` 源码，若你的本地开发项目此前依赖旧 Lite 坐标，应改为上面的唯一 Starter，并按需显式加入原来由单一 Starter 传递的注册中心、代理 SDK。不创建别名或空壳兼容模块。
+**迁移说明**：本次调整发生于尚未正式发布的 `1.0.0-SNAPSHOT` 源码，若你的本地开发项目此前依赖旧 Lite 坐标，应改为上面的唯一 Starter，并按需显式加入原来由单一 Starter 传递的注册中心、代理 SDK。不创建别名或空壳兼容模块。
 
 ### 1.2 零外部依赖的真实 RPC 冒烟
 
@@ -56,7 +56,7 @@ mvn -B -ntp -pl otryx-spring-boot-autoconfigure -am \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-这是源码测试命令。若业务项目单独引用已发布的 单一 Starter，需先引入双方共享的 RPC 接口定义，然后分别声明 `@OtryxRpcService` 和 `@OtryxRpcReference`，单 JVM 内存模式适合本地冒烟，跨进程生产环境必须换用 Etcd、Nacos、Consul、Eureka 或等价的共享注册中心。
+这是源码测试命令。若业务项目单独引用单一 Starter，需先引入双方共享的 RPC 接口定义，然后分别声明 `@OtryxRpcService` 和 `@OtryxRpcReference`，单 JVM 内存模式适合本地冒烟，跨进程生产环境必须换用 Etcd、Nacos、Consul、Eureka 或等价的共享注册中心。
 
 ## 2. Provider
 
@@ -314,12 +314,12 @@ ServiceKey/MethodId 生成 `RpcAuthorizationContext`；若容器中声明
 
 ## 可运行的自定义 Observer 接入示例（U11）
 
-Consumer 示例中的 [QuickstartCallObserver](../../otryx-quickstart/otryx-quickstart-consumer/src/main/java/com/peachsoft/otryx/examples/consumer/QuickstartCallObserver.java) 直接实现 Core `RpcObserver` 并注册为 Spring `@Component`，按逻辑请求终态以 `LongAdder` 统计成功/失败次数。
+Consumer 示例中的 [QuickstartCallObserver](../../otryx-quickstart/otryx-quickstart-consumer/src/main/java/com/peachsoft/otryx/quickstart/consumer/QuickstartCallObserver.java) 直接实现 Core `RpcObserver` 并注册为 Spring `@Component`，按逻辑请求终态以 `LongAdder` 统计成功/失败次数。
 它不读取请求 Payload、不记录异常内容，也不在 RPC 线程执行 I/O。
 
 - Spring 可通过已注册的自定义 `RpcObserver` Bean 汇入 Coordinator 的复合 Observer；业务无需修改协议或 Core。
 - 自定义 `RpcTransportFactory` Bean 可覆盖 SPI 名称选择；已有 Bean 时 `@ConditionalOnMissingBean` 不再创建默认工厂。
 - 对可能阻塞的第三方遥测出口，使用 `new BoundedAsyncRpcObserver(delegate, queueCapacity)` 并明确关闭所有权；队列溢出丢弃遥测，不反向压制 RPC 业务。
-- [QuickstartCallObserverTest](../../otryx-quickstart/otryx-quickstart-consumer/src/test/java/com/peachsoft/otryx/examples/consumer/QuickstartCallObserverTest.java) 与 `OtryxRpcAutoConfigurationTest` 校验计数和覆盖行为。
+- [QuickstartCallObserverTest](../../otryx-quickstart/otryx-quickstart-consumer/src/test/java/com/peachsoft/otryx/quickstart/consumer/QuickstartCallObserverTest.java) 与 `OtryxRpcAutoConfigurationTest` 校验计数和覆盖行为。
 
 本示例不包含持久化、Exactly-once 审计或网络外部 Exporter；直接在隔离开发环境运行上述双 JVM 示例即可触发回调。
