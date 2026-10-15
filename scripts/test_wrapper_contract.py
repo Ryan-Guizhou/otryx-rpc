@@ -32,6 +32,7 @@ def test_wrapper_scripts() -> None:
 
 
 def test_starter_classpath() -> None:
+    """The only public Starter is lightweight and adapters stay opt-in."""
     def coordinates(relative: str) -> set[str]:
         pom = ET.parse(ROOT / relative).getroot()
         return {
@@ -39,17 +40,12 @@ def test_starter_classpath() -> None:
             for dep in pom.findall("m:dependencies/m:dependency", NS)
         }
 
-    lite = coordinates("otryx-spring-boot/otryx-spring-boot-starter-lite/pom.xml")
-    full = coordinates("otryx-spring-boot/otryx-spring-boot-starter/pom.xml")
+    starter = coordinates("otryx-spring-boot/otryx-spring-boot-starter/pom.xml")
     auto = coordinates("otryx-spring-boot/otryx-spring-boot-autoconfigure/pom.xml")
-    assert lite == {"otryx-spring-boot-autoconfigure", "spring-boot-starter"}
-    assert {"otryx-registry-nacos", "otryx-registry-etcd",
-            "otryx-proxy-cglib"} <= full
-    assert {"otryx-core", "otryx-serialization-fory",
-            "otryx-transport-vertx"} <= auto
-    assert lite.isdisjoint({"otryx-registry-nacos", "otryx-registry-etcd",
-                            "otryx-registry-consul", "otryx-registry-eureka",
-                            "otryx-proxy-cglib"})
+    assert starter == {"otryx-spring-boot-autoconfigure", "spring-boot-starter"}
+    assert {"otryx-core", "otryx-serialization-fory", "otryx-transport-vertx"} <= auto
+    assert not (ROOT / "otryx-spring-boot/otryx-spring-boot-starter-lite").exists()
+
 
 
 if __name__ == "__main__":

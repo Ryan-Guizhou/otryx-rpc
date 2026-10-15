@@ -80,7 +80,7 @@
         <module>otryx-proxy</module>
         <module>otryx-observability</module>
         <module>otryx-spring-boot</module>
-        <module>otryx-examples</module>
+        <module>otryx-quickstart</module>
         <module>otryx-benchmarks</module>
     </modules>
 
@@ -243,11 +243,6 @@
             <dependency>
                 <groupId>com.peachsoft.otryx</groupId>
                 <artifactId>otryx-spring-boot-starter</artifactId>
-                <version>${revision}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.peachsoft.otryx</groupId>
-                <artifactId>otryx-spring-boot-starter-lite</artifactId>
                 <version>${revision}</version>
             </dependency>
         </dependencies>
@@ -510,10 +505,11 @@
                             <waitUntil>${central.waitUntil}</waitUntil>
                             <checksums>all</checksums>
                             <excludeArtifacts>
-                                <excludeArtifact>otryx-examples</excludeArtifact>
-                                <excludeArtifact>otryx-example-api</excludeArtifact>
-                                <excludeArtifact>otryx-example-provider</excludeArtifact>
-                                <excludeArtifact>otryx-example-consumer</excludeArtifact>
+                                <excludeArtifact>otryx-quickstart</excludeArtifact>
+                                <excludeArtifact>otryx-quickstart-api</excludeArtifact>
+                                <excludeArtifact>otryx-quickstart-provider</excludeArtifact>
+                                <excludeArtifact>otryx-quickstart-consumer</excludeArtifact>
+                                <excludeArtifact>otryx-quickstart-memory</excludeArtifact>
                                 <excludeArtifact>otryx-benchmarks</excludeArtifact>
                             </excludeArtifacts>
                         </configuration>

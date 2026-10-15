@@ -12,24 +12,12 @@
 
     <artifactId>otryx-spring-boot-starter</artifactId>
     <name>otryx-spring-boot-starter</name>
-    <description>OTRYX RPC Spring Boot starter.</description>
+    <description>OTRYX RPC single lightweight Spring Boot starter (optional adapters).</description>
 
     <dependencies>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
             <artifactId>otryx-spring-boot-autoconfigure</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.peachsoft.otryx</groupId>
-            <artifactId>otryx-registry-etcd</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.peachsoft.otryx</groupId>
-            <artifactId>otryx-registry-nacos</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.peachsoft.otryx</groupId>
-            <artifactId>otryx-proxy-cglib</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
