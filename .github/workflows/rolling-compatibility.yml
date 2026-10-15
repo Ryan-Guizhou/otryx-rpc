@@ -14,6 +14,7 @@ on:
       - 'otryx-serialization/otryx-serialization-fory/**'
       - 'otryx-transport/otryx-transport-vertx/**'
       - 'otryx-registry/**'
+      - 'otryx-quickstart/**'
       - 'otryx-examples/**'
       - 'pom.xml'
       - 'docs/release-status.properties'
@@ -79,8 +80,10 @@ jobs:
         run: |
           if test -d target/compat-n/peach-rpc-core; then
             echo "family=peach" >> "$GITHUB_OUTPUT"
-          elif test -d target/compat-n/otryx-core; then
-            echo "family=otryx" >> "$GITHUB_OUTPUT"
+          elif test -d target/compat-n/otryx-quickstart; then
+            echo "family=otryx-quickstart" >> "$GITHUB_OUTPUT"
+          elif test -d target/compat-n/otryx-examples; then
+            echo "family=otryx-legacy" >> "$GITHUB_OUTPUT"
           else
             echo "Unknown baseline layout"
             exit 1
@@ -94,11 +97,18 @@ jobs:
           mvn -B -ntp -pl peach-rpc-examples/peach-rpc-example-provider,peach-rpc-examples/peach-rpc-example-consumer -am package -DskipTests
 
       - name: Build same-generation OTRYX baseline
-        if: steps.baseline.outputs.family == 'otryx'
+        if: steps.baseline.outputs.family == 'otryx-legacy'
         working-directory: target/compat-n
         run: |
           mvn -B -ntp -pl otryx-codegen -am install -DskipTests
           mvn -B -ntp -pl otryx-examples/otryx-example-provider,otryx-examples/otryx-example-consumer -am package -DskipTests
+
+      - name: Build current Quickstart baseline
+        if: steps.baseline.outputs.family == 'otryx-quickstart'
+        working-directory: target/compat-n
+        run: |
+          mvn -B -ntp -pl otryx-codegen -am install -DskipTests
+          mvn -B -ntp -pl otryx-quickstart/otryx-quickstart-provider,otryx-quickstart/otryx-quickstart-consumer -am package -DskipTests
 
       - name: Install version N+1 annotation processor
         run: >
@@ -108,30 +118,30 @@ jobs:
           install
           -DskipTests
 
-      - name: Build version N+1 examples
+      - name: Build version N+1 Quickstart
         run: >
           mvn -B -ntp
-          -pl otryx-examples/otryx-example-provider,otryx-examples/otryx-example-consumer
+          -pl otryx-quickstart/otryx-quickstart-provider,otryx-quickstart/otryx-quickstart-consumer
           -am
           package
           -DskipTests
 
-      - name: Verify N/N+1 and rollback (same API generation only)
-        if: steps.baseline.outputs.family == 'otryx'
+      - name: Verify N/N+1 and rollback (same Quickstart API namespace)
+        if: steps.baseline.outputs.family == 'otryx-quickstart'
         run: >
           bash scripts/run_rolling_compatibility_e2e.sh
           "$PWD/target/compat-n"
           "$PWD"
 
       - name: Verify breaking Peach-to-OTRYX migration boundary
-        if: steps.baseline.outputs.family == 'peach'
+        if: steps.baseline.outputs.family != 'otryx-quickstart'
         run: |
           python3 scripts/check_migration_readiness.py
-          bash scripts/run_example_process_e2e.sh
+          bash scripts/run_quickstart_process_e2e.sh
           {
-            echo "## Explicit 1.x to 2.0 breaking API migration"
-            echo "The old Peach API generation was independently built."
-            echo "The new OTRYX generation was independently tested."
+            echo "## Explicit unpublished API namespace migration"
+            echo "The historical baseline was independently built."
+            echo "The current OTRYX Quickstart was independently tested."
             echo "Cross-generation rolling compatibility has **not** been established."
             echo "Use service/registry isolation and the documented blue-green migration."
           } >> "$GITHUB_STEP_SUMMARY"

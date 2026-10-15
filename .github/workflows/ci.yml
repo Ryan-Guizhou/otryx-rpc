@@ -50,6 +50,9 @@ jobs:
       - name: Repository checks
         run: python3 scripts/check_project.py
 
+      - name: Verify the single Starter and runnable Quickstart contract
+        run: python3 scripts/test_quickstart_layout.py
+
       - name: Verify squash-safe merged branch cleanup
         run: python3 scripts/test_cleanup_merged_branches.py
 
@@ -80,6 +83,9 @@ jobs:
 
       - name: Verify Maven reactor
         run: mvn -B -ntp clean verify -Pquality
+
+      - name: Verify single-process Memory Quickstart
+        run: bash scripts/run_quickstart_memory.sh
 
       - name: Verify V2-D.2-E1 runner preflight
         env:
@@ -153,8 +159,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Verify independent JVM examples
-        run: bash scripts/run_example_process_e2e.sh
+      - name: Verify independent JVM Quickstart
+        run: bash scripts/run_quickstart_process_e2e.sh
 
       - name: Verify A-B-C deadline chain across three independent JVMs
         run: bash scripts/run_three_process_deadline_e2e.sh
