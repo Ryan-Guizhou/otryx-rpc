@@ -242,3 +242,14 @@ docker compose -f otryx-quickstart/docker-compose.yml down
 ```
 
 初次验收完成后可阅读：[用户指南](../docs/user-guide.md) · [Starter 参考](../docs/reference/starter.md) · [架构设计](../docs/architecture.md) · [协议兼容](../docs/wire-compatibility.md)。固定硬件性能结论仍需要受控证据，短时 Quickstart 成功**不是**正式生产性能或 GA 发布认证。
+
+## V2 应用级注册迁移说明（开发分支）
+
+Core 编程式 `ApplicationMembershipCoordinator`、`ApplicationServiceResolver` 与
+`OtryxRpcClient.applicationControlPlane(...)` / `OtryxRpcServer.applicationMembership(...)`
+已经建立独立的应用级 RPC 路径。可运行的 **Core 单 JVM Wire v1 E2E**
+在 `ApplicationRuntimeEndToEndTest` 中验证三接口、独立 Consumer 与同进程 BOTH。
+当前本目录的 Spring Quickstart **尚未迁移到应用级 Registry**，仍使用旧链路；
+不能以运行本目录来证明 V2 Provider/Consumer 应用级身份已生产可用。
+Starter 自动配置和所有 Registry Adapter 迁移见 [V2 设计与状态](../docs/design/application-registry-v2.md)
+及 #133–#139；保留当前 Quickstart 行为仅为分阶段构建验证，非最终双模式支持。

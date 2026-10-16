@@ -1,13 +1,23 @@
 package com.peachsoft.otryx.core;
 
+import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.RpcCompatibilityMetadata;
 import com.peachsoft.otryx.api.ServiceInstance;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.ApplicationServiceResolver;
 import com.peachsoft.otryx.registry.RegistryListener;
 import com.peachsoft.otryx.registry.RegistrySnapshot;
 import com.peachsoft.otryx.registry.RegistrySubscription;
+import com.peachsoft.otryx.registry.ServiceMappingKey;
+import com.peachsoft.otryx.registry.VerifiedProviderSnapshot;
 import com.peachsoft.otryx.registry.ServiceDiscovery;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
@@ -90,6 +100,77 @@ final class ServiceDirectory implements AutoCloseable {
                         markUnavailable();
                     }
                 });
+    }
+
+    /**
+     * 绑定 V2 应用级发现，远端刷新仅由共享控制面调度器启动。
+     *
+     * <p>本地快照仍用 ServiceInstance 作为 DataPlane LB 的中立 Endpoint 载体；
+     * 不查询接口级 Registry，也不会把纯 Consumer 映射为服务实例。
+     *
+     * @param resolver 已验证 Manifest/Schema 的应用服务解析器
+     * @param key 带命名空间的业务服务键
+     * @param expectedSchema Consumer 所需 Schema Fingerprint
+     * @param freshnessOptions 目录断联后的 LKG 预算
+     * @param scheduler 属于 Client 的共享有界控制面调度器
+     */
+    ServiceDirectory(
+            ApplicationServiceResolver resolver,
+            ServiceMappingKey key,
+            String expectedSchema,
+            RpcDirectoryFreshnessOptions freshnessOptions,
+            ScheduledExecutorService scheduler) {
+        Objects.requireNonNull(resolver, "resolver");
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(expectedSchema, "expectedSchema");
+        Objects.requireNonNull(scheduler, "scheduler");
+        this.expectedSchemaFingerprint = null;
+        this.freshnessOptions = Objects.requireNonNull(freshnessOptions, "freshnessOptions");
+        this.monotonicClock = System::nanoTime;
+        AtomicBoolean refreshing = new AtomicBoolean();
+        ScheduledFuture<?> task = scheduler.scheduleWithFixedDelay(() -> {
+            if (closed.get() || !refreshing.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                resolver.refresh(key, expectedSchema).whenComplete((snapshot, error) -> {
+                    try {
+                        scheduler.execute(() -> {
+                            try {
+                                if (error == null && snapshot != null) {
+                                    publishVerified(key, snapshot);
+                                } else {
+                                    markUnavailable();
+                                }
+                            } finally {
+                                refreshing.set(false);
+                            }
+                        });
+                    } catch (RejectedExecutionException rejected) {
+                        refreshing.set(false);
+                        markUnavailable();
+                    }
+                });
+            } catch (RuntimeException error) {
+                refreshing.set(false);
+                markUnavailable();
+            }
+        }, 0L, 1L, TimeUnit.SECONDS);
+        this.subscription = () -> task.cancel(false);
+    }
+
+    private void publishVerified(ServiceMappingKey key, VerifiedProviderSnapshot snapshot) {
+        List<ServiceInstance> nodes = snapshot.providers().stream()
+                .map(instance -> verifiedEndpoint(key, instance))
+                .toList();
+        publish(new RegistrySnapshot(nodes, snapshot.mappingRevision()));
+    }
+
+    private static ServiceInstance verifiedEndpoint(ServiceMappingKey key, ApplicationInstance instance) {
+        String id = instance.application().namespace() + "/"
+                + instance.application().applicationName() + "/" + instance.instanceId();
+        return new ServiceInstance(id, key.serviceKey(),
+                instance.rpcEndpoint(), instance.weight(), Map.of());
     }
 
     private void publish(RegistrySnapshot candidate) {

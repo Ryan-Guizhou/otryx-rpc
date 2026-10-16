@@ -1,8 +1,8 @@
 # OTRYX V2：应用级注册身份与 SPI 契约
 
-> **当前状态：V2-01/02 契约及 V2-03 控制面实现；应用级运行时尚未接入。**
+> **当前状态：V2-01～05 Core 应用级注册/发现已实现；正式 Starter 和远端 Adapter 仍待迁移。**
 >
-> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#130](https://github.com/Ryan-Guizhou/otryx-rpc/issues/130)。
+> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#132](https://github.com/Ryan-Guizhou/otryx-rpc/issues/132)。
 > 版本 JDK 21、Spring Boot 3.5.4、1.0.0-SNAPSHOT、Wire v1 均保持不变。
 
 ## 1. 核心决策
@@ -238,3 +238,83 @@ Manifest 多修订号与 SPI ServiceLoader 工厂。
 
 验证命令：`./mvnw -B -ntp -pl otryx-core -am test`，
 `./mvnw -B -ntp clean verify -Pquality`。CI 全绿后再合并，并验证合并后 main 检查。
+
+## 8. V2-05：Provider / Consumer 双向应用注册运行时
+
+> 对应 [#132](https://github.com/Ryan-Guizhou/otryx-rpc/issues/132)。
+> **本 PR 仅使 Core 编程式 Client/Server 具有可操作的新路径；不宣称 Spring Starter
+> 已自动装配，也不宣称真实注册中心 Adapter 或 Quickstart 已切换。**
+> 运行时换代与最终删除旧 SPI 分别受 #137–#139 约束。
+
+### 8.1 生命周期与顺序
+
+```mermaid
+sequenceDiagram
+    participant P as Provider Core
+    participant M as Manifest Store
+    participant I as ServiceMapping
+    participant A as Application Directory
+    participant T as Listener
+    P->>M: Publish immutable Manifest revision
+    P->>I: Claim instance fencing owner
+    P->>I: Publish full exported ServiceKey set
+    P->>T: Start listening
+    T-->>P: Actual endpoint ready
+    P->>A: Register PROVIDER or BOTH member
+    Note over A: A Consumer-only member has no endpoint
+    P->>T: Drain on shutdown
+    P->>A: Unregister or downgrade to CONSUMER
+    P->>I: Revoke this owner's mapping
+```
+
+- `ApplicationMembershipCoordinator` 为同一应用进程的唯一成员控制面协调器：
+  `ApplicationKey + instanceId` 在该生命周期内保持稳定。Consumer-only 也必须调用
+  `startConsumer` 并完成真实目录入册；Provider/BOTH 在 Listener Ready 前不能暴露可路由 Endpoint。
+- 一个监听 Endpoint 对应一个实例发布域；同一应用若有多个 Listener，应分别配置稳定、不同的
+  instanceId 和协调器，不能让不同端点对同一实例互相覆盖。服务数量只增加 Manifest 中导出项，
+  不增加同一监听实例的注册记录。
+- 启动顺序：绑定业务服务 → 发布不可变 Manifest → claim 带 fencing 的映射 owner
+  → 原子替换该实例完整服务集合 → 启动 Transport → 得到真实对外 Endpoint
+  → 注册应用成员。任一步失败必须回滚已发布的映射、关闭 Transport，并返回异常。
+  Manifest 内容 Revision 因滚动发布与回滚可能仍被引用，不做危险删除。
+- Consumer-only → BOTH、BOTH → CONSUMER、BOTH → PROVIDER 均修改同一个成员实例，
+  无重复注册。Provider 撤销不能删除另一个实例的共享 ServiceKey 映射。
+  Provider 关闭采用已有 Drain + 受限注销预算；Consumer 关闭独立移除消费成员，
+  两者共同使用同一个 Coordinator 的串行有界控制面。
+- 每次后端异步操作超时上限 30 秒，可配置更小的单步骤预算。协调队列
+  和新命令数均有限额，关闭后拒绝新命令、重复关闭复用同一 Future，
+  外部后端失败/超时必须有异常终态而不是伪造清理成功。
+
+### 8.2 Client 解析与数据面
+
+- `OtryxRpcClient.Builder.applicationControlPlane(resolver, membership, namespace)`
+  使 Consumer 使用新的应用级目录，不走旧 `ServiceDiscovery(ServiceKey)`；
+  Client 构造期间启动本应用 Consumer-only 成员注册，`membershipReady()` 可作为就绪门禁。
+  未入册或已关闭，业务调用 fail closed，不发送 Transport。
+- 对每个业务接口提前计算 `ServiceKey + RpcSchemaFingerprint`；
+  后台有界调度器刷新 Mapping → Application Directory → Revision Manifest
+  → Wire/Schema 校验后更新内存快照。一次 RPC 的负载均衡只读取本地 `ServiceInstance[]`
+  端点投影，不进行注册中心 IO，也绝不把纯 Consumer 端点纳入候选。
+- 应用级目录默认强制有限的 LKG：未显式配置时为 30 秒，
+  显式配置无界策略直接拒绝；可通过
+  `directoryFreshnessOptions(new RpcDirectoryFreshnessOptions(Duration.ofSeconds(...)))`
+  调整。缓存的 `ApplicationServiceResolver.maxStale` 也是有限预算；网络异常
+  与健康空目录必须区分，不得因缓存错误而发布非法空快照。
+- `OtryxRpcServer.Builder.applicationMembership(membership)` 选择新 Provider
+  发布路径。必须向 Client/Server 传入同一个应用生命周期实例才能正确得到 BOTH，
+  且注册中心、Manifest/Mapping 后端需是同一控制面部署域。
+  **这不是允许长期保留接口级旧路径的兼容开关**：旧 Builder/SPIs 仅为分阶段的
+  暂留代码，最终 #139 强制删除。
+
+### 8.3 验证及明确剩余边界
+
+- `ApplicationMembershipCoordinatorTest`：纯 Consumer 无端口、升级 BOTH、
+  降级与独立注销、不同 owner 共存、失败注册和元数据回滚、并发关闭、后端挂起超时。
+- `ApplicationRuntimeEndToEndTest`：使用真实 Core Client/Server、
+  三个不同接口的业务实现、Wire v1 Header/Method ID/Codec、真实 Mapping/Manifest 及
+  进程内 Registry；只用测试 LoopbackTransport 替换 Socket。覆盖 Provider-only、
+  Consumer-only、同进程 BOTH、三服务同一实例、Listener 启动失败回滚与关闭注销。
+- Spring Starter、公开 Quickstart 仍在旧运行时；远端 Adapter 的 lease/CAS/watch、
+  独立 JVM、真实 TCP、mTLS/Method authorization、10k soak 和故障注入
+  必须在 #133–#139 及发布门禁中重新验收。
+  不得将这个进程内 E2E 当作外部 Registry 的网络稳定性证明。

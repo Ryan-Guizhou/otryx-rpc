@@ -9,6 +9,7 @@ import com.peachsoft.otryx.api.RpcExecutionMode;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.RpcRemoteError;
 import com.peachsoft.otryx.api.RpcStatus;
+import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.ServiceInstance;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
@@ -79,6 +80,8 @@ public final class OtryxRpcServer implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(OtryxRpcServer.class);
 
     private final ServiceRegistrar registrar;
+    private final ApplicationMembershipCoordinator membership;
+    private final List<ExportedService> exportedServices = new CopyOnWriteArrayList<>();
     private final RpcTransportServer transport;
     private final RpcCodecRegistry codecs;
     private final RpcEndpoint bindEndpoint;
@@ -115,9 +118,12 @@ public final class OtryxRpcServer implements AutoCloseable {
     private volatile RpcEndpoint advertisedEndpoint;
 
     private OtryxRpcServer(Builder builder) {
-        this.registrar = Objects.requireNonNull(
-                builder.registrar,
-                "serviceRegistrar");
+        if (builder.membership != null && builder.registrar != null) {
+            throw new IllegalArgumentException("Conflicting application and interface registration");
+        }
+        this.membership = builder.membership;
+        this.registrar = membership == null
+                ? Objects.requireNonNull(builder.registrar, "serviceRegistrar") : null;
         this.transport = Objects.requireNonNull(
                 builder.transport,
                 "transportServer");
@@ -224,14 +230,16 @@ public final class OtryxRpcServer implements AutoCloseable {
             throw new IllegalStateException(
                     "Service id collision: " + serviceId);
         }
-        configuredInstances.add(new ServiceInstance(
-                UUID.randomUUID().toString(),
-                key,
-                bindEndpoint,
-                100,
-                RpcCompatibilityMetadata.providerMetadata(
-                        key,
-                        api)));
+        if (membership != null) {
+            exportedServices.add(ExportedService.fromContract(key, api));
+        } else {
+            configuredInstances.add(new ServiceInstance(
+                    UUID.randomUUID().toString(),
+                    key,
+                    bindEndpoint,
+                    100,
+                    RpcCompatibilityMetadata.providerMetadata(key, api)));
+        }
         return this;
     }
 
@@ -261,7 +269,10 @@ public final class OtryxRpcServer implements AutoCloseable {
         }
 
         CompletableFuture<RpcEndpoint> started = new CompletableFuture<>();
-        transport.start(bindEndpoint, new RpcRequestHandler() {
+        CompletionStage<Void> preparation = membership == null
+                ? CompletableFuture.completedFuture(null)
+                : membership.prepareProvider(exportedServices);
+        preparation.thenCompose(ignored -> transport.start(bindEndpoint, new RpcRequestHandler() {
                     @Override
                     public CompletionStage<byte[]> handle(RpcEndpoint remote, byte[] frame) {
                         return OtryxRpcServer.this.handle(
@@ -281,18 +292,15 @@ public final class OtryxRpcServer implements AutoCloseable {
                         return OtryxRpcServer.this.handle(
                                 remote, peer, frame, requestExecutor);
                     }
-                })
+                }))
                 .whenComplete((endpoint, transportError) -> {
                     if (transportError != null) {
-                        state.compareAndSet(State.STARTING, State.CLOSED);
-                        started.completeExceptionally(transportError);
+                        failAfterPreparation(started, transportError);
                         return;
                     }
                     if (state.get() != State.STARTING) {
-                        transport.close();
-                        started.completeExceptionally(
-                                new IllegalStateException(
-                                        "RPC server was closed during startup"));
+                        failAfterPreparation(started,
+                                new IllegalStateException("RPC server was closed during startup"));
                         return;
                     }
                     actualEndpoint = endpoint;
@@ -300,9 +308,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     try {
                         published = resolveAdvertisedEndpoint(endpoint);
                     } catch (RuntimeException error) {
-                        state.compareAndSet(State.STARTING, State.CLOSED);
-                        transport.close();
-                        started.completeExceptionally(error);
+                        failAfterPreparation(started, error);
                         return;
                     }
                     advertisedEndpoint = published;
@@ -349,6 +355,25 @@ public final class OtryxRpcServer implements AutoCloseable {
         return started;
     }
 
+    private void failAfterPreparation(CompletableFuture<RpcEndpoint> started, Throwable error) {
+        state.compareAndSet(State.STARTING, State.CLOSED);
+        try {
+            transport.close();
+        } catch (RuntimeException closeError) {
+            error.addSuppressed(closeError);
+        }
+        if (membership == null) {
+            started.completeExceptionally(error);
+            return;
+        }
+        membership.stopProvider().whenComplete((ignored, rollbackError) -> {
+            if (rollbackError != null) {
+                error.addSuppressed(rollbackError);
+            }
+            started.completeExceptionally(error);
+        });
+    }
+
     private RpcEndpoint resolveAdvertisedEndpoint(RpcEndpoint endpoint) {
         String host = advertisedHost;
         if (host == null || host.isBlank()) {
@@ -376,6 +401,10 @@ public final class OtryxRpcServer implements AutoCloseable {
 
     private CompletionStage<Void> registerConfiguredServices(
             RpcEndpoint endpoint) {
+        if (membership != null) {
+            return membership.providerReady(endpoint).toCompletableFuture()
+                    .copy().orTimeout(controlPlaneTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        }
         List<CompletableFuture<Void>> registrations = new ArrayList<>();
         for (ServiceInstance configured : configuredInstances) {
             registrations.add(registrar.register(
@@ -391,6 +420,10 @@ public final class OtryxRpcServer implements AutoCloseable {
 
     private CompletionStage<Void> rollbackRegisteredServices(
             RpcEndpoint endpoint) {
+        if (membership != null) {
+            return membership.stopProvider().toCompletableFuture()
+                    .copy().orTimeout(controlPlaneTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        }
         List<CompletableFuture<Void>> rollbacks = new ArrayList<>();
         for (ServiceInstance configured : configuredInstances) {
             CompletableFuture<Void> rollback = registrar
@@ -1318,6 +1351,22 @@ public final class OtryxRpcServer implements AutoCloseable {
             RpcShutdownBudget budget,
             ShutdownProgress progress) {
         RpcEndpoint endpoint = advertisedEndpoint;
+        if (membership != null) {
+            long remaining = Math.min(budget.remainingNanos(), controlPlaneTimeout.toNanos());
+            if (remaining > 0L) {
+                try {
+                    progress.registrationsRemoved = awaitWithin(membership.stopProvider(), remaining);
+                } catch (RuntimeException error) {
+                    progress.failures.incrementAndGet();
+                    LOGGER.warn("RPC application membership revoke failed: errorType={}",
+                            error.getClass().getName());
+                }
+            }
+            if (!progress.registrationsRemoved) {
+                progress.failures.incrementAndGet();
+            }
+            return;
+        }
         if (endpoint == null || configuredInstances.isEmpty()) {
             progress.registrationsRemoved = true;
             return;
@@ -1427,6 +1476,7 @@ public final class OtryxRpcServer implements AutoCloseable {
     /** Provider 运行时 Builder。 */
     public static final class Builder {
         private ServiceRegistrar registrar;
+        private ApplicationMembershipCoordinator membership;
         private RpcTransportServer transport;
         private RpcCodecRegistry codecs;
         private RpcEndpoint bind;
@@ -1461,6 +1511,17 @@ public final class OtryxRpcServer implements AutoCloseable {
          */
         public Builder serviceRegistrar(ServiceRegistrar value) {
             this.registrar = value;
+            return this;
+        }
+
+        /**
+         * 选择 V2 应用级成员控制面，不同时向旧 ServiceKey Registry 写入实例。
+         *
+         * @param value 同一个进程 Provider/Consumer 共享的成员协调器
+         * @return Provider Builder
+         */
+        public Builder applicationMembership(ApplicationMembershipCoordinator value) {
+            this.membership = Objects.requireNonNull(value, "value");
             return this;
         }
 
