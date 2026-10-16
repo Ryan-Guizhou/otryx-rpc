@@ -272,6 +272,8 @@ public class OtryxRpcProperties implements InitializingBean {
         private String type = "memory";
         private String endpoints = "";
         private String namespace = "";
+        private String applicationName = "";
+        private String instanceId = "";
         private long leaseTtlSeconds = 30;
         private final Nacos nacos = new Nacos();
         private final Consul consul = new Consul();
@@ -329,6 +331,42 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public void setNamespace(String namespace) {
             this.namespace = namespace;
+        }
+
+        /**
+         * 返回显式的应用名称覆盖；空字符串由 spring.application.name 决定。
+         *
+         * @return 应用级注册的可选 ApplicationName
+         */
+        public String getApplicationName() {
+            return applicationName;
+        }
+
+        /**
+         * 覆盖应用级注册名称。
+         *
+         * @param applicationName 明确指定的 ApplicationName
+         */
+        public void setApplicationName(String applicationName) {
+            this.applicationName = applicationName;
+        }
+
+        /**
+         * 返回进程唯一实例 ID，可空以便启动时生成。
+         *
+         * @return 当前配置的应用实例标识
+         */
+        public String getInstanceId() {
+            return instanceId;
+        }
+
+        /**
+         * 固定 Spring 进程的 V2 注册实例 ID。
+         *
+         * @param instanceId 显式进程实例身份
+         */
+        public void setInstanceId(String instanceId) {
+            this.instanceId = instanceId;
         }
 
         /**
@@ -497,6 +535,10 @@ public class OtryxRpcProperties implements InitializingBean {
         private long heartbeatSeconds = 10;
         private long pollIntervalMillis = 1000;
         private long requestTimeoutMillis = 3000;
+        private String metadataBackend = "";
+        private String metadataEndpoints = "";
+        private String memberHost = "";
+        private Map<String, String> metadataOptions = Map.of();
 
         /** 创建 Eureka 配置。 */
         public Eureka() {
@@ -574,6 +616,64 @@ public class OtryxRpcProperties implements InitializingBean {
      * @param value HTTP 超时毫秒数
      */
         public void setRequestTimeoutMillis(long value) { this.requestTimeoutMillis = value; }
+
+        /**
+         * 获取必须配置的外置元数据后端类型。
+         *
+         * @return etcd/nacos/consul 之一
+         */
+        public String getMetadataBackend() { return metadataBackend; }
+
+        /**
+         * 设置 Eureka 的外置元数据后端。
+         *
+         * @param value 可靠 Metadata Backend 类型
+         */
+        public void setMetadataBackend(String value) { this.metadataBackend = value; }
+
+        /**
+         * 返回外置 Metadata Backend 的独立端点。
+         *
+         * @return 元数据服务器端点
+         */
+        public String getMetadataEndpoints() { return metadataEndpoints; }
+
+        /**
+         * 配置外置后端地址，不得复用 Eureka 服务地址。
+         *
+         * @param value 后端端点列表
+         */
+        public void setMetadataEndpoints(String value) { this.metadataEndpoints = value; }
+
+        /**
+         * 纯 Consumer 的真实主机身份，不能虚构 RPC 端口。
+         *
+         * @return Consumer Member 真实 Host
+         */
+        public String getMemberHost() { return memberHost; }
+
+        /**
+         * 配置 Eureka 消费者的真实 Member Host。
+         *
+         * @param value 物理 IP 或可解析主机名
+         */
+        public void setMemberHost(String value) { this.memberHost = value; }
+
+        /**
+         * 返回外置元数据后端独立配置，名称与后端 RegistryOptions 对齐。
+         *
+         * @return 额外 Metadata Backend 选项
+         */
+        public Map<String, String> getMetadataOptions() { return metadataOptions; }
+
+        /**
+         * 为外置 Metadata Backend 指定安全敏感和 CAS 配置。
+         *
+         * @param options 外置元数据选项，需从受保护配置读取凭据
+         */
+        public void setMetadataOptions(Map<String, String> options) {
+            metadataOptions = options == null ? Map.of() : Map.copyOf(options);
+        }
     }
 
     /** Nacos Registry Adapter 配置。 */
@@ -587,6 +687,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private String cluster = "DEFAULT";
         private String username = "";
         private String password = "";
+        private String memberHost = "";
 
         /**
          * 返回 Nacos 管理分组。
@@ -659,6 +760,20 @@ public class OtryxRpcProperties implements InitializingBean {
         public void setPassword(String password) {
             this.password = password;
         }
+
+        /**
+         * 获取 Nacos Consumer 的真实 Member Host。
+         *
+         * @return 用作 Nacos 原生成员标识的物理主机
+         */
+        public String getMemberHost() { return memberHost; }
+
+        /**
+         * 设置 Nacos 原生成员主机，不能视为纯 Consumer RPC Endpoint。
+         *
+         * @param memberHost 用于心跳的真实主机
+         */
+        public void setMemberHost(String memberHost) { this.memberHost = memberHost; }
     }
 
     /**

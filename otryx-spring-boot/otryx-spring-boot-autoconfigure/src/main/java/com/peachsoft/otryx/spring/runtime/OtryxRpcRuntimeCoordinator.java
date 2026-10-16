@@ -6,6 +6,7 @@ import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
+import com.peachsoft.otryx.core.ApplicationMembershipCoordinator;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.RpcDirectoryFreshnessOptions;
 import com.peachsoft.otryx.core.OtryxRpcServer;
@@ -19,12 +20,16 @@ import com.peachsoft.otryx.observability.RpcMetadataPropagator;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.observability.RpcTracingBridge;
 import com.peachsoft.otryx.proxy.ProxyFactory;
-import com.peachsoft.otryx.registry.Registry;
+import com.peachsoft.otryx.registry.ApplicationRegistry;
+import com.peachsoft.otryx.registry.ApplicationServiceResolver;
 import com.peachsoft.otryx.spring.autoconfigure.OtryxRpcProperties;
 import com.peachsoft.otryx.transport.RpcTransportFactory;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 
 /**
@@ -35,8 +40,13 @@ import org.springframework.beans.factory.ObjectProvider;
  * @CreateTime 2026/9/28 11:30
  */
 public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
+    private static final Logger LOGGER = LoggerFactory.getLogger(OtryxRpcRuntimeCoordinator.class);
+    private static final long CLOSE_BUDGET_MILLIS = 30_000L;
 
-    private final Registry registry;
+    private final ApplicationRegistry registry;
+    private final ApplicationMembershipCoordinator membership;
+    private final ApplicationServiceResolver resolver;
+    private final OtryxRpcApplicationIdentity identity;
     private final RpcCodecRegistry codecRegistry;
     private final RpcTransportFactory transportFactory;
     private final RpcTransportOptions transportOptions;
@@ -58,7 +68,10 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     /**
      * 创建运行时协调器。
      *
-     * @param registry 注册中心
+     * @param registry 唯一 Application Member Registry
+     * @param membership Provider/Consumer/BOTH 共享成员协调器
+     * @param resolver 可信应用级服务解析器
+     * @param identity Spring 进程唯一应用身份
      * @param codecRegistry Codec 注册表
      * @param transportFactory Transport 工厂
      * @param transportOptions Transport 配置
@@ -73,7 +86,10 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
      * @param properties OTRYX RPC 配置
      */
     public OtryxRpcRuntimeCoordinator(
-            Registry registry,
+            ApplicationRegistry registry,
+            ApplicationMembershipCoordinator membership,
+            ApplicationServiceResolver resolver,
+            OtryxRpcApplicationIdentity identity,
             RpcCodecRegistry codecRegistry,
             RpcTransportFactory transportFactory,
             RpcTransportOptions transportOptions,
@@ -87,6 +103,9 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
             ObjectProvider<RpcAuthorizer> authorizerProvider,
             OtryxRpcProperties properties) {
         this.registry = Objects.requireNonNull(registry, "registry");
+        this.membership = Objects.requireNonNull(membership, "membership");
+        this.resolver = Objects.requireNonNull(resolver, "resolver");
+        this.identity = Objects.requireNonNull(identity, "identity");
         this.codecRegistry = Objects.requireNonNull(codecRegistry, "codecRegistry");
         this.transportFactory = Objects.requireNonNull(transportFactory, "transportFactory");
         this.transportOptions = Objects.requireNonNull(transportOptions, "transportOptions");
@@ -243,7 +262,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     private OtryxRpcClient createClient() {
         OtryxRpcProperties.Client clientProperties = properties.getClient();
         return OtryxRpcClient.builder()
-                .serviceDiscovery(registry)
+                .applicationControlPlane(resolver, membership, identity.application().namespace())
                 .codecRegistry(codecRegistry)
                 .transportClient(transportFactory.createClient(
                         transportOptions.withObserver(observer())))
@@ -263,9 +282,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     private OtryxRpcServer createServer() {
         OtryxRpcProperties.Server serverProperties = properties.getServer();
         return OtryxRpcServer.builder()
-                .serviceRegistrar(registry.registrar().orElseThrow(() ->
-                        new IllegalStateException(
-                                "Configured RPC registry does not support provider registration")))
+                .applicationMembership(membership)
                 .codecRegistry(codecRegistry)
                 .transportServer(transportFactory.createServer(
                         transportOptions.withObserver(observer())))
@@ -353,18 +370,40 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 properties.getServer().getShutdownTimeout());
     }
 
+    /**
+     * Spring Bean 销毁必须先完成 Provider 排空，再注销共享 Consumer/BOTH 成员。
+     *
+     * <p>本方法只应在应用生命周期销毁线程运行，不允许在 RPC EventLoop 调用。
+     * 阻塞等待受统一有限预算保护；异常以安全摘要记录，禁止泄漏凭据。
+     */
     @Override
     public void close() {
         OtryxRpcClient currentClient = client;
+        if (currentClient != null) {
+            currentClient.close();
+        }
+        OtryxRpcServer currentServer = server;
         try {
-            if (currentClient != null) {
-                currentClient.close();
-            }
-        } finally {
-            OtryxRpcServer currentServer = server;
             if (currentServer != null) {
-                // 关闭 Stage 自带总预算，销毁线程不会同步等待业务任务退出。
-                currentServer.shutdown(serverShutdownOptions());
+                currentServer.shutdown(serverShutdownOptions()).toCompletableFuture()
+                        .get(CLOSE_BUDGET_MILLIS, TimeUnit.MILLISECONDS);
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            LOGGER.warn("Spring RPC Provider shutdown interrupted");
+        } catch (Exception failure) {
+            LOGGER.warn("Spring RPC Provider shutdown incomplete. errorType={}",
+                    failure.getClass().getSimpleName());
+        } finally {
+            try {
+                membership.shutdown().toCompletableFuture()
+                        .get(CLOSE_BUDGET_MILLIS, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                LOGGER.warn("Spring RPC membership shutdown interrupted");
+            } catch (Exception failure) {
+                LOGGER.warn("Spring RPC membership shutdown incomplete. errorType={}",
+                        failure.getClass().getSimpleName());
             }
         }
     }

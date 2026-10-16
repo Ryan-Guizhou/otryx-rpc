@@ -36,8 +36,72 @@ public class OtryxRpcAutoConfigurationTest {
                             AutoConfigurations.of(
                                     OtryxRpcAutoConfiguration.class))
                     .withPropertyValues(
-                            "otryx.rpc.security-profile=TRUSTED_DEVELOPMENT");
+                            "otryx.rpc.security-profile=TRUSTED_DEVELOPMENT",
+                            "spring.application.name=otryx-test-service");
 
+
+    @Test
+    void enabledSpringRuntimeRequiresNonemptyApplicationNameByDefault() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OtryxRpcAutoConfiguration.class))
+                .withPropertyValues("otryx.rpc.security-profile=TRUSTED_DEVELOPMENT")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("spring.application.name");
+                });
+    }
+
+    @Test
+    void explicitlyConfiguredApplicationIdentityMustOverrideSpringName() {
+        contextRunner.withPropertyValues(
+                        "spring.application.name=unrelated-default",
+                        "otryx.rpc.registry.namespace=testing",
+                        "otryx.rpc.registry.application-name=explicit-orders",
+                        "otryx.rpc.registry.instance-id=stable-node-9")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    var identity = context.getBean(
+                            com.peachsoft.otryx.spring.runtime.OtryxRpcApplicationIdentity.class);
+                    assertThat(identity.application().namespace()).isEqualTo("testing");
+                    assertThat(identity.application().applicationName()).isEqualTo("explicit-orders");
+                    assertThat(identity.instanceId()).isEqualTo("stable-node-9");
+                });
+    }
+
+    @Test
+    void consumerOnlyRuntimeRegistersRealApplicationMembershipWithoutEndpoint() {
+        contextRunner.withBean(ConsumerBean.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            var identity = context.getBean(
+                    com.peachsoft.otryx.spring.runtime.OtryxRpcApplicationIdentity.class);
+            var registry = context.getBean(com.peachsoft.otryx.registry.ApplicationRegistry.class);
+            var coordinator = context.getBean(OtryxRpcRuntimeCoordinator.class);
+            coordinator.clientIfCreated().orElseThrow().membershipReady().toCompletableFuture().join();
+            var instances = registry.lookup(identity.application()).toCompletableFuture().join().instances();
+            assertThat(instances).hasSize(1);
+            assertThat(instances.getFirst().role())
+                    .isEqualTo(com.peachsoft.otryx.api.ApplicationRole.CONSUMER);
+            assertThat(instances.getFirst().rpcEndpoint()).isNull();
+        });
+    }
+
+    @Test
+    void providerAndConsumerInOneProcessShareOneBothMember() {
+        providerRunner().withBean(ServiceBean.class).withBean(ConsumerBean.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            var identity = context.getBean(
+                    com.peachsoft.otryx.spring.runtime.OtryxRpcApplicationIdentity.class);
+            var registry = context.getBean(com.peachsoft.otryx.registry.ApplicationRegistry.class);
+            var current = context.getBean(OtryxRpcRuntimeCoordinator.class);
+            current.clientIfCreated().orElseThrow().membershipReady().toCompletableFuture().join();
+            var instances = registry.lookup(identity.application()).toCompletableFuture().join().instances();
+            assertThat(instances).hasSize(1);
+            assertThat(instances.getFirst().role())
+                    .isEqualTo(com.peachsoft.otryx.api.ApplicationRole.BOTH);
+            assertThat(instances.getFirst().routableProvider()).isTrue();
+        });
+    }
 
     @Test
     void unspecifiedSecurityPolicyMustFailWithActionableMessage() {
