@@ -217,6 +217,7 @@ public interface OrderService {
 - `otryx.rpc.transport.security.reload-interval`：证书文件变化检查周期，默认 30 秒。
 - `otryx.rpc.transport.security.expiry-warning-threshold`：证书过期前告警窗口，默认 7 天。
 - `otryx.rpc.client.enabled`：默认 true，表示允许 Consumer；没有 `@OtryxRpcReference` 时不会创建连接。
+- `otryx.rpc.client.directory-max-staleness`：应用级 V2 的 LKG 同步故障允许陈旧期限，Spring 默认 **30 秒**。显式设为 `0s`（无限 LKG）且使用 Consumer 时会 fail-fast；不得以历史旧默认推断 V2 安全边界。
 - `otryx.rpc.server.enabled`：默认 true，表示允许 Provider；没有 `@OtryxRpcService` 时不会监听端口。
 - `otryx.rpc.client.proxy`：Generated Stub 缺失时的 fallback，默认 `jdk`；可显式选择 `cglib` 或可选 Byte Buddy 模块提供的 `bytebuddy`。
 - `otryx.rpc.client.load-balancer`：默认 `p2c-ewma`。

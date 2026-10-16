@@ -41,6 +41,26 @@ public class OtryxRpcAutoConfigurationTest {
 
 
     @Test
+    void applicationDirectoryMustHaveBoundedStalenessByDefault() {
+        contextRunner.run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(OtryxRpcProperties.class)
+                    .getClient().getDirectoryMaxStaleness()).isEqualTo(java.time.Duration.ofSeconds(30));
+        });
+    }
+
+    @Test
+    void explicitUnboundedDirectoryConfigurationMustFailInV2Consumer() {
+        contextRunner.withPropertyValues("otryx.rpc.client.directory-max-staleness=0s")
+                .withBean(ConsumerBean.class)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("Application discovery requires bounded directory staleness");
+                });
+    }
+
+    @Test
     void enabledSpringRuntimeRequiresNonemptyApplicationNameByDefault() {
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(OtryxRpcAutoConfiguration.class))

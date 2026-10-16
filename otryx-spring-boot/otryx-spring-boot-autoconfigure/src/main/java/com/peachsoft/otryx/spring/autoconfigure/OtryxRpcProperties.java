@@ -1315,7 +1315,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private boolean enabled = true;
         private Duration timeout = Duration.ofSeconds(3);
         private Map<String, Duration> methodTimeouts = Map.of();
-        private Duration directoryMaxStaleness = Duration.ZERO;
+        private Duration directoryMaxStaleness = Duration.ofSeconds(30);
         private String loadBalancer = "p2c-ewma";
         private String proxy = "jdk";
         private final Resilience resilience = new Resilience();
