@@ -58,7 +58,7 @@ jobs:
           -pl otryx-registry/otryx-registry-eureka -am
           -Deureka.test.endpoint=http://127.0.0.1:8761/eureka
           -Deureka.test.metadata.endpoint=http://127.0.0.1:8500
-          -Deureka.test.control=.github/test-fixtures/eureka-server/control.sh
+          -Deureka.test.control=$GITHUB_WORKSPACE/.github/test-fixtures/eureka-server/control.sh
           -Dtest=EurekaApplicationRegistryChaosTest
           -Dsurefire.failIfNoSpecifiedTests=false
           test
