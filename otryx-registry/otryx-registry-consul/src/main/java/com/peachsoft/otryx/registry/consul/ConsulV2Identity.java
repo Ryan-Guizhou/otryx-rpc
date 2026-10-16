@@ -144,38 +144,38 @@ final class ConsulV2Identity {
      */
     ApplicationInstance fromHealth(ApplicationKey application, JsonNode entry) {
         requireNamespace(application);
-        JsonNode service = entry.path("Service");
-        Map<String, String> meta = readMeta(service.path("Meta"));
+        JsonNode service = entry.path(ConsulProtocol.FIELD_SERVICE);
+        Map<String, String> meta = readMeta(service.path(ConsulProtocol.FIELD_META));
         if (!FORMAT_VERSION.equals(meta.get(META_VERSION))
                 || !application.namespace().equals(meta.get(META_NAMESPACE))
                 || !application.applicationName().equals(meta.get(META_APPLICATION))
-                || !serviceName(application).equals(service.path("Service").asText())
+                || !serviceName(application).equals(service.path(ConsulProtocol.FIELD_SERVICE).asText())
                 || meta.getOrDefault(META_TOKEN, "").isBlank()) {
             return null;
         }
-        JsonNode checks = entry.path("Checks");
+        JsonNode checks = entry.path(ConsulProtocol.FIELD_CHECKS);
         if (!checks.isArray() || checks.isEmpty()) {
             return null;
         }
         for (JsonNode check : checks) {
-            if (!"passing".equals(check.path("Status").asText())) {
+            if (!ConsulProtocol.STATUS_PASSING.equals(check.path(ConsulProtocol.FIELD_STATUS).asText())) {
                 return null;
             }
         }
         try {
             String instanceId = meta.get(META_INSTANCE);
-            if (!serviceId(application, instanceId).equals(service.path("ID").asText())) {
+            if (!serviceId(application, instanceId).equals(service.path(ConsulProtocol.FIELD_ID).asText())) {
                 return null;
             }
             ApplicationRole role = ApplicationRole.valueOf(meta.get(META_ROLE));
             int weight = Integer.parseInt(meta.get(META_WEIGHT));
             String revision = meta.get(META_REVISION);
             RpcEndpoint endpoint = null;
-            int port = service.path("Port").asInt(0);
+            int port = service.path(ConsulProtocol.FIELD_PORT).asInt(0);
             if (role.providesRpc()) {
-                String address = service.path("Address").asText("");
+                String address = service.path(ConsulProtocol.FIELD_ADDRESS).asText("");
                 if (address.isBlank()) {
-                    address = entry.path("Node").path("Address").asText("");
+                    address = entry.path(ConsulProtocol.FIELD_NODE).path(ConsulProtocol.FIELD_ADDRESS).asText("");
                 }
                 if (port < 1 || address.isBlank() || isUnspecified(address)) {
                     return null;

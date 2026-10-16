@@ -43,7 +43,7 @@
 
 **设计原则：** 控制面与数据面分离；可替换实现位于 Adapter/SPI；单次调用热路径不做注册中心 IO、SPI 扫描和动态解析。
 
-**V2 应用级注册改造（进行中）：** 已具备 Provider/Consumer 共同的 Application 身份、Manifest/ServiceMapping、Memory 应用成员与有界映射缓存。Core Client/Server 已增加应用成员生命周期与基于 Manifest/Schema 的 Provider 本地解析通路，程序化装配可验证三接口 RPC。**Etcd 已新增独立的 V2 应用级成员/Manifest/Mapping Adapter**，但旧 Etcd SPI 仍因分阶段迁移暂留；Nacos 已新增独立应用级 Naming/Config V2 后端；Spring Starter/Quickstart 与 Consul/Eureka 仍待接入应用级路径；#134–#139 负责其余后端、Starter 接线与最终清理，不能将 Core 的新通路等同于 V2 全面上线。[设计与状态](docs/design/application-registry-v2.md)。
+**V2 应用级注册改造（进行中）：** 已具备 Provider/Consumer 共同的 Application 身份、Manifest/ServiceMapping、Memory 应用成员与有界映射缓存。Core Client/Server 已增加应用成员生命周期与基于 Manifest/Schema 的 Provider 本地解析通路，程序化装配可验证三接口 RPC。**Etcd 已新增独立的 V2 应用级成员/Manifest/Mapping Adapter**，但旧 Etcd SPI 仍因分阶段迁移暂留；Nacos 已新增独立应用级 Naming/Config V2 后端；Consul V2 应用成员/Manifest/Mapping Adapter 正在 #135 独立开发并等待真实后端验收；Eureka、Spring Starter/Quickstart 仍待完成应用级路径；#135–#139 负责其余后端、Starter 接线与最终清理，不能将 Core 的新通路等同于 V2 全面上线。[设计与状态](docs/design/application-registry-v2.md)。
 
 <!-- doc-section:compatibility -->
 ## 兼容性与迁移
@@ -102,7 +102,7 @@ otryx:
 
 实际网络部署必须显式选择 `NETWORK_MTLS`，同时配置双向 TLS、Fory 严格 DTO 白名单；可注入 `RpcAuthorizer` 对已验证证书身份按 ServiceKey/MethodId 授权。未指定安全意图会在 Spring 启动阶段失败；开发示例的 `TRUSTED_DEVELOPMENT` 不适用于不可信网络，详见[安全指南](docs/security.md)。
 
-V2 Etcd 应用级控制面的独立使用见 [Etcd](docs/reference/registry-etcd.md)，Nacos V2 Naming/Config 接入见 [Nacos V2](docs/reference/registry-nacos-v2.md)。Consul / Eureka 的旧接口级 Adapter 采用按需依赖与轮询式订阅，见 [Consul](docs/reference/registry-consul.md) 与 [Eureka](docs/reference/registry-eureka.md) 适配指南。
+V2 Etcd 应用级控制面的独立使用见 [Etcd](docs/reference/registry-etcd.md)，Nacos V2 Naming/Config 接入见 [Nacos V2](docs/reference/registry-nacos-v2.md)，Consul V2 进行中的设计与验证见 [Consul V2](docs/reference/registry-consul-v2.md)。Consul / Eureka 的旧接口级 Adapter 采用按需依赖与轮询式订阅，见 [Consul](docs/reference/registry-consul.md) 与 [Eureka](docs/reference/registry-eureka.md) 适配指南。
 
 完整配置约束和 TLS/Nacos/Etcd 示例见 [Starter 文档](docs/reference/starter.md)、[生产配置](docs/configuration.md)。调用超时覆盖、作用域传播及 A→B→C 预算规则参见 [Deadline 与调用上下文](docs/reference/deadline-context.md)。
 
