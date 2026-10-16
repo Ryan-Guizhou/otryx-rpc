@@ -2,6 +2,7 @@ package com.peachsoft.otryx.registry.etcd;
 
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
+import com.peachsoft.otryx.api.ApplicationManifest;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.observability.RpcRegistryOperation;
@@ -132,13 +133,21 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
         this.mappings = new EtcdServiceMappingRepository(client, paths);
     }
 
-    /** 返回与实例成员共享 Jetcd Client 的不可变 Manifest 存储。 */
+    /**
+     * 返回与实例成员共享 Jetcd Client 的不可变 Manifest 存储。
+     *
+     * @return 共享生命周期的 Manifest Repository
+     */
     public ApplicationManifestRepository manifestRepository() {
         requireOpen();
         return manifests;
     }
 
-    /** 返回与实例成员共享 Etcd Namespace 的分布式 Mapping 存储。 */
+    /**
+     * 返回与实例成员共享 Etcd Namespace 的分布式 Mapping 存储。
+     *
+     * @return 共享生命周期的 Mapping Repository
+     */
     public ServiceMappingRepository serviceMappingRepository() {
         requireOpen();
         return mappings;
@@ -480,6 +489,7 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
             if (closed.get() || registrations.isEmpty()) {
                 return;
             }
+            long recoveryStartedNanos = observer.enabled() ? System.nanoTime() : 0L;
             ensureLease().thenCompose(lease -> {
                 CompletionStage<Void> stage = CompletableFuture.completedFuture(null);
                 for (Map.Entry<String, MemberRegistration> entry : List.copyOf(registrations.entrySet())) {
@@ -491,7 +501,8 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
                 if (observer.enabled()) {
                     try {
                         observer.onRegistryRecoveryCompleted("etcd",
-                                RpcRegistryRecoveryAction.REGISTRATION_RECOVERED, 0L, error);
+                                RpcRegistryRecoveryAction.REGISTRATION_RECOVERED,
+                                System.nanoTime() - recoveryStartedNanos, error);
                     } catch (RuntimeException observerFailure) {
                         LOGGER.debug("Etcd recovery observer callback failed");
                     }
@@ -527,6 +538,7 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
         if (!member.routableProvider()) {
             return;
         }
+        ApplicationManifest.requireRevision(member.manifestRevision());
         RpcEndpoint endpoint = member.rpcEndpoint();
         if (endpoint == null || endpoint.port() <= 0
                 || RpcEndpoint.UNSPECIFIED_IPV4_HOST.equals(endpoint.host())

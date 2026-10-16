@@ -276,6 +276,59 @@ class EtcdApplicationRegistryIntegrationTest {
         }
     }
 
+
+    @Test
+    void anotherProcessMustNotTakeOverLiveInstanceIdOrDeleteItsNewRevision() {
+        String namespace = unique("takeover");
+        ApplicationKey app = new ApplicationKey(namespace, "shipping");
+        ApplicationInstance original = provider(app, "instance-a", 18420);
+        ApplicationInstance replacement = provider(app, "instance-a", 18421);
+        try (EtcdApplicationRegistry oldProcess = registry(namespace);
+             EtcdApplicationRegistry newProcess = registry(namespace)) {
+            oldProcess.register(original).toCompletableFuture().join();
+            assertThrows(CompletionException.class,
+                    () -> newProcess.register(replacement).toCompletableFuture().join());
+            assertEquals(List.of(original),
+                    oldProcess.lookup(app).toCompletableFuture().join().instances());
+
+            oldProcess.unregister(original).toCompletableFuture().join();
+            newProcess.register(replacement).toCompletableFuture().join();
+            oldProcess.unregister(original).toCompletableFuture().join();
+            assertEquals(List.of(replacement),
+                    newProcess.lookup(app).toCompletableFuture().join().instances());
+        }
+    }
+
+    @Test
+    void mappingMustRemainNonRoutableUntilProviderMembershipIsReady() {
+        String namespace = unique("unready");
+        ApplicationKey app = new ApplicationKey(namespace, "reports");
+        ServiceKey service = new ServiceKey("demo.Report", "1.0.0", "default");
+        ServiceMappingKey mappingKey = new ServiceMappingKey(namespace, service);
+        try (EtcdApplicationRegistry registry = registry(namespace)) {
+            ServiceMappingOwner owner = registry.serviceMappingRepository().claim(app, "reports-a")
+                    .toCompletableFuture().join();
+            registry.serviceMappingRepository().publish(owner, Set.of(service))
+                    .toCompletableFuture().join();
+            assertTrue(registry.serviceMappingRepository().lookup(mappingKey)
+                    .toCompletableFuture().join().applications().isEmpty());
+
+            ApplicationInstance onlyConsumer = consumer(app, "reports-a");
+            registry.register(onlyConsumer).toCompletableFuture().join();
+            assertTrue(registry.serviceMappingRepository().lookup(mappingKey)
+                    .toCompletableFuture().join().applications().isEmpty());
+
+            ApplicationInstance readyProvider = provider(app, "reports-a", 18422);
+            registry.register(readyProvider).toCompletableFuture().join();
+            assertEquals(Set.of(app), registry.serviceMappingRepository().lookup(mappingKey)
+                    .toCompletableFuture().join().applications());
+
+            registry.register(onlyConsumer).toCompletableFuture().join();
+            assertTrue(registry.serviceMappingRepository().lookup(mappingKey)
+                    .toCompletableFuture().join().applications().isEmpty());
+        }
+    }
+
     private static ApplicationManifest manifest(ApplicationKey app, ServiceKey key) {
         return ApplicationManifest.create(app, List.of(export(key)));
     }
