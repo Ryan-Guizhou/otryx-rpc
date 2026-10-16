@@ -1,4 +1,6 @@
-# Nacos Registry Adapter
+# Nacos Registry Adapter（历史接口级实现）
+
+> 本页仍描述 #139 前暂留的旧 ServiceKey 注册路径。**新的原生应用级 Naming / Config 后端**和 Consumer-only 成员请查阅 [Nacos V2](registry-nacos-v2.md)。旧接口级描述不是最终支持承诺，也不能作为新系统的接入方式。
 
 ## 1. 定位
 
