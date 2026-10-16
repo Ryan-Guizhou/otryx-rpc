@@ -43,9 +43,9 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 
 **Design**: control-plane/data-plane isolation; SPI and adapters for implementations; no registry I/O, SPI scan or dynamic parsing per request.
 
-**V2 application-level registry migration (in progress):** The application-level Memory registry, bounded Manifest/ServiceMapping caches, and shared Provider/Consumer application membership have been implemented. The Core Client/Server can now be wired programmatically through the new verified Manifest/Schema-based route, covered by an in-JVM Wire v1 E2E test. **Etcd now has a separate V2 application-member, Manifest and Mapping adapter**, while its legacy SPI remains pending migration. Nacos now also has an independent V2 Naming/Config application-level adapter. Spring Starter/Quickstart and Consul/Eureka still need V2 wiring. Issues #134–#139 cover remaining adapters, wiring, and final legacy cleanup. This is not a production-ready V2 rollout. [Design and status](docs/design/application-registry-v2.md).
+**V2 application-level registry migration (in progress):** The application-level Memory registry, bounded Manifest/ServiceMapping caches, and shared Provider/Consumer application membership have been implemented. The Core Client/Server can now be wired programmatically through the new verified Manifest/Schema-based route, covered by an in-JVM Wire v1 E2E test. **Etcd now has a separate V2 application-member, Manifest and Mapping adapter**, while its legacy SPI remains pending migration. Nacos now also has an independent V2 Naming/Config application-level adapter. Consul now also has an independent V2 application-level Agent Service/TTL + KV/Session adapter. Spring Starter/Quickstart and Eureka still need V2 wiring. Issues #135–#139 cover remaining adapters, wiring, and final legacy cleanup. This is not a production-ready V2 rollout. [Design and status](docs/design/application-registry-v2.md).
 
-The [Nacos V2 adapter guide](docs/reference/registry-nacos-v2.md) covers consumer-only zero Naming ports, CAS mapping and metadata limits. The [Etcd V2 adapter guide](docs/reference/registry-etcd.md) describes the new programmatic control plane, namespace isolation, leases, CAS fencing, and its bounded owner scan. It does not imply the Spring Starter has migrated.
+The [Consul V2 adapter guide](docs/reference/registry-consul-v2.md) covers zero-port consumers, KV CAS, Session GC and bounded mapping scans. The [Nacos V2 adapter guide](docs/reference/registry-nacos-v2.md) covers consumer-only zero Naming ports, CAS mapping and metadata limits. The [Etcd V2 adapter guide](docs/reference/registry-etcd.md) describes the new programmatic control plane, namespace isolation, leases, CAS fencing, and its bounded owner scan. It does not imply the Spring Starter has migrated.
 
 <!-- doc-section:compatibility -->
 ## Compatibility and migration
@@ -104,7 +104,7 @@ otryx:
 
 Real network deployments must explicitly choose `NETWORK_MTLS` with mutual TLS and a strict Fory DTO allowlist. An optional `RpcAuthorizer` bean checks the verified peer against ServiceKey/MethodId. Missing security intent fails Spring startup; `TRUSTED_DEVELOPMENT` is for isolated demos only. See the [security guide](docs/security.md).
 
-Consul and Eureka are opt-in adapters with polling-based subscriptions. See [Consul](docs/reference/registry-consul.md) and [Eureka](docs/reference/registry-eureka.md).
+Consul V2 uses an opt-in programmatic application registry and bounded polling; Starter V2 migration is separate. See [Consul V2](docs/reference/registry-consul-v2.md), [Consul legacy](docs/reference/registry-consul.md) and [Eureka](docs/reference/registry-eureka.md).
 
 See [Starter guide](docs/reference/starter.md) and [Production configuration](docs/configuration.md) for validated options, TLS and registry setup. The [Deadline and call-context reference](docs/reference/deadline-context.md) covers precedence, explicit scope propagation and A→B→C budget semantics (Chinese).
 

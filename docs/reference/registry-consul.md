@@ -1,4 +1,6 @@
-# Consul Registry Adapter
+# Consul Registry Adapter（历史接口级实现）
+
+> 本文仅描述 #139 前暂留的 ServiceKey 接口级 Adapter。新的 Provider/Consumer/BOTH **Consul V2 应用级服务 + KV/Session 后端** 请使用 [Consul V2](registry-consul-v2.md)。本页不是正式 V2 接入方式，也不代表保留双模式的兼容承诺。
 
 ## 目标与边界
 
