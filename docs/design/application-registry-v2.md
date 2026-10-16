@@ -1,8 +1,8 @@
 # OTRYX V2：应用级注册身份与 SPI 契约
 
-> **当前状态：V2-01～05 Core 应用级注册/发现已实现；#133 开始交付 Etcd V2 后端；Spring Starter、Quickstart 与其余远端 Adapter 仍待迁移。**
+> **当前状态：V2-01～05 Core 应用级注册/发现已实现，Etcd #133 已完成，Nacos #134 新增应用级适配；Spring Starter、Quickstart、Consul/Eureka 与旧 SPI 清理仍待迁移。**
 >
-> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#133](https://github.com/Ryan-Guizhou/otryx-rpc/issues/133)。
+> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#134](https://github.com/Ryan-Guizhou/otryx-rpc/issues/134)。
 > 版本 JDK 21、Spring Boot 3.5.4、1.0.0-SNAPSHOT、Wire v1 均保持不变。
 
 ## 1. 核心决策
@@ -324,3 +324,9 @@ sequenceDiagram
 新增 `EtcdApplicationRegistry`、`EtcdApplicationRegistryFactory`、`EtcdApplicationManifestRepository`、`EtcdServiceMappingRepository`。成员按 ApplicationKey 注册，纯 Consumer 保持租约而无 RPC Endpoint；Manifest 内容寻址不可变，Mapping 以每实例 Owner 单键存储服务全集，用 Etcd CAS 防止旧代写入。Watch 从 Range revision+1 建立，Compaction/断线显式健康恢复。旧 EtcdRegistry 仍待 #139 最终删除。
 
 本阶段按真实后端上限约束 Mapping Owner 扫描（512 个 Owner、8 MiB），并检查活跃 Member Lease，不能把共享 CI smoke 当生产控制面规模证据。详细键空间、限制、接口示例及测试参见 [Etcd V2 文档](../reference/registry-etcd.md)。
+
+## 10. V2-07：Nacos 应用级 Naming 和 Config（#134）
+
+实现 `NacosApplicationRegistry`、`NacosApplicationRegistryFactory`、`NacosApplicationManifestRepository` 与 `NacosServiceMappingRepository`，Naming 使用应用 ServiceName，Provider/Consumer/BOTH 均有真实应用成员；纯 Consumer 借助 Nacos 允许的 0 端口与真实主机 IP 表示心跳，不能进入 RPC Endpoint 列表。Config 采用内容寻址 Manifest 与分片 MD5-CAS Mapping Generation，严格容量和权威 MD5，所有阻塞 SDK 调用在有界控制面线程执行。配置和限制详见 [Nacos V2](../reference/registry-nacos-v2.md)。
+
+此阶段新增 V2 后端而不启用双读/双写；旧 `NacosRegistry` 仍仅是 #139 前的过渡源码，Starter/Quickstart 使用 V2 的正式装配需要 #137–#138。

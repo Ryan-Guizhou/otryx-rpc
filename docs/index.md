@@ -17,7 +17,7 @@
 
 ## 架构与技术细节
 
-[协议](protocol.md) · [安全](security.md) · [可观测性](observability.md) · [性能与限制](performance.md) · [Etcd V2 应用级注册](reference/registry-etcd.md) · [Nacos 注册中心](reference/registry-nacos.md) · [Consul](reference/registry-consul.md) · [Eureka](reference/registry-eureka.md)
+[协议](protocol.md) · [安全](security.md) · [可观测性](observability.md) · [性能与限制](performance.md) · [Etcd V2 应用级注册](reference/registry-etcd.md) · [Nacos V2 应用级注册](reference/registry-nacos-v2.md) · [Nacos 注册中心](reference/registry-nacos.md) · [Consul](reference/registry-consul.md) · [Eureka](reference/registry-eureka.md)
 
 资源所有权与关闭/重试决策：[运行时资源所有权](reference/runtime-ownership.md)。
 

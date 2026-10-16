@@ -69,6 +69,10 @@ mindmap
 
 ### Nacos
 
+**V2 独立应用级 Adapter**：新增 Naming 应用成员和 Nacos Config Manifest/Mapping CAS、Consumer-only port=0 成员、多 Revision/Owner fencing，详见 [Nacos V2](reference/registry-nacos-v2.md)。旧 SPI 将于 #139 清理。
+
+现有旧接口级 Adapter 的历史能力：
+
 - 临时实例；
 - register / unregister / lookup / subscribe；
 - namespace / group / cluster；
