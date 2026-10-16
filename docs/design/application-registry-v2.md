@@ -1,8 +1,8 @@
 # OTRYX V2：应用级注册身份与 SPI 契约
 
-> **当前状态：V2-01～05 Core 应用级注册/发现已实现，Etcd #133 已完成，Nacos #134 新增应用级适配；Spring Starter、Quickstart、Consul/Eureka 与旧 SPI 清理仍待迁移。**
+> **当前状态：Core V2 已具备应用级能力，Etcd #133、Nacos #134、Consul #135 均新增独立 V2 Adapter；Eureka、Starter、Quickstart 及旧 SPI 清理仍待完成。**
 >
-> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#134](https://github.com/Ryan-Guizhou/otryx-rpc/issues/134)。
+> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#135](https://github.com/Ryan-Guizhou/otryx-rpc/issues/135)。
 > 版本 JDK 21、Spring Boot 3.5.4、1.0.0-SNAPSHOT、Wire v1 均保持不变。
 
 ## 1. 核心决策
@@ -330,3 +330,9 @@ sequenceDiagram
 实现 `NacosApplicationRegistry`、`NacosApplicationRegistryFactory`、`NacosApplicationManifestRepository` 与 `NacosServiceMappingRepository`，Naming 使用应用 ServiceName，Provider/Consumer/BOTH 均有真实应用成员；纯 Consumer 借助 Nacos 允许的 0 端口与真实主机 IP 表示心跳，不能进入 RPC Endpoint 列表。Config 采用内容寻址 Manifest 与分片 MD5-CAS Mapping Generation，严格容量和权威 MD5，所有阻塞 SDK 调用在有界控制面线程执行。配置和限制详见 [Nacos V2](../reference/registry-nacos-v2.md)。
 
 此阶段新增 V2 后端而不启用双读/双写；旧 `NacosRegistry` 仍仅是 #139 前的过渡源码，Starter/Quickstart 使用 V2 的正式装配需要 #137–#138。
+
+## 11. V2-08：Consul 原生 Application Service / TTL / KV / Session（#135）
+
+新增 `ConsulApplicationRegistry`、`ConsulApplicationRegistryFactory`、`ConsulApplicationManifestRepository` 和 `ConsulServiceMappingRepository`。应用实例与 ServiceKey 脱钩；Consumer-only 使用 Consul Agent 原生的 Address=""/Port=0 承载真实 TTL 成员而非伪造 RPC Endpoint。版本化 Manifest 使用原生 cas=0 内容寻址；Mapping 使用固定 Owner KV ModifyIndex CAS、持久 Generation Token 和 Session Behavior=delete 绑定的活性键进行双重过滤，丢失 Session 必须重新 claim，不能旧代复活。生产安全边界、KV/扫描容量与真实 Consul Container E2E/Chaos 详见 [Consul V2 文档](../reference/registry-consul-v2.md)。
+
+旧 Consul ServiceKey Registry SPI 仅临时保留，归 #139 最终删除；Starter/Quickstart 仍按 #137–#138 单独接线，没有新增双读双写开关。

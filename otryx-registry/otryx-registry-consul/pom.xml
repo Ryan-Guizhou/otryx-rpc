@@ -5,6 +5,10 @@
   <artifactId>otryx-registry-consul</artifactId>
   <name>otryx-registry-consul</name>
   <description>Consul registry adapter for OTRYX RPC.</description>
+  <properties>
+    <consul.test.groups></consul.test.groups>
+    <consul.test.excluded-groups>chaos</consul.test.excluded-groups>
+  </properties>
   <dependencies>
     <dependency>
       <groupId>com.peachsoft.otryx</groupId>
@@ -32,4 +36,25 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <groups>${consul.test.groups}</groups>
+          <excludedGroups>${consul.test.excluded-groups}</excludedGroups>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+  <profiles>
+    <profile>
+      <id>consul-chaos</id>
+      <properties>
+        <consul.test.groups>chaos</consul.test.groups>
+        <consul.test.excluded-groups></consul.test.excluded-groups>
+      </properties>
+    </profile>
+  </profiles>
 </project>
