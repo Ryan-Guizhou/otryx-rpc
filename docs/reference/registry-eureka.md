@@ -1,4 +1,6 @@
-# Eureka Registry Adapter
+# Eureka Registry Adapter (Legacy ServiceKey Path)
+
+> 本文属于旧接口级注册方式，应用级替代实现见 [Eureka V2](registry-eureka-v2.md)。按照总控 #127，旧接口级实现最终由 #139 删除。
 
 ## 目标与边界
 

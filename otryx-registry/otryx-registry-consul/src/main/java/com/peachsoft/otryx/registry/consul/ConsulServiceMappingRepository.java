@@ -8,6 +8,7 @@ import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
+import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -39,7 +40,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/16 15:00
  */
-public final class ConsulServiceMappingRepository implements ServiceMappingRepository {
+public final class ConsulServiceMappingRepository implements ServiceMappingRepository, ServiceMappingCandidateSource {
 
     private static final String FIELD_FORMAT = "format";
     private static final String FIELD_NAMESPACE = "namespace";
@@ -173,6 +174,21 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
      */
     @Override
     public CompletionStage<ServiceMappingSnapshot> lookup(ServiceMappingKey key) {
+        return scan(key, true);
+    }
+
+    /**
+     * 查询未结合本 Consul Agent Health 的候选应用，由外部主注册中心验证存活。
+     *
+     * @param key 逻辑服务映射键
+     * @return 不能直接路由的候选映射
+     */
+    @Override
+    public CompletionStage<ServiceMappingSnapshot> lookupCandidates(ServiceMappingKey key) {
+        return scan(key, false);
+    }
+
+    private CompletionStage<ServiceMappingSnapshot> scan(ServiceMappingKey key, boolean checkMembers) {
         Objects.requireNonNull(key, "key");
         identity.requireNamespace(key.namespace());
         return executor.submit("mapping-lookup", () -> {
@@ -195,7 +211,11 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
             if (claimed.size() > ServiceMappingSnapshot.MAX_APPLICATIONS) {
                 throw new IllegalStateException("Consul mapping candidate fanout exceeded");
             }
-            for (Map.Entry<ApplicationKey, Set<String>> candidate : claimed.entrySet()) {
+            if (!checkMembers) {
+                healthy.addAll(claimed.keySet());
+            }
+            for (Map.Entry<ApplicationKey, Set<String>> candidate :
+                    checkMembers ? claimed.entrySet() : Map.<ApplicationKey, Set<String>>of().entrySet()) {
                 for (ApplicationInstance instance : liveMembers(candidate.getKey())) {
                     if (instance.routableProvider() && candidate.getValue().contains(instance.instanceId())) {
                         healthy.add(candidate.getKey());

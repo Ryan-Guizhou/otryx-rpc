@@ -10,6 +10,7 @@ import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.observability.RpcRegistryOperation;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
 import com.peachsoft.otryx.registry.ApplicationManifestRepository;
+import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationRegistrar;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
@@ -49,7 +50,7 @@ import org.slf4j.LoggerFactory;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/16 13:42
  */
-public final class NacosApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar {
+public final class NacosApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar, ApplicationMetadataBackend {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(NacosApplicationRegistry.class);
     private static final Duration RECONCILE_INTERVAL = Duration.ofSeconds(5);

@@ -5,6 +5,7 @@ import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
+import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -31,7 +32,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/16 13:42
  */
-public final class NacosServiceMappingRepository implements ServiceMappingRepository {
+public final class NacosServiceMappingRepository implements ServiceMappingRepository, ServiceMappingCandidateSource {
 
     private static final int MAX_CLAIMS_PER_PROCESS = 512;
     private static final int MAX_APPLICATIONS = ServiceMappingSnapshot.MAX_APPLICATIONS;
@@ -225,6 +226,17 @@ public final class NacosServiceMappingRepository implements ServiceMappingReposi
             }
             return new ServiceMappingSnapshot(key, applications, localRevision.incrementAndGet());
         });
+    }
+
+    /**
+     * Nacos Mapping 本身就是候选快照，运行时仍须使用主注册中心验证成员与 Manifest。
+     *
+     * @param key 命名空间及服务键
+     * @return 未做成员路由验证的候选应用集合
+     */
+    @Override
+    public CompletionStage<ServiceMappingSnapshot> lookupCandidates(ServiceMappingKey key) {
+        return lookup(key);
     }
 
     private void requireNamespace(ApplicationKey application) {

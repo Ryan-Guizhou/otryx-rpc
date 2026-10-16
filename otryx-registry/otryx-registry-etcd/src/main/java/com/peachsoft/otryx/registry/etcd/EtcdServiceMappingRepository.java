@@ -7,6 +7,7 @@ import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
+import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
 import io.etcd.jetcd.ByteSequence;
 import io.etcd.jetcd.Client;
@@ -41,7 +42,7 @@ import java.util.concurrent.ConcurrentMap;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/16 10:33
  */
-public final class EtcdServiceMappingRepository implements ServiceMappingRepository {
+public final class EtcdServiceMappingRepository implements ServiceMappingRepository, ServiceMappingCandidateSource {
 
     private static final int MAX_CAS_ATTEMPTS = 12;
     private static final int MAX_OWNER_SCAN = 512;
@@ -207,11 +208,26 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
         paths.requireNamespace(key.namespace());
         GetOption options = GetOption.builder().isPrefix(true).withLimit(MAX_OWNER_SCAN + 1).build();
         return client.getKVClient().get(utf8(paths.ownerPrefix()), options)
-                .thenCompose(response -> lookupAtRevision(key, response));
+                .thenCompose(response -> lookupAtRevision(key, response, true));
+    }
+
+    /**
+     * 仅查询持久化 CAS Owner 的候选应用，成员存活由调用方自己的注册中心验证。
+     *
+     * @param key 命名空间与完整 ServiceKey
+     * @return 不可直接路由的候选快照
+     */
+    @Override
+    public CompletionStage<ServiceMappingSnapshot> lookupCandidates(ServiceMappingKey key) {
+        Objects.requireNonNull(key, "key");
+        paths.requireNamespace(key.namespace());
+        GetOption options = GetOption.builder().isPrefix(true).withLimit(MAX_OWNER_SCAN + 1).build();
+        return client.getKVClient().get(utf8(paths.ownerPrefix()), options)
+                .thenCompose(response -> lookupAtRevision(key, response, false));
     }
 
     private CompletionStage<ServiceMappingSnapshot> lookupAtRevision(
-            ServiceMappingKey key, GetResponse owners) {
+            ServiceMappingKey key, GetResponse owners, boolean checkMembers) {
         if (owners.getCount() > MAX_OWNER_SCAN || owners.getKvs().size() > MAX_OWNER_SCAN) {
             return CompletableFuture.failedFuture(new IllegalStateException("Etcd mapping owner scan budget exceeded"));
         }
@@ -237,9 +253,13 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
                 }
             }
         }
+        long revision = owners.getHeader().getRevision();
+        if (!checkMembers) {
+            return CompletableFuture.completedFuture(
+                    new ServiceMappingSnapshot(key, providers.keySet(), revision));
+        }
         Set<ApplicationKey> active = new HashSet<>();
         CompletionStage<Void> checks = CompletableFuture.completedFuture(null);
-        long revision = owners.getHeader().getRevision();
         for (Map.Entry<ApplicationKey, Set<String>> candidate : providers.entrySet()) {
             checks = checks.thenCompose(ignored ->
                     requireLiveProvider(candidate.getKey(), candidate.getValue(), revision)

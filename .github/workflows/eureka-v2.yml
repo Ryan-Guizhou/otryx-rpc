@@ -1,0 +1,76 @@
+name: Eureka V2 Real Application Registry
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'otryx-registry/otryx-registry-eureka/**'
+      - 'otryx-registry/otryx-registry-etcd/**'
+      - 'otryx-registry/otryx-registry-consul/**'
+      - 'otryx-registry/otryx-registry-nacos/**'
+      - 'otryx-core/src/main/java/com/peachsoft/otryx/registry/ApplicationMetadataBackend.java'
+      - 'otryx-core/src/main/java/com/peachsoft/otryx/registry/ServiceMappingCandidateSource.java'
+      - '.github/test-fixtures/eureka-server/**'
+      - '.github/workflows/eureka-v2.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-eureka:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Start real Consul Metadata KV
+        run: |
+          docker run -d --name otryx-eureka-metadata -p 8500:8500 \
+            hashicorp/consul:1.20 agent -dev -client=0.0.0.0
+          for attempt in {1..60}; do
+            if curl --silent --fail http://127.0.0.1:8500/v1/status/leader \
+              | grep -Eq ':[0-9]+'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs otryx-eureka-metadata
+          exit 1
+      - name: Build isolated Spring Boot 3.5.4 / Netflix Eureka 2025.0.0 real server fixture
+        run: mvn -B -ntp -f .github/test-fixtures/eureka-server/pom.xml -DskipTests package
+      - name: Start real Eureka Server
+        run: bash .github/test-fixtures/eureka-server/control.sh start
+      - name: Verify Provider, Consumer, BOTH and independent Consul Metadata
+        run: >-
+          mvn -B -ntp
+          -pl otryx-registry/otryx-registry-eureka -am
+          -Deureka.test.endpoint=http://127.0.0.1:8761/eureka
+          -Deureka.test.metadata.endpoint=http://127.0.0.1:8500
+          test
+      - name: Verify real Eureka JVM restart and lease recovery
+        run: >-
+          mvn -B -ntp
+          -pl otryx-registry/otryx-registry-eureka -am
+          -Deureka.test.endpoint=http://127.0.0.1:8761/eureka
+          -Deureka.test.metadata.endpoint=http://127.0.0.1:8500
+          -Deureka.test.control=.github/test-fixtures/eureka-server/control.sh
+          -Dtest=EurekaApplicationRegistryChaosTest
+          -Dsurefire.failIfNoSpecifiedTests=false
+          test
+      - name: Failure diagnostics
+        if: failure()
+        run: |
+          tail -n 120 .github/test-fixtures/eureka-server/target/server.log || true
+          docker logs otryx-eureka-metadata || true
+          find otryx-registry/otryx-registry-eureka/target/surefire-reports \
+            -type f -name '*.txt' -exec tail -n 80 {} \; || true
+      - name: Cleanup
+        if: always()
+        run: |
+          bash .github/test-fixtures/eureka-server/control.sh stop || true
+          docker rm -f otryx-eureka-metadata || true
