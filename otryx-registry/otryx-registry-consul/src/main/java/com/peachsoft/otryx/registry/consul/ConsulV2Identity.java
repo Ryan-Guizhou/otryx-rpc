@@ -30,6 +30,7 @@ final class ConsulV2Identity {
     private static final String ROOT = "otryx/v2/ns/";
     private static final String APPS = "apps/";
     private static final String OWNERS = "owners/";
+    private static final String CLAIMS = "claims/";
     private static final String MANIFESTS = "manifests/";
     private static final String HASH_ALGORITHM = "SHA-256";
     private static final String SERVICE_PREFIX = "otryx-app-";
@@ -93,6 +94,11 @@ final class ConsulV2Identity {
 
     String ownersPrefix() {
         return keyRoot + OWNERS;
+    }
+
+    String memberClaimKey(ApplicationKey application, String instanceId) {
+        requireNamespace(application);
+        return keyRoot + CLAIMS + segment(application.applicationName()) + '/' + segment(instanceId);
     }
 
     String ownerKey(ApplicationKey application, String instanceId) {

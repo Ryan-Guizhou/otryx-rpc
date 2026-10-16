@@ -45,6 +45,7 @@ final class ConsulV2Client implements AutoCloseable {
     private static final String FIELD_VALUE = "Value";
     private static final String FIELD_KEY = "Key";
     private static final String FIELD_MODIFY_INDEX = "ModifyIndex";
+    private static final String FIELD_SESSION = "Session";
 
     private final HttpClient client;
     private final URI endpoint;
@@ -145,6 +146,27 @@ final class ConsulV2Client implements AutoCloseable {
         return "true".equals(result);
     }
 
+    /**
+     * 使用原生 Consul Session 原子获取成员声明锁；不允许非持有者强行发布同一实例。
+     *
+     * @return Consul 实际报告的锁申请成功状态
+     */
+    boolean acquire(String key, String session, byte[] payload) throws Exception {
+        Objects.requireNonNull(session, "session");
+        Objects.requireNonNull(payload, "payload");
+        if (session.isBlank() || payload.length == 0 || payload.length > MAX_KV_VALUE_BYTES) {
+            throw new IllegalArgumentException("Invalid Consul member Session claim");
+        }
+        RawResult response = request(METHOD_PUT,
+                kvPath(key) + "?acquire=" + encode(session) + namespaceQuery("&"),
+                payload, BINARY_CONTENT_TYPE);
+        String result = new String(response.body(), StandardCharsets.US_ASCII).trim();
+        if (!"true".equals(result) && !"false".equals(result)) {
+            throw new IllegalStateException("Consul session acquire did not return a boolean");
+        }
+        return "true".equals(result);
+    }
+
     private KvEntry decode(JsonNode node) {
         if (!node.isObject()) {
             throw new IllegalArgumentException("Malformed Consul KV entry");
@@ -160,7 +182,7 @@ final class ConsulV2Client implements AutoCloseable {
         if (bytes.length == 0 || bytes.length > MAX_KV_VALUE_BYTES) {
             throw new IllegalArgumentException("Consul KV value exceeds safe budget");
         }
-        return new KvEntry(key, bytes, index);
+        return new KvEntry(key, bytes, index, node.path(FIELD_SESSION).asText(""));
     }
 
     private String kvPath(String key) {
@@ -225,7 +247,7 @@ final class ConsulV2Client implements AutoCloseable {
         client.close();
     }
 
-    record KvEntry(String key, byte[] value, long modifyIndex) {
+    record KvEntry(String key, byte[] value, long modifyIndex, String session) {
     }
 
     record JsonResult(int status, JsonNode body) {

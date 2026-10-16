@@ -203,6 +203,59 @@ class ConsulApplicationRegistryIntegrationTest {
         }
     }
 
+    @Test
+    void sessionClaimRejectsAnotherProcessWithSameApplicationInstanceId() throws Exception {
+        String ns = unique();
+        ApplicationKey app = new ApplicationKey(ns, "ownership");
+        ApplicationInstance member = consumer(app, "single-instance");
+        try (ConsulApplicationRegistry first = registry(ns);
+             ConsulApplicationRegistry second = registry(ns);
+             ConsulV2Client client = raw()) {
+            first.register(member).toCompletableFuture().join();
+            String key = new ConsulV2Identity(ns).memberClaimKey(app, member.instanceId());
+            assertTrue(!client.get(key).orElseThrow().session().isBlank());
+            assertThrows(CompletionException.class,
+                    () -> second.register(member).toCompletableFuture().join());
+            assertTrue(await(AWAIT_BUDGET, () -> first.lookup(app)
+                    .toCompletableFuture().join().instances().contains(member)));
+            first.unregister(member).toCompletableFuture().join();
+            assertTrue(await(AWAIT_BUDGET, () -> {
+                try {
+                    return client.get(key).isEmpty();
+                } catch (Exception failure) {
+                    throw new IllegalStateException(failure);
+                }
+            }));
+            second.register(member).toCompletableFuture().join();
+            assertTrue(await(AWAIT_BUDGET, () -> second.lookup(app)
+                    .toCompletableFuture().join().instances().contains(member)));
+        }
+    }
+
+    @Test
+    void expiredSessionMustReacquireBeforeRestoringAgentMember() throws Exception {
+        String ns = unique();
+        ApplicationKey app = new ApplicationKey(ns, "sessions");
+        ApplicationInstance member = consumer(app, "restart-session");
+        String key = new ConsulV2Identity(ns).memberClaimKey(app, member.instanceId());
+        try (ConsulApplicationRegistry registry = registry(ns);
+             ConsulV2Client client = raw()) {
+            registry.register(member).toCompletableFuture().join();
+            String oldSession = client.get(key).orElseThrow().session();
+            assertTrue(!oldSession.isBlank());
+            client.json("PUT", "/v1/session/destroy/" + oldSession, null);
+            assertTrue(await(Duration.ofSeconds(20), () -> {
+                try {
+                    return client.get(key).filter(entry -> !oldSession.equals(entry.session())).isPresent();
+                } catch (Exception failure) {
+                    throw new IllegalStateException(failure);
+                }
+            }));
+            assertTrue(await(AWAIT_BUDGET, () -> registry.lookup(app)
+                    .toCompletableFuture().join().instances().contains(member)));
+        }
+    }
+
     private static ConsulApplicationRegistry registry(String namespace) {
         return (ConsulApplicationRegistry) new ConsulApplicationRegistryFactory().create(
                 new com.peachsoft.otryx.registry.RegistryOptions(

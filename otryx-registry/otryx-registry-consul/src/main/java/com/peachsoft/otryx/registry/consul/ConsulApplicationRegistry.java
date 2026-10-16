@@ -90,6 +90,7 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
     private final ConsulV2Client client;
     private final ConsulV2Executor executor;
     private final ConsulV2Identity identity;
+    private final ConsulV2MemberSessions sessions;
     private final Duration heartbeat;
     private final Duration polling;
     private final long ttlSeconds;
@@ -111,6 +112,7 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
         this.client = Objects.requireNonNull(client, "client");
         this.executor = Objects.requireNonNull(executor, "executor");
         this.identity = Objects.requireNonNull(identity, "identity");
+        this.sessions = new ConsulV2MemberSessions(client, identity, ttlSeconds);
         if (ttlSeconds < MIN_CONSUL_CHECK_TTL_SECONDS || heartbeat == null
                 || heartbeat.isNegative() || heartbeat.isZero()
                 || heartbeat.compareTo(Duration.ofSeconds(ttlSeconds)) >= 0
@@ -153,7 +155,7 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
         return CAPABILITIES;
     }
 
-    /** 发布应用成员，不从 ServiceKey 推导 Registry Identity。 */
+    /** 发布应用成员前先通过 Consul Session KV Acquire 原子声明身份所有权。 */
     @Override
     public CompletionStage<Void> register(ApplicationInstance instance) {
         Objects.requireNonNull(instance, "instance");
@@ -168,14 +170,34 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
                 }
                 Registration previous = registered.get(id);
                 String token = previous == null ? UUID.randomUUID().toString() : previous.token();
-                registerOwned(instance, token);
-                registered.put(id, new Registration(instance, token));
+                String session;
+                if (previous == null) {
+                    session = sessions.createAndAcquire(instance, token);
+                } else {
+                    if (!sessions.renewAndVerify(previous.member(), previous.session(), token)) {
+                        throw new IllegalStateException("Consul member Session ownership was lost");
+                    }
+                    session = previous.session();
+                }
+                try {
+                    registerOwned(instance, token, session);
+                    registered.put(id, new Registration(instance, token, session));
+                } catch (Exception failure) {
+                    if (previous == null) {
+                        try {
+                            sessions.destroy(session);
+                        } catch (Exception cleanupError) {
+                            failure.addSuppressed(cleanupError);
+                        }
+                    }
+                    throw failure;
+                }
                 return null;
             }
         });
     }
 
-    /** 只有本进程仍持有相同 ApplicationInstance 时才允许注销。 */
+    /** 只允许持有当前 Session 的进程注销，旧角色快照与旧代请求不会删除新成员。 */
     @Override
     public CompletionStage<Void> unregister(ApplicationInstance instance) {
         Objects.requireNonNull(instance, "instance");
@@ -190,6 +212,7 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
                 if (local != null && local.member().equals(instance)) {
                     removeIfOwned(id, local.token());
                     registered.remove(id, local);
+                    sessions.destroy(local.session());
                 }
                 return null;
             }
@@ -244,13 +267,12 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
         return new ApplicationDirectorySnapshot(application, result, revision.incrementAndGet());
     }
 
-    private void registerOwned(ApplicationInstance member, String token) throws Exception {
-        String id = identity.serviceId(member);
-        ConsulV2Client.JsonResult existing = client.json(METHOD_GET, PATH_SERVICE_ID + encode(id), null);
-        if (!existing.missing() && (existing.body() == null
-                || !token.equals(existing.body().path(FIELD_META).path(META_TOKEN).asText()))) {
-            throw new IllegalStateException("Consul service ID is owned by another process");
+    private void registerOwned(ApplicationInstance member, String token, String session) throws Exception {
+        // 原生 Agent Service ID 无 CAS；必须先证明当前进程持有权威 KV Session。
+        if (!sessions.owns(member, session, token)) {
+            throw new IllegalStateException("Consul member Session claim was superseded");
         }
+        String id = identity.serviceId(member);
         Map<String, Object> body = new HashMap<>();
         body.put(FIELD_ID, id);
         body.put(FIELD_NAME, identity.serviceName(member.application()));
@@ -297,16 +319,7 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
                         break;
                     }
                     try {
-                        ConsulV2Client.JsonResult result = client.json(
-                                METHOD_PUT, PATH_CHECK_PASS
-                                        + encode(PREFIX_SERVICE_CHECK + entry.getKey()), null);
-                        if (result.missing()) {
-                            synchronized (mutationMonitor) {
-                                if (registered.get(entry.getKey()) == entry.getValue()) {
-                                    registerOwned(entry.getValue().member(), entry.getValue().token());
-                                }
-                            }
-                        }
+                        heartbeatMember(entry.getKey(), entry.getValue());
                     } catch (Exception failure) {
                         LOGGER.warn("Consul member heartbeat failed. errorType={}",
                                 failure.getClass().getSimpleName());
@@ -317,6 +330,44 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
             }
             return null;
         }).whenComplete((ignored, error) -> heartbeatBusy.set(false));
+    }
+
+    private void heartbeatMember(String id, Registration previous) throws Exception {
+        synchronized (mutationMonitor) {
+            if (registered.get(id) != previous || closed.get()) {
+                return;
+            }
+            if (!sessions.renewAndVerify(previous.member(), previous.session(), previous.token())) {
+                // 会话已失效时，先使本进程旧 Agent 成员不可路由，再安全重新声明。
+                removeIfOwned(id, previous.token());
+                String newSession = sessions.createAndAcquire(previous.member(), previous.token());
+                try {
+                    registerOwned(previous.member(), previous.token(), newSession);
+                    registered.put(id, new Registration(previous.member(), previous.token(), newSession));
+                } catch (Exception failure) {
+                    try {
+                        sessions.destroy(newSession);
+                    } catch (Exception cleanupError) {
+                        failure.addSuppressed(cleanupError);
+                    }
+                    throw failure;
+                }
+                return;
+            }
+            // 即使 Session 仍有效，也不可替其他进程刷新被覆盖的 Service Check。
+            ConsulV2Client.JsonResult current = client.json(METHOD_GET, PATH_SERVICE_ID + encode(id), null);
+            if (!current.missing()) {
+                if (current.body() == null
+                        || !previous.token().equals(current.body().path(FIELD_META).path(META_TOKEN).asText())) {
+                    throw new IllegalStateException("Consul Agent member ownership changed");
+                }
+            }
+            ConsulV2Client.JsonResult passed = client.json(
+                    METHOD_PUT, PATH_CHECK_PASS + encode(PREFIX_SERVICE_CHECK + id), null);
+            if (passed.missing() || current.missing()) {
+                registerOwned(previous.member(), previous.token(), previous.session());
+            }
+        }
     }
 
     private static void requireRoutable(ApplicationInstance instance) {
@@ -356,7 +407,11 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
         registered.forEach((id, item) ->
                 cleanup.add(executor.submit("member-close", () -> {
                     synchronized (mutationMonitor) {
-                        removeIfOwned(id, item.token());
+                        try {
+                            removeIfOwned(id, item.token());
+                        } finally {
+                            sessions.destroy(item.session());
+                        }
                         return null;
                     }
                 })));
@@ -376,7 +431,7 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
         }
     }
 
-    private record Registration(ApplicationInstance member, String token) {
+    private record Registration(ApplicationInstance member, String token, String session) {
     }
 
     private final class Subscription implements RegistrySubscription {
