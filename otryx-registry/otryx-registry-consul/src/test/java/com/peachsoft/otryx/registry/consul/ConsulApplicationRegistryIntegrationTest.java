@@ -233,6 +233,37 @@ class ConsulApplicationRegistryIntegrationTest {
     }
 
     @Test
+    void concurrentMappingClaimsMustSerializeByRealConsulCas() throws Exception {
+        String namespace = unique();
+        ApplicationKey app = new ApplicationKey(namespace, "casrace");
+        ServiceKey service = service("Concurrent");
+        try (ConsulApplicationRegistry first = registry(namespace);
+             ConsulApplicationRegistry second = registry(namespace)) {
+            var firstClaim = first.serviceMappingRepository().claim(app, "same-provider")
+                    .toCompletableFuture();
+            var secondClaim = second.serviceMappingRepository().claim(app, "same-provider")
+                    .toCompletableFuture();
+            ServiceMappingOwner firstOwner = firstClaim.get(10, TimeUnit.SECONDS);
+            ServiceMappingOwner secondOwner = secondClaim.get(10, TimeUnit.SECONDS);
+            assertNotEquals(firstOwner.generation(), secondOwner.generation());
+            ConsulApplicationRegistry winner = firstOwner.generation() > secondOwner.generation()
+                    ? first : second;
+            ConsulApplicationRegistry loser = winner == first ? second : first;
+            ServiceMappingOwner active = winner == first ? firstOwner : secondOwner;
+            ServiceMappingOwner stale = loser == first ? firstOwner : secondOwner;
+            assertThrows(CompletionException.class, () -> loser.serviceMappingRepository()
+                    .publish(stale, Set.of(service)).toCompletableFuture().join());
+            winner.serviceMappingRepository().publish(active, Set.of(service))
+                    .toCompletableFuture().join();
+            winner.register(provider(app, "same-provider", RPC_BASE_PORT + 42))
+                    .toCompletableFuture().join();
+            assertEquals(Set.of(app), winner.serviceMappingRepository()
+                    .lookup(new ServiceMappingKey(namespace, service))
+                    .toCompletableFuture().join().applications());
+        }
+    }
+
+    @Test
     void expiredSessionMustReacquireBeforeRestoringAgentMember() throws Exception {
         String ns = unique();
         ApplicationKey app = new ApplicationKey(ns, "sessions");

@@ -74,6 +74,10 @@ class ConsulV2IdentityTest {
         ApplicationInstance oversized = new ApplicationInstance("consumer", APPLICATION,
                 ApplicationRole.CONSUMER, null, 0, null, Map.of("key", "a".repeat(513)));
         assertThrows(IllegalArgumentException.class, () -> identity.metadata(oversized, "token"));
+        // Java String.length() is insufficient for Consul native Meta UTF-8 byte caps.
+        ApplicationInstance utf8Oversized = new ApplicationInstance("consumer", APPLICATION,
+                ApplicationRole.CONSUMER, null, 0, null, Map.of("description", "汉".repeat(200)));
+        assertThrows(IllegalArgumentException.class, () -> identity.metadata(utf8Oversized, "token"));
     }
 
     private static ApplicationInstance provider(String instanceId) {

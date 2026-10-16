@@ -29,7 +29,7 @@ The OTRYX logical namespace is `RegistryOptions.namespace`; Consul Enterprise Na
 
 ## Limits and failure behavior
 
-A KV value is limited to **256 KiB** by the adapter (below Consul's usual 512 KiB default). Owner scans are capped at 512 keys / 8 MiB, per-owner exports at 512, candidate applications at 128, local members at 256, and subscriptions at 128. Control-plane work uses 2–4 threads and a bounded 256-task queue. HTTP requests have a finite timeout. Malformed metadata, foreign namespaces, exhausted capacities, failed CAS, and ACL/network errors fail closed; they must never become valid empty results.
+A KV value is limited to **256 KiB** by the adapter (below Consul's usual 512 KiB default). Native Service Meta key/value limits are enforced in **UTF-8 bytes** (128/512 bytes), not Java character count. Owner scans are capped at 512 keys / 8 MiB, per-owner exports at 512, candidate applications at 128, local members at 256, and subscriptions at 128. Control-plane work uses 2–4 threads and a bounded 256-task queue. HTTP requests have a finite timeout. Malformed metadata, foreign namespaces, exhausted capacities, failed CAS, and ACL/network errors fail closed; they must never become valid empty results.
 
 Heartbeats renew both local Agent TTL checks and Consul Session leases and reregister missing checks. Polling subscriptions distinguish valid empty member directories from failures. `close()` has a three-second best-effort cleanup budget; unreachable Agent registrations expire through TTL.
 
@@ -44,4 +44,4 @@ mvn -B -ntp -pl otryx-registry/otryx-registry-consul -am \
   -Dconsul.test.endpoint=http://127.0.0.1:8500 test
 ```
 
-`.github/workflows/consul-v2.yml` runs against a real Consul server, covering three roles, immutable Manifest, distributed Mapping fencing, heartbeat and Session recovery, cross-process identity exclusion, and a 30-contract by 10-instance density case. The legacy fake Agent tests are not evidence for V2. Additional pause/restart, ACL, cross-process contention, and GC tests are needed before closing #135. Full Starter/Quickstart migration and legacy Registry SPI deletion belong to #137–#139.
+`.github/workflows/consul-v2.yml` has a real Consul job and an isolated ACL default-deny job that bootstraps an ephemeral management token in CI without writing secrets into source or Maven arguments. It checks authenticated success and unauthenticated write rejection. The real Consul job covers three roles, immutable Manifest, concurrent CAS Mapping fencing, heartbeat and Session recovery, cross-process identity exclusion, and a 30-contract by 10-instance density case. The legacy fake Agent tests are not evidence for V2. Agent restart across a real multi-node deployment, narrow ACL policies, and authoritative persistent-Mapping/Manifest retention and GC are separate production acceptance constraints. Full Starter/Quickstart migration and legacy Registry SPI deletion belong to #137–#139.

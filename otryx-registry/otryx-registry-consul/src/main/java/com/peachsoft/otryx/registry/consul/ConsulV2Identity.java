@@ -115,7 +115,7 @@ final class ConsulV2Identity {
      */
     Map<String, String> metadata(ApplicationInstance member, String token) {
         requireNamespace(member.application());
-        if (token == null || token.isBlank() || token.length() > MAX_META_VALUE_LENGTH) {
+        if (token == null || token.isBlank() || !fitsUtf8(token, MAX_META_VALUE_LENGTH)) {
             throw new IllegalArgumentException("Invalid Consul member ownership token");
         }
         Map<String, String> values = new LinkedHashMap<>();
@@ -132,8 +132,8 @@ final class ConsulV2Identity {
         }
         member.attributes().forEach((key, value) -> {
             String encodedKey = ATTRIBUTE_PREFIX + key;
-            if (encodedKey.length() > MAX_META_KEY_LENGTH || !validMetaKey(encodedKey)
-                    || value.length() > MAX_META_VALUE_LENGTH) {
+            if (!fitsUtf8(encodedKey, MAX_META_KEY_LENGTH) || !validMetaKey(encodedKey)
+                    || !fitsUtf8(value, MAX_META_VALUE_LENGTH)) {
                 throw new IllegalArgumentException("Application attributes exceed native Consul Meta limits");
             }
             values.put(encodedKey, value);
@@ -223,15 +223,22 @@ final class ConsulV2Identity {
             return Map.of();
         }
         Map<String, String> values = new HashMap<>();
-        meta.fields().forEachRemaining(item -> {
-            if (item.getValue().isTextual()
-                    && item.getKey().length() <= MAX_META_KEY_LENGTH
-                    && validMetaKey(item.getKey())
-                    && item.getValue().asText().length() <= MAX_META_VALUE_LENGTH) {
-                values.put(item.getKey(), item.getValue().asText());
+        var fields = meta.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> item = fields.next();
+            if (!item.getValue().isTextual()
+                    || !fitsUtf8(item.getKey(), MAX_META_KEY_LENGTH)
+                    || !validMetaKey(item.getKey())
+                    || !fitsUtf8(item.getValue().asText(), MAX_META_VALUE_LENGTH)) {
+                return Map.of();
             }
-        });
+            values.put(item.getKey(), item.getValue().asText());
+        }
         return values;
+    }
+
+    private static boolean fitsUtf8(String value, int limit) {
+        return value != null && value.getBytes(StandardCharsets.UTF_8).length <= limit;
     }
 
     private static boolean validMetaKey(String key) {

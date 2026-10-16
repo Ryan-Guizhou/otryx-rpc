@@ -40,7 +40,7 @@ ServiceMappingRepository mappings = registry.serviceMappingRepository();
 
 ## 三、一致性、容量与故障
 
-- Consul KV 默认单 value 最大约 512 KiB，适配器采取更保守的 **256 KiB** 上限。Manifest、Owner 超限直接拒绝，不截断。
+- Consul KV 默认单 value 最大约 512 KiB，适配器采取更保守的 **256 KiB** 上限。原生 Service Meta 的字段名和值采用 **UTF-8 字节数** 限制（最多 128/512 字节），不以 Java 字符长度代替。Manifest、Owner 超限直接拒绝，不截断。
 - Owner Scan：最多 512 个 KV、累计 8 MiB；每 Owner 最多 512 个 ServiceKey；每次 Mapping 最多 128 个候选应用。
 - 进程成员与订阅最多 256 / 128；控制线程 2–4、队列 256；请求默认超时 3 秒。
 - 成员 Check 和实例 Session 默认 TTL 30 秒，每 10 秒续约；丢失 Agent Check 时重新注册，异常按健康失败上报而非悄悄发布空目录。
@@ -57,6 +57,6 @@ mvn -B -ntp -pl otryx-registry/otryx-registry-consul -am \
   -Dconsul.test.endpoint=http://127.0.0.1:8500 test
 ```
 
-GitHub Actions `.github/workflows/consul-v2.yml` 使用真实 Consul，执行角色注册、KV CAS、Manifest 不可变、TTL Check 和 Session 失效重注册、跨进程成员互斥、30 接口×10 实例矩阵。原有 Mock Agent 测试仅验证旧接口级路径，**不能用来替代真实 V2 E2E**。
+GitHub Actions `.github/workflows/consul-v2.yml` 的 `consul-v2` 任务使用真实 Consul，`acl-enforcement` 任务单独以 ACL default-deny 启动、仅在隔离容器内生成临时管理 Token，分别验证授权请求与未授权请求失败关闭；Token 不写入代码或 Maven 启动参数。真实后端任务执行角色注册、并发 KV CAS、Manifest 不可变、TTL Check 和 Session 失效重注册、跨进程成员互斥、30 接口×10 实例矩阵。原有 Mock Agent 测试仅验证旧接口级路径，**不能用来替代真实 V2 E2E**。
 
 需要额外验证并量化：Agent pause/restart、ACL 拒绝、Catalog 收敛、超额 Metadata、跨进程 Owner 竞态、回滚与安全 GC。#137–#139 才负责 Starter/Quickstart 应用级生产接线与旧 SPI 最终移除，不能凭本 Adapter 的存在宣称全局迁移完成。
