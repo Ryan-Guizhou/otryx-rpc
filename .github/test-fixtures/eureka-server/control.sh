@@ -24,6 +24,8 @@ case "${1:-}" in
       --eureka.client.register-with-eureka=false \
       --eureka.client.fetch-registry=false \
       --eureka.server.enable-self-preservation=false \
+      --eureka.server.use-read-only-response-cache=false \
+      --eureka.server.response-cache-update-interval-ms=1000 \
       --eureka.server.eviction-interval-timer-in-ms=1000 \
       > "$TARGET/server.log" 2>&1 &
     echo "$!" > "$PID_FILE"

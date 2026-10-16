@@ -8,6 +8,7 @@ import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
+import com.peachsoft.otryx.registry.ServiceMappingOwnerSnapshot;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
 import io.etcd.jetcd.ByteSequence;
 import io.etcd.jetcd.Client;
@@ -218,18 +219,38 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
      * @return 不可直接路由的候选快照
      */
     @Override
-    public CompletionStage<ServiceMappingSnapshot> lookupCandidates(ServiceMappingKey key) {
+    public CompletionStage<ServiceMappingOwnerSnapshot> lookupCandidateOwners(ServiceMappingKey key) {
         Objects.requireNonNull(key, "key");
         paths.requireNamespace(key.namespace());
         GetOption options = GetOption.builder().isPrefix(true).withLimit(MAX_OWNER_SCAN + 1).build();
         return client.getKVClient().get(utf8(paths.ownerPrefix()), options)
-                .thenCompose(response -> lookupAtRevision(key, response, false));
+                .thenApply(response -> decodeCandidateOwners(key, response));
     }
 
     private CompletionStage<ServiceMappingSnapshot> lookupAtRevision(
-            ServiceMappingKey key, GetResponse owners, boolean checkMembers) {
+            ServiceMappingKey key, GetResponse response, boolean checkMembers) {
+        ServiceMappingOwnerSnapshot candidates = decodeCandidateOwners(key, response);
+        if (!checkMembers) {
+            return CompletableFuture.completedFuture(
+                    new ServiceMappingSnapshot(key, candidates.ownerInstances().keySet(), candidates.revision()));
+        }
+        Set<ApplicationKey> active = new HashSet<>();
+        CompletionStage<Void> checks = CompletableFuture.completedFuture(null);
+        for (Map.Entry<ApplicationKey, Set<String>> candidate : candidates.ownerInstances().entrySet()) {
+            checks = checks.thenCompose(ignored ->
+                    requireLiveProvider(candidate.getKey(), candidate.getValue(), candidates.revision())
+                            .thenAccept(live -> {
+                                if (live) {
+                                    active.add(candidate.getKey());
+                                }
+                            }));
+        }
+        return checks.thenApply(ignored -> new ServiceMappingSnapshot(key, active, candidates.revision()));
+    }
+
+    private ServiceMappingOwnerSnapshot decodeCandidateOwners(ServiceMappingKey key, GetResponse owners) {
         if (owners.getCount() > MAX_OWNER_SCAN || owners.getKvs().size() > MAX_OWNER_SCAN) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Etcd mapping owner scan budget exceeded"));
+            throw new IllegalStateException("Etcd mapping owner scan budget exceeded");
         }
         Map<ApplicationKey, Set<String>> providers = new HashMap<>();
         int bytes = 0;
@@ -253,23 +274,7 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
                 }
             }
         }
-        long revision = owners.getHeader().getRevision();
-        if (!checkMembers) {
-            return CompletableFuture.completedFuture(
-                    new ServiceMappingSnapshot(key, providers.keySet(), revision));
-        }
-        Set<ApplicationKey> active = new HashSet<>();
-        CompletionStage<Void> checks = CompletableFuture.completedFuture(null);
-        for (Map.Entry<ApplicationKey, Set<String>> candidate : providers.entrySet()) {
-            checks = checks.thenCompose(ignored ->
-                    requireLiveProvider(candidate.getKey(), candidate.getValue(), revision)
-                            .thenAccept(live -> {
-                                if (live) {
-                                    active.add(candidate.getKey());
-                                }
-                            }));
-        }
-        return checks.thenApply(ignored -> new ServiceMappingSnapshot(key, active, revision));
+        return new ServiceMappingOwnerSnapshot(key, providers, owners.getHeader().getRevision());
     }
 
     private CompletionStage<Boolean> requireLiveProvider(

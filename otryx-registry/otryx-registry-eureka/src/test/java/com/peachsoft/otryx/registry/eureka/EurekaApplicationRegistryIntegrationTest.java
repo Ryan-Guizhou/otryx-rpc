@@ -125,6 +125,36 @@ class EurekaApplicationRegistryIntegrationTest {
     }
 
     @Test
+    void unrelatedHealthyProviderMustNotSatisfyAnUnpublishedMappingOwner() throws Exception {
+        String namespace = unique();
+        ApplicationKey application = new ApplicationKey(namespace, "ownerproof");
+        ServiceKey contract = service("BoundContract");
+        ServiceMappingKey mapping = new ServiceMappingKey(namespace, contract);
+        ApplicationInstance unrelated = provider(application, "healthy-other", PROVIDER_PORT + 8);
+        ApplicationInstance publisher = provider(application, "publishing-owner", PROVIDER_PORT + 9);
+        try (EurekaApplicationRegistry writer = registry(namespace);
+             EurekaApplicationRegistry reader = registry(namespace)) {
+            ServiceMappingOwner claimed = writer.serviceMappingRepository()
+                    .claim(application, publisher.instanceId()).toCompletableFuture().join();
+            writer.serviceMappingRepository().publish(claimed, Set.of(contract))
+                    .toCompletableFuture().join();
+            reader.register(unrelated).toCompletableFuture().join();
+            assertTrue(await(WAIT, () -> reader.lookup(application).toCompletableFuture()
+                    .join().instances().contains(unrelated)));
+            assertTrue(writer.serviceMappingRepository().lookup(mapping)
+                    .toCompletableFuture().join().applications().isEmpty(),
+                    "Unrelated healthy Provider must not inherit stale Owner exports");
+            writer.register(publisher).toCompletableFuture().join();
+            assertTrue(await(WAIT, () -> writer.serviceMappingRepository().lookup(mapping)
+                    .toCompletableFuture().join().applications().contains(application)));
+            writer.unregister(publisher).toCompletableFuture().join();
+            assertTrue(await(WAIT, () -> writer.serviceMappingRepository().lookup(mapping)
+                    .toCompletableFuture().join().applications().isEmpty()));
+            writer.serviceMappingRepository().revoke(claimed).toCompletableFuture().join();
+        }
+    }
+
+    @Test
     void thirtyInterfacesTenInstancesStillProduceOnlyTenEurekaMembers() throws Exception {
         String namespace = unique();
         ApplicationKey app = new ApplicationKey(namespace, "density");

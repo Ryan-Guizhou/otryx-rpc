@@ -389,18 +389,21 @@ public final class EurekaApplicationRegistry implements ApplicationRegistry, App
             Objects.requireNonNull(key, "key");
             identity.requireNamespace(new ApplicationKey(key.namespace(), "mapping"));
             requireOpen();
-            return candidates.lookupCandidates(key).thenCompose(candidate -> {
+            return candidates.lookupCandidateOwners(key).thenCompose(candidate -> {
                 if (!candidate.key().equals(key)) {
                     throw new IllegalArgumentException("Eureka Metadata Mapping key mismatch");
                 }
                 Set<ApplicationKey> healthy = new HashSet<>();
                 CompletionStage<Void> results = CompletableFuture.completedFuture(null);
-                for (ApplicationKey app : candidate.applications()) {
+                for (Map.Entry<ApplicationKey, Set<String>> owner : candidate.ownerInstances().entrySet()) {
+                    ApplicationKey app = owner.getKey();
+                    Set<String> ownerInstanceIds = owner.getValue();
                     results = results.thenCompose(ignored ->
                             EurekaApplicationRegistry.this.lookup(app)
                                     .thenAccept(directory -> {
-                                        if (directory.instances().stream()
-                                                .anyMatch(ApplicationInstance::routableProvider)) {
+                                        if (directory.instances().stream().anyMatch(member ->
+                                                member.routableProvider()
+                                                        && ownerInstanceIds.contains(member.instanceId()))) {
                                             healthy.add(app);
                                         }
                                     }));

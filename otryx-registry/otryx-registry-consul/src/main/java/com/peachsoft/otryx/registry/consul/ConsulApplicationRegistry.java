@@ -51,7 +51,8 @@ import org.slf4j.LoggerFactory;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/16 15:00
  */
-public final class ConsulApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar, ApplicationMetadataBackend {
+public final class ConsulApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar,
+        ApplicationMetadataBackend {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ConsulApplicationRegistry.class);
     private static final RegistryCapabilities CAPABILITIES = RegistryCapabilities.of(

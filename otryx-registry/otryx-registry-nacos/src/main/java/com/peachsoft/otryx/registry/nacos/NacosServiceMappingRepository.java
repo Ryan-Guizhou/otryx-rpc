@@ -6,6 +6,7 @@ import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
+import com.peachsoft.otryx.registry.ServiceMappingOwnerSnapshot;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -199,14 +200,28 @@ public final class NacosServiceMappingRepository implements ServiceMappingReposi
      * <p>Nacos 不提供跨 Config 的 MVCC 修订点；结果仅是发现候选，
      * 真实可路由性必须经过 Core 对 Naming、Manifest 和 Schema 的再验证。
      */
+    /** 保留既有单纯候选应用语义；不能直接将 Mapping 结果送入 RPC 连接池。 */
     @Override
     public CompletionStage<ServiceMappingSnapshot> lookup(ServiceMappingKey key) {
+        return lookupCandidateOwners(key).thenApply(
+                candidate -> new ServiceMappingSnapshot(key,
+                        candidate.ownerInstances().keySet(), candidate.revision()));
+    }
+
+    /**
+     * 扫描所有有界 CAS Mapping Shard，并保留发布者真实 instanceId。
+     *
+     * @param key Namespace 和目标 ServiceKey
+     * @return 必须交由权威 Member Registry 二次交集验证的 Owner 实例快照
+     */
+    @Override
+    public CompletionStage<ServiceMappingOwnerSnapshot> lookupCandidateOwners(ServiceMappingKey key) {
         Objects.requireNonNull(key, "key");
         if (!namespace.equals(key.namespace())) {
             throw new IllegalArgumentException("Nacos mapping lookup crosses namespace");
         }
         return executor.submit("mapping-lookup", key.serviceKey(), () -> {
-            Set<ApplicationKey> applications = new HashSet<>();
+            Map<ApplicationKey, Set<String>> providers = new HashMap<>();
             for (int shard = 0; shard < NacosV2Names.MAPPING_SHARDS; shard++) {
                 String dataId = NacosV2Names.shardId(shard);
                 NacosV2ConfigStore.Entry entry = store.read(dataId);
@@ -217,26 +232,16 @@ public final class NacosServiceMappingRepository implements ServiceMappingReposi
                         NacosV2MappingCodec.decode(entry.content(), namespace, shard);
                 for (NacosV2MappingCodec.OwnerState owner : owners.values()) {
                     if (owner.services().contains(key.serviceKey())) {
-                        applications.add(owner.owner().application());
-                        if (applications.size() > MAX_APPLICATIONS) {
+                        providers.computeIfAbsent(owner.owner().application(), ignored -> new HashSet<>())
+                                .add(owner.owner().instanceId());
+                        if (providers.size() > MAX_APPLICATIONS) {
                             throw new IllegalStateException("Nacos mapping fanout capacity exceeded");
                         }
                     }
                 }
             }
-            return new ServiceMappingSnapshot(key, applications, localRevision.incrementAndGet());
+            return new ServiceMappingOwnerSnapshot(key, providers, localRevision.incrementAndGet());
         });
-    }
-
-    /**
-     * Nacos Mapping 本身就是候选快照，运行时仍须使用主注册中心验证成员与 Manifest。
-     *
-     * @param key 命名空间及服务键
-     * @return 未做成员路由验证的候选应用集合
-     */
-    @Override
-    public CompletionStage<ServiceMappingSnapshot> lookupCandidates(ServiceMappingKey key) {
-        return lookup(key);
     }
 
     private void requireNamespace(ApplicationKey application) {

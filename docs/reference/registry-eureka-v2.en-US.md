@@ -6,7 +6,7 @@
 
 Eureka is the **only authority for application member leases**: Provider, Consumer-only, and BOTH all register native Eureka InstanceInfo under one deterministic application-scoped name. All interfaces exported by a process share one Eureka member. A pure Consumer uses a **real host identity** with a **native disabled RPC port** (`port=0`, `@enabled=false`) and does not advertise any OTRYX RPC endpoint.
 
-Eureka is **not a transactional metadata database**. Configuration must explicitly provide one external `etcd`, `nacos`, or `consul` adapter with immutable Manifest CAS and instance-owned Mapping. The external backend is not used to register the application member. `ApplicationMetadataBackend` exposes the repository pair and `ServiceMappingCandidateSource` reads candidate mappings independently of another Registry's lease. The Eureka mapping view then verifies actual UP Provider members; Core still verifies Manifest, schema and bound RPC services.
+Eureka is **not a transactional metadata database**. Configuration must explicitly provide one external `etcd`, `nacos`, or `consul` adapter with immutable Manifest CAS and instance-owned Mapping. The external backend is not used to register the application member. `ApplicationMetadataBackend` exposes the repository pair and `ServiceMappingCandidateSource` reads candidate mappings independently of another Registry's lease. The Eureka mapping view then verifies the **same publishing instanceId** is an actual UP Provider member, never substituting an unrelated healthy Provider from the same application; Core still verifies Manifest, schema and bound RPC services.
 
 Eureka lacks native compare-and-set for InstanceInfo ownership. Registration uses a random per-process suffix in its native Instance ID; two processes with the same logical instanceId are **not allowed to overwrite one another**, and duplicate logical identities in discovery are rejected instead of arbitrarily routed. Deployments must ensure logical instance IDs are unique. Persisted Mapping Generation CAS still fences old owner writes.
 
@@ -42,3 +42,5 @@ Only old incompatible ServiceKey registry usage is delegated to final deletion i
 ## Real service E2E
 
 `.github/workflows/eureka-v2.yml` launches a real Spring Boot 3.5.4 / Spring Cloud Netflix Eureka 2025.0.0 server alongside real Consul KV. CI checks Provider/Consumer/BOTH native Info, disabled Consumer port, real Meta CAS + no cross-registry member duplication, 30 contracts × 10 instances, lost lease recovery and a genuine Eureka JVM restart. The server is isolated under `.github/test-fixtures/eureka-server`, not an extra runtime Starter or Maven reactor module.
+
+The isolated Eureka test fixture disables the read-only response cache for deterministic convergence tests. Production Eureka caching and lease expiry remain separate from RPC routing freshness and authorization.
