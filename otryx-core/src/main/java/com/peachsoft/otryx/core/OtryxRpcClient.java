@@ -1160,7 +1160,7 @@ public final class OtryxRpcClient implements AutoCloseable {
         if (membership == null) {
             unregisterConsumer = CompletableFuture.completedFuture(null);
         } else {
-            unregisterConsumer = membership.stopConsumer().handle((ignored, error) -> {
+            unregisterConsumer = membership.stopConsumer().<Void>handle((ignored, error) -> {
                 if (error != null) {
                     progress.failures.incrementAndGet();
                     LOGGER.warn("RPC consumer membership removal failed: errorType={}",

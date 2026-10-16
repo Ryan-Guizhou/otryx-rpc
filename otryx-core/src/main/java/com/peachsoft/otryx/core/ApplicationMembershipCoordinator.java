@@ -252,7 +252,7 @@ public final class ApplicationMembershipCoordinator implements AutoCloseable {
                             CompletionStage<Void> revoke = owner == null
                                     ? CompletableFuture.completedFuture(null)
                                     : bounded(mappings.revoke(owner));
-                            return revoke.handle((ignored, mappingError) -> {
+                            return revoke.<Void>handle((ignored, mappingError) -> {
                                 if (registrationError != null || mappingError != null) {
                                     IllegalStateException failure =
                                             new IllegalStateException("Membership shutdown incomplete");
