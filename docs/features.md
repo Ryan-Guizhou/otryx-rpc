@@ -56,6 +56,10 @@ mindmap
 
 ### Etcd
 
+**V2 应用级 Adapter** 已新增 Provider/Consumer/BOTH 成员、Etcd Lease、版本化 Manifest、实例级 fencing Mapping 与跨进程 CAS，详见 [Etcd V2 设计与限制](reference/registry-etcd.md)。在 #139 前旧 SPI 代码仅为迁移过渡，不得视为最终兼容模式。
+
+现有旧接口级 Adapter 的历史能力：
+
 - register / unregister；
 - Range / Watch；
 - Lease / keepalive；
@@ -215,7 +219,7 @@ CLIENT/SERVER Span + W3C Trace Context/Baggage。
 - Streaming RPC；
 - 跨语言 SDK；
 - Protobuf IDL；
-- ZooKeeper/Consul/Eureka Adapter；
+- ZooKeeper Adapter（Consul / Eureka Adapter 已在源码中按需提供，V2 应用级接入分别跟踪 #135 / #136）；
 - HTTP/2/gRPC Transport；
 - 非 NONE 数据面压缩。
 

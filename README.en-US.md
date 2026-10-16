@@ -43,7 +43,9 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 
 **Design**: control-plane/data-plane isolation; SPI and adapters for implementations; no registry I/O, SPI scan or dynamic parsing per request.
 
-**V2 application-level registry migration (in progress):** The application-level Memory registry, bounded Manifest/ServiceMapping caches, and shared Provider/Consumer application membership have been implemented. The Core Client/Server can now be wired programmatically through the new verified Manifest/Schema-based route, covered by an in-JVM Wire v1 E2E test. **Spring Starter/Quickstart and real Etcd/Nacos/Consul/Eureka adapters still use the legacy registration path** until #133–#139 migrate and remove it. This is not a production-ready V2 rollout. [Design and status](docs/design/application-registry-v2.md).
+**V2 application-level registry migration (in progress):** The application-level Memory registry, bounded Manifest/ServiceMapping caches, and shared Provider/Consumer application membership have been implemented. The Core Client/Server can now be wired programmatically through the new verified Manifest/Schema-based route, covered by an in-JVM Wire v1 E2E test. **Etcd now has a separate V2 application-member, Manifest and Mapping adapter**, while its legacy SPI remains pending migration. Spring Starter/Quickstart and Nacos/Consul/Eureka still need V2 wiring. Issues #134–#139 cover remaining adapters, wiring, and final legacy cleanup. This is not a production-ready V2 rollout. [Design and status](docs/design/application-registry-v2.md).
+
+The [Etcd V2 adapter guide](docs/reference/registry-etcd.md) describes the new programmatic control plane, namespace isolation, leases, CAS fencing, and its bounded owner scan. It does not imply the Spring Starter has migrated.
 
 <!-- doc-section:compatibility -->
 ## Compatibility and migration

@@ -1,8 +1,8 @@
 # OTRYX V2：应用级注册身份与 SPI 契约
 
-> **当前状态：V2-01～05 Core 应用级注册/发现已实现；正式 Starter 和远端 Adapter 仍待迁移。**
+> **当前状态：V2-01～05 Core 应用级注册/发现已实现；#133 开始交付 Etcd V2 后端；Spring Starter、Quickstart 与其余远端 Adapter 仍待迁移。**
 >
-> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#132](https://github.com/Ryan-Guizhou/otryx-rpc/issues/132)。
+> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#133](https://github.com/Ryan-Guizhou/otryx-rpc/issues/133)。
 > 版本 JDK 21、Spring Boot 3.5.4、1.0.0-SNAPSHOT、Wire v1 均保持不变。
 
 ## 1. 核心决策
@@ -318,3 +318,9 @@ sequenceDiagram
   独立 JVM、真实 TCP、mTLS/Method authorization、10k soak 和故障注入
   必须在 #133–#139 及发布门禁中重新验收。
   不得将这个进程内 E2E 当作外部 Registry 的网络稳定性证明。
+
+## 9. V2-06：Etcd 原生应用成员与映射（#133）
+
+新增 `EtcdApplicationRegistry`、`EtcdApplicationRegistryFactory`、`EtcdApplicationManifestRepository`、`EtcdServiceMappingRepository`。成员按 ApplicationKey 注册，纯 Consumer 保持租约而无 RPC Endpoint；Manifest 内容寻址不可变，Mapping 以每实例 Owner 单键存储服务全集，用 Etcd CAS 防止旧代写入。Watch 从 Range revision+1 建立，Compaction/断线显式健康恢复。旧 EtcdRegistry 仍待 #139 最终删除。
+
+本阶段按真实后端上限约束 Mapping Owner 扫描（512 个 Owner、8 MiB），并检查活跃 Member Lease，不能把共享 CI smoke 当生产控制面规模证据。详细键空间、限制、接口示例及测试参见 [Etcd V2 文档](../reference/registry-etcd.md)。
