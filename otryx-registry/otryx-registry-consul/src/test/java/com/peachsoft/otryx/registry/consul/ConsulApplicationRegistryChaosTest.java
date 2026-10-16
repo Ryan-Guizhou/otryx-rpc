@@ -106,7 +106,7 @@ class ConsulApplicationRegistryChaosTest {
                     () -> !http.healthy(ConsulV2Keys.serviceName(app)).isEmpty()));
             assertTrue(await(Duration.ofSeconds(40),
                     () -> http.healthy(ConsulV2Keys.serviceName(app)).isEmpty()));
-        } 
+        }
     }
 
     @Test

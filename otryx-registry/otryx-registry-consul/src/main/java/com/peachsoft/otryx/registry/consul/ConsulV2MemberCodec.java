@@ -146,7 +146,9 @@ final class ConsulV2MemberCodec {
             throw new IllegalArgumentException("Consul member metadata item limit exceeded");
         }
         Map<String, String> attributes = new HashMap<>();
-        meta.properties().forEach((key, value) -> {
+        meta.properties().forEach(entry -> {
+            String key = entry.getKey();
+            JsonNode value = entry.getValue();
             if (key.startsWith(META_ATTRIBUTE)) {
                 String decoded = new String(Base64.getUrlDecoder().decode(
                         key.substring(META_ATTRIBUTE.length())), StandardCharsets.UTF_8);

@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -116,11 +117,25 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
                                 }
                                 return null;
                             });
-                    LocalClaim previous = claims.compute(key, (ignored, current) -> current == null
-                            || current.state.owner().generation() < owner.generation() ? claim : current);
-                    if (previous != claim) {
+                    AtomicReference<LocalClaim> replaced = new AtomicReference<>();
+                    LocalClaim selected = claims.compute(key, (ignored, current) -> {
+                        if (current == null || current.state.owner().generation() < owner.generation()) {
+                            replaced.set(current);
+                            return claim;
+                        }
+                        return current;
+                    });
+                    if (selected != claim) {
                         retire(claim);
                         throw new IllegalStateException("Consul Mapping local generation was superseded");
+                    }
+                    if (replaced.get() != null) {
+                        try {
+                            retire(replaced.get());
+                        } catch (Exception cleanup) {
+                            LOGGER.warn("Consul previous Mapping Session cleanup failed: errorType={}",
+                                    cleanup.getClass().getSimpleName());
+                        }
                     }
                     return owner;
                 } catch (Exception failure) {
@@ -163,6 +178,10 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
         return executor.submit(revoking ? "consul-mapping-revoke" : "consul-mapping-publish", () -> {
             for (int attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
                 if (claim.lost.get()) {
+                    if (revoking) {
+                        closeClaim(key, claim);
+                        return null;
+                    }
                     throw new IllegalStateException("Consul Mapping Session is no longer valid");
                 }
                 ConsulV2Http.KvEntry live = http.get(
@@ -171,6 +190,10 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
                 if (!ConsulV2MappingCodec.validMarker(live, claim.state)
                         || !claim.sessionId.equals(live.sessionId())) {
                     claim.lost.set(true);
+                    if (revoking) {
+                        closeClaim(key, claim);
+                        return null;
+                    }
                     throw new IllegalStateException("Consul Mapping owner has lost Session liveness");
                 }
                 ConsulV2Http.KvEntry existing = http.get(key, ConsulV2Http.MAX_MAPPING_VALUE_BYTES);
@@ -280,11 +303,8 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
     }
 
     private void retire(LocalClaim claim) throws Exception {
-        if (claim.lost.compareAndSet(false, true)) {
-            executor.cancel(claim.renewal);
-        } else {
-            executor.cancel(claim.renewal);
-        }
+        claim.lost.set(true);
+        executor.cancel(claim.renewal);
         http.destroySession(claim.sessionId);
     }
 
