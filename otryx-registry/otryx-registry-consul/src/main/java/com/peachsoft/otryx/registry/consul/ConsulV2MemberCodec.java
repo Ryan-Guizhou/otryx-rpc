@@ -42,8 +42,15 @@ final class ConsulV2MemberCodec {
     private static final String FIELD_ADDRESS = "Address";
     private static final String FIELD_PORT = "Port";
     private static final String FIELD_STATUS = "Status";
+    private static final String FIELD_CHECK = "Check";
+    private static final String FIELD_TTL = "TTL";
+    private static final String FIELD_DEREGISTER_CRITICAL = "DeregisterCriticalServiceAfter";
+    private static final String DEREGISTER_CRITICAL_AFTER = "1m";
+    private static final String CHECK_STATUS_CRITICAL = "critical";
     private static final int MAX_METADATA_BYTES = 8 * 1024;
-    private static final int MAX_METADATA_ITEMS = 80;
+    private static final int MAX_METADATA_ITEMS = 64;
+    private static final int MAX_META_KEY_CHARACTERS = 128;
+    private static final int MAX_META_VALUE_CHARACTERS = 512;
     private static final int MAX_RPC_PORT = 65535;
     private static final String CHECK_STATUS_PASSING = "passing";
 
@@ -71,6 +78,13 @@ final class ConsulV2MemberCodec {
         if (metadata.size() > MAX_METADATA_ITEMS || metadataBytes(metadata) > MAX_METADATA_BYTES) {
             throw new IllegalArgumentException("Consul membership metadata exceeds safe capacity");
         }
+        for (Map.Entry<String, String> entry : metadata.entrySet()) {
+            if (!entry.getKey().matches("[A-Za-z0-9_-]{1,128}")
+                    || entry.getKey().length() > MAX_META_KEY_CHARACTERS
+                    || entry.getValue().length() > MAX_META_VALUE_CHARACTERS) {
+                throw new IllegalArgumentException("Consul Service Meta key/value is invalid or oversized");
+            }
+        }
         String host = member.routableProvider() ? member.rpcEndpoint().host() : "";
         int port = member.routableProvider() ? member.rpcEndpoint().port() : 0;
         if (member.routableProvider() && (!validHost(host) || port < 1 || port > MAX_RPC_PORT)) {
@@ -82,10 +96,10 @@ final class ConsulV2MemberCodec {
                 FIELD_ADDRESS, host,
                 FIELD_PORT, port,
                 FIELD_META, Map.copyOf(metadata),
-                "Check", Map.of(
-                        "TTL", ttlSeconds + "s",
-                        "Status", "critical",
-                        "DeregisterCriticalServiceAfter", "1m"));
+                FIELD_CHECK, Map.of(
+                        FIELD_TTL, ttlSeconds + "s",
+                        FIELD_STATUS, CHECK_STATUS_CRITICAL,
+                        FIELD_DEREGISTER_CRITICAL, DEREGISTER_CRITICAL_AFTER));
     }
 
     /** Consul passing 服务实际地址转回应用快照，过滤损坏或其他应用记录。 */
@@ -144,6 +158,14 @@ final class ConsulV2MemberCodec {
         }
         if (meta.size() > MAX_METADATA_ITEMS) {
             throw new IllegalArgumentException("Consul member metadata item limit exceeded");
+        }
+        for (var entry : meta.properties()) {
+            String key = entry.getKey();
+            JsonNode value = entry.getValue();
+            if (!key.matches("[A-Za-z0-9_-]{1,128}") || !value.isTextual()
+                    || value.asText().length() > MAX_META_VALUE_CHARACTERS) {
+                throw new IllegalArgumentException("Consul member metadata contains invalid key/value");
+            }
         }
         Map<String, String> attributes = new HashMap<>();
         meta.properties().forEach(entry -> {

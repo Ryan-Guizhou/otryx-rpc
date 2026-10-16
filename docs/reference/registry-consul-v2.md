@@ -14,7 +14,7 @@
 | ServiceMapping | KV owners/sN/ownerDigest | 单 Owner 完整 ServiceKey 集合及持久 Generation CAS |
 | 活性标记 | Session 持有的 KV live/sN/ownerDigest/generation | Session 过期自动 GC，不能删除 Fencing 墓碑 |
 
-所有 Consul 原生对象均不再以 ServiceKey 注册。Service Name/ID 使用 SHA256 摘要隔离逻辑 Namespace，原始 Namespace/Application/instanceId/Role/Manifest 等在 Meta 双向验证。**SHA256 不是 ACL 身份认证。** 同宿主机的多个 Consumer 通过独立的 instanceId+进程 incarnation 生成不同 Service ID，不占用 RPC 端口。
+所有 Consul 原生对象均不再以 ServiceKey 注册。Service Name/ID 使用 SHA256 摘要隔离逻辑 Namespace，原始 Namespace/Application/instanceId/Role/Manifest 等在 Meta 双向验证。Consul Service Meta 的键名仅允许 ASCII 字母、数字、下划线和连字符，因此 V2 保留键统一使用 `otryx_v2_` 前缀，不沿用带点号的其他注册中心格式；每个 Key 最多 128 字符、Value 最多 512 字符，最多 64 个键值对，编码前直接 fail-fast。**SHA256 不是 ACL 身份认证。** 同宿主机的多个 Consumer 通过独立的 instanceId+进程 incarnation 生成不同 Service ID，不占用 RPC 端口。
 
 ## 2. TTL 成员、轮询订阅和故障
 

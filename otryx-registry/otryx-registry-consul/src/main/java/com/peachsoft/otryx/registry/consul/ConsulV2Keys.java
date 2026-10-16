@@ -25,7 +25,7 @@ final class ConsulV2Keys {
     static final String OWNER_BRANCH = "owners/s";
     static final String LIVE_BRANCH = "live/s";
     static final String MANIFEST_BRANCH = "manifests/";
-    static final String METADATA_PREFIX = "otryx.v2.";
+    static final String METADATA_PREFIX = "otryx_v2_";
     static final int OWNER_SHARDS = 8;
     static final int MAX_OWNERS_PER_SHARD = 64;
     static final int MAX_OWNERS = OWNER_SHARDS * MAX_OWNERS_PER_SHARD;

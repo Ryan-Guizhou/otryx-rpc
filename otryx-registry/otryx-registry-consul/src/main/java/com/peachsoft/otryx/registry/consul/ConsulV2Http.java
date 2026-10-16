@@ -48,6 +48,11 @@ final class ConsulV2Http implements AutoCloseable {
     private static final String FIELD_VALUE = "Value";
     private static final String FIELD_MODIFY_INDEX = "ModifyIndex";
     private static final String FIELD_SESSION = "Session";
+    private static final String FIELD_NAME = "Name";
+    private static final String FIELD_BEHAVIOR = "Behavior";
+    private static final String FIELD_LOCK_DELAY = "LockDelay";
+    private static final String FIELD_TTL = "TTL";
+    private static final String FIELD_NODE_CHECKS = "NodeChecks";
     private static final String FIELD_ID = "ID";
     private static final String FIELD_SERVICE = "Service";
     private static final String FIELD_STATUS = "Status";
@@ -168,11 +173,11 @@ final class ConsulV2Http implements AutoCloseable {
     /** 创建 30 秒续约 Session，持有短寿命 Mapping 活性标志。 */
     String createSession(int ttlSeconds) throws Exception {
         Map<String, Object> body = Map.of(
-                "Name", "otryx-v2-mapping",
-                "Behavior", SESSION_BEHAVIOR_DELETE,
-                "LockDelay", SESSION_LOCK_DELAY,
-                "TTL", ttlSeconds + "s",
-                "NodeChecks", List.of(SESSION_NODE_HEALTH));
+                FIELD_NAME, "otryx-v2-mapping",
+                FIELD_BEHAVIOR, SESSION_BEHAVIOR_DELETE,
+                FIELD_LOCK_DELAY, SESSION_LOCK_DELAY,
+                FIELD_TTL, ttlSeconds + "s",
+                FIELD_NODE_CHECKS, List.of(SESSION_NODE_HEALTH));
         HttpRegistryClient.Response result = client.request(
                 HttpRegistryClient.METHOD_PUT, SESSION_CREATE + sessionNamespace(), body);
         success(result, "session-create");
