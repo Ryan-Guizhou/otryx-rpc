@@ -127,13 +127,21 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
                 this::scheduleHeartbeat, heartbeat, heartbeat);
     }
 
-    /** 返回和应用成员使用相同 Consul ACL、命名空间和生命周期的 Manifest 仓库。 */
+    /**
+     * 返回和应用成员使用相同 Consul ACL、命名空间和生命周期的 Manifest 仓库。
+     *
+     * @return 由当前 Registry 生命周期拥有的 Manifest Repository
+     */
     public ApplicationManifestRepository manifestRepository() {
         requireOpen();
         return manifests;
     }
 
-    /** 返回同一 Consul KV 域下按实例 Fencing 的服务映射仓库。 */
+    /**
+     * 返回同一 Consul KV 域下按实例 Fencing 的服务映射仓库。
+     *
+     * @return 由当前 Registry 生命周期拥有的 Mapping Repository
+     */
     public ServiceMappingRepository serviceMappingRepository() {
         requireOpen();
         return mappings;
