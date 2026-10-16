@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Nacos V2 Config 分片的独占维护期初始化工具。
@@ -21,6 +22,10 @@ import java.util.Properties;
  * @CreateTime 2026/10/16 13:42
  */
 public final class NacosV2MetadataBootstrap {
+
+    private static final String OPTION_GROUP = "nacosGroup";
+    private static final int VERIFY_ATTEMPTS = 16;
+    private static final long VERIFY_DELAY_MILLIS = 250L;
 
     private NacosV2MetadataBootstrap() {
     }
@@ -42,7 +47,7 @@ public final class NacosV2MetadataBootstrap {
         }
         String namespace = options.namespace().isBlank()
                 ? NacosRegistryFactory.DEFAULT_NAMESPACE : options.namespace();
-        String group = options.providerOption("nacosGroup", NacosRegistryFactory.DEFAULT_GROUP);
+        String group = options.providerOption(OPTION_GROUP, NacosRegistryFactory.DEFAULT_GROUP);
         Properties properties = NacosRegistryFactory.clientProperties(options, endpoints, namespace);
         try {
             ConfigService config = NacosFactory.createConfigService(properties);
@@ -56,10 +61,19 @@ public final class NacosV2MetadataBootstrap {
                         if (!config.publishConfig(dataId, group, empty)) {
                             throw new IllegalStateException("Nacos Mapping bootstrap could not publish a shard");
                         }
+                    }
+                    // Nacos Config publish ACK and query visibility can be briefly out of phase.
+                    // Never turn a missing CAS MD5 into a computed or locally cached substitute.
+                    for (int attempt = 0; attempt < VERIFY_ATTEMPTS
+                            && (existing.content() == null || existing.md5() == null); attempt++) {
+                        TimeUnit.MILLISECONDS.sleep(VERIFY_DELAY_MILLIS);
                         existing = store.read(dataId);
                     }
                     if (existing.content() == null || existing.md5() == null) {
-                        throw new IllegalStateException("Nacos Mapping bootstrap has no authoritative MD5");
+                        throw new IllegalStateException(
+                                "Nacos bootstrap has no authoritative Config state: contentPresent="
+                                        + (existing.content() != null)
+                                        + ", md5Present=" + (existing.md5() != null));
                     }
                     NacosV2MappingCodec.decode(existing.content(), namespace, shard);
                 }
@@ -67,6 +81,9 @@ public final class NacosV2MetadataBootstrap {
                 config.shutDown();
             }
         } catch (Exception error) {
+            if (error instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             throw new IllegalStateException("Nacos Mapping bootstrap failed; keep application writes disabled", error);
         }
     }
