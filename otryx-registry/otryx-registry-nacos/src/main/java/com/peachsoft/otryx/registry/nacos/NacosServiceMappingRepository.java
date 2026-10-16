@@ -16,6 +16,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -34,6 +35,8 @@ public final class NacosServiceMappingRepository implements ServiceMappingReposi
 
     private static final int MAX_CLAIMS_PER_PROCESS = 512;
     private static final int MAX_APPLICATIONS = ServiceMappingSnapshot.MAX_APPLICATIONS;
+    private static final int MAX_VISIBILITY_PROBES = 32;
+    private static final long VISIBILITY_PROBE_DELAY_MILLIS = 125L;
 
     private final NacosV2ConfigStore store;
     private final NacosControlExecutor executor;
@@ -76,11 +79,13 @@ public final class NacosServiceMappingRepository implements ServiceMappingReposi
                         owner, UUID.randomUUID().toString(), Set.of());
                 records.put(id, next);
                 if (store.compareAndSet(dataId, NacosV2MappingCodec.encode(records), entry)) {
+                    awaitVisibleOwner(dataId, shard, id, next);
                     claims.compute(id, (ignored, current) ->
                             current == null || current.owner().generation() < owner.generation()
                                     ? next : current);
                     return owner;
                 }
+                TimeUnit.MILLISECONDS.sleep(VISIBILITY_PROBE_DELAY_MILLIS);
             }
             throw new IllegalStateException("Nacos mapping claim CAS exhausted");
         });
@@ -124,8 +129,13 @@ public final class NacosServiceMappingRepository implements ServiceMappingReposi
                 Map<String, NacosV2MappingCodec.OwnerState> records =
                         new HashMap<>(NacosV2MappingCodec.decode(entry.content(), namespace, shard));
                 NacosV2MappingCodec.OwnerState current = records.get(id);
-                if (current == null || !current.owner().equals(owner)
-                        || !current.token().equals(claim.token())) {
+                if (current == null || current.owner().generation() < owner.generation()) {
+                    // Nacos Config may return a prior authoritative version immediately after CAS.
+                    // Only an older generation is eligible for bounded visibility retry.
+                    TimeUnit.MILLISECONDS.sleep(VISIBILITY_PROBE_DELAY_MILLIS);
+                    continue;
+                }
+                if (!current.owner().equals(owner) || !current.token().equals(claim.token())) {
                     if (revoking) {
                         claims.remove(id, claim);
                         return null;
@@ -140,14 +150,46 @@ public final class NacosServiceMappingRepository implements ServiceMappingReposi
                 }
                 records.put(id, new NacosV2MappingCodec.OwnerState(owner, claim.token(), exports));
                 if (store.compareAndSet(dataId, NacosV2MappingCodec.encode(records), entry)) {
+                    awaitVisibleOwner(dataId, shard, id,
+                            new NacosV2MappingCodec.OwnerState(owner, claim.token(), exports));
                     if (revoking) {
                         claims.remove(id, claim);
                     }
                     return null;
                 }
+                TimeUnit.MILLISECONDS.sleep(VISIBILITY_PROBE_DELAY_MILLIS);
             }
             throw new IllegalStateException("Nacos mapping mutation CAS exhausted");
         });
+    }
+
+    /**
+     * 等待后端可线性化验证刚刚提交的 Owner；缺乏本代数可见性不能报告发布成功。
+     *
+     * <p>较旧代数可能来自服务端短暂可见性延迟，允许有限重读；更高代数或
+     * 同代数不同 token 说明发生真实抢占，必须立即拒绝而非继续重试。
+     */
+    private void awaitVisibleOwner(
+            String dataId, int shard, String identifier, NacosV2MappingCodec.OwnerState expected)
+            throws Exception {
+        for (int probe = 0; probe < MAX_VISIBILITY_PROBES; probe++) {
+            NacosV2ConfigStore.Entry entry = store.read(dataId);
+            if (entry.content() == null) {
+                throw new IllegalStateException("Nacos mapping shard disappeared during CAS verification");
+            }
+            NacosV2MappingCodec.OwnerState actual =
+                    NacosV2MappingCodec.decode(entry.content(), namespace, shard).get(identifier);
+            if (expected.equals(actual)) {
+                return;
+            }
+            if (actual != null && (actual.owner().generation() > expected.owner().generation()
+                    || actual.owner().generation() == expected.owner().generation()
+                    && !actual.token().equals(expected.token()))) {
+                throw new IllegalStateException("Nacos mapping Owner was superseded after CAS");
+            }
+            TimeUnit.MILLISECONDS.sleep(VISIBILITY_PROBE_DELAY_MILLIS);
+        }
+        throw new IllegalStateException("Nacos mapping CAS visibility confirmation timed out");
     }
 
     /**

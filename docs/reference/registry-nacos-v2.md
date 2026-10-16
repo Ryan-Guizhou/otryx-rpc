@@ -49,7 +49,7 @@ Config 中固定 8 个分片 \`otryx.v2.mapping.s0\` ~ \`s7\`（同一 Nacos nam
 - \`revoke\`：只把当前 Owner 的发布集合变为空，保留 generation 墓碑，不删除同应用其他实例的接口；
 - \`lookup\`：仅遍历有界 8 分片，组合候选 Application 集合。Nacos **没有多 Config 全局 MVCC**：映射快照不是健康 Provider 列表。Core 必须进一步验证 Naming Directory、各实例 Manifest、Schema Fingerprint、真实可路由 Endpoint 和本地新鲜度预算。
 
-严格要求 Nacos 3.2.4 \`getConfigWithResult\` 返回权威 MD5。没有 MD5 的历史 Snapshot、连接故障、权限错误或未初始化分片不能作为有效 CAS 基础，也不能伪装成健康空映射。\`publishConfigCas\` 返回 false 只会被认为 CAS 冲突或拒绝，最多 12 次重读重试，不能以无条件 \`publishConfig\` 降级写入。
+严格要求 Nacos 3.2.4 \`getConfigWithResult\` 返回权威 MD5。没有 MD5 的历史 Snapshot、连接故障、权限错误或未初始化分片不能作为有效 CAS 基础，也不能伪装成健康空映射。\`publishConfigCas\` 返回 false 只会被认为 CAS 冲突或拒绝，最多 12 次重读重试；成功 CAS 还会执行最多 32 次、每次间隔 125ms 的权威 Config 可见性复核：如果仍看到更旧代数，可以有界等待；若发现更高代数或相同代数不同 token，立即拒绝；超时必须失败，不能报告虚假成功。不能以无条件 \`publishConfig\` 降级写入。
 
 由于 Nacos 对 Config 大小及跨分片原子性有限制，这个实现限定每分片最多 128 Owner、每 Owner 最多 512 个接口、每个 Config 内容最多 90 KiB、每次映射最多 128 应用，适合受控规模部署。高规模索引、分片扩展、跨分片事务和存储 GC 必须另行设计；不能简单修改常量宣布已支持无限扩展。
 
