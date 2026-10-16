@@ -96,7 +96,8 @@ class EurekaApplicationRegistryChaosTest {
                         "eurekaHeartbeatSeconds", "1",
                         "eurekaPollIntervalMillis", "200",
                         "eurekaRequestTimeoutMillis", "1000",
-                        "eurekaMetadata.consulTtlSeconds", "10")));
+                        "eurekaMetadata.consulTtlSeconds", "10",
+                        "eurekaMetadata.consulHeartbeatSeconds", "1")));
     }
 
     private static void control(String script, String action) throws Exception {
