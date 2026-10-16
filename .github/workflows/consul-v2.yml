@@ -1,0 +1,128 @@
+name: Consul V2 Real Backend and Chaos
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'otryx-registry/otryx-registry-consul/**'
+      - '.github/workflows/consul-v2.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  consul-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CONSUL_CONTAINER: otryx-consul-v2
+      CONSUL_ENDPOINT: http://127.0.0.1:8500
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Start a real Consul server
+        run: |
+          docker run -d --name "$CONSUL_CONTAINER" -p 8500:8500 \
+            hashicorp/consul:1.20 agent -dev -client=0.0.0.0
+      - name: Wait until Consul has a leader
+        run: |
+          for attempt in {1..60}; do
+            if curl --silent --fail "$CONSUL_ENDPOINT/v1/status/leader" \
+               | grep -Eq ':[0-9]+'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$CONSUL_CONTAINER"
+          exit 1
+      - name: Verify real Service Health, KV Manifest, CAS, Fencing and TTL recovery
+        run: >-
+          mvn -B -ntp
+          -pl otryx-registry/otryx-registry-consul -am
+          -Dconsul.test.endpoint=http://127.0.0.1:8500
+          test
+      - name: Verify live Agent pause and recovery with an active Consumer-only member
+        run: >-
+          mvn -B -ntp
+          -pl otryx-registry/otryx-registry-consul -am
+          -Dconsul.test.endpoint=http://127.0.0.1:8500
+          -Dconsul.chaos.container=otryx-consul-v2
+          -Dtest=ConsulApplicationRegistryChaosTest
+          -Dsurefire.failIfNoSpecifiedTests=false
+          test
+      - name: Diagnose failed Consul tests
+        if: failure()
+        run: |
+          docker logs "$CONSUL_CONTAINER" || true
+          find otryx-registry/otryx-registry-consul/target/surefire-reports \
+            -type f -name '*.txt' -exec tail -n 60 {} \; || true
+      - name: Cleanup
+        if: always()
+        run: docker rm -f "$CONSUL_CONTAINER" || true
+
+  acl-enforcement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CONSUL_ACL_CONTAINER: otryx-consul-acl
+      CONSUL_ACL_ENDPOINT: http://127.0.0.1:8501
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Launch real Consul with deny-by-default ACL enabled
+        shell: bash
+        run: |
+          mkdir -p target/consul-acl
+          cat > target/consul-acl/acl.hcl <<'HCL'
+          acl {
+            enabled = true
+            default_policy = "deny"
+            down_policy = "deny"
+          }
+          HCL
+          docker run -d --name "$CONSUL_ACL_CONTAINER" -p 8501:8500 \
+            -v "$PWD/target/consul-acl/acl.hcl:/consul/config/acl.hcl:ro" \
+            hashicorp/consul:1.20 agent -dev -client=0.0.0.0 \
+            -config-file=/consul/config/acl.hcl
+          for attempt in {1..60}; do
+            if curl --silent --fail "$CONSUL_ACL_ENDPOINT/v1/status/leader" \
+               | grep -Eq ':[0-9]+'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "$CONSUL_ACL_CONTAINER"
+          exit 1
+      - name: Bootstrap isolated ACL management token without exposing its value
+        shell: bash
+        run: |
+          token="$(docker exec "$CONSUL_ACL_CONTAINER" consul acl bootstrap -format=json \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["SecretID"])')"
+          if [ -z "$token" ]; then
+            echo "Consul ACL bootstrap returned no token" >&2
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "CONSUL_TEST_ACL_TOKEN=$token" >> "$GITHUB_ENV"
+      - name: Verify genuine authorized and denied operations
+        run: >-
+          mvn -B -ntp
+          -pl otryx-registry/otryx-registry-consul -am
+          -Dtest=ConsulApplicationRegistryAclIntegrationTest
+          -Dsurefire.failIfNoSpecifiedTests=false
+          test
+      - name: Diagnose ACL server startup only
+        if: failure()
+        run: docker logs "$CONSUL_ACL_CONTAINER" || true
+      - name: Cleanup ACL server
+        if: always()
+        run: docker rm -f "$CONSUL_ACL_CONTAINER" || true
