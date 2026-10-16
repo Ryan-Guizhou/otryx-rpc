@@ -22,7 +22,7 @@ Consul Agent 注册请求的服务名字段为 `Name`，但 `/v1/health/service`
 
 Service 注册使用 PUT /v1/agent/service/register，新 Check 初始 critical，随后 PUT /v1/agent/check/pass/service:<serviceId> 标记 passing。默认服务 TTL 30s，续约间隔 10s，使用单一 Agent endpoint；服务检查丢失返回 404 时重新注册。Health GET /v1/health/service/<app>?passing=true 只读取 passing 成员；任何异常不得伪装成健康空目录。
 
-每个订阅使用有界后台控制线程轮询（默认 1s），只在视图变化时投递完整快照，恢复后即使视图未变也更新同步健康。不声明全局 Revision。close 停止续约、注销本实例并释放连接。Consumer-only 必须保持空 Service Address 和 0 端口，从不创建 RpcEndpoint。
+每个订阅使用有界后台控制线程轮询（默认 1s），只在视图变化时投递完整快照，恢复后即使视图未变也更新同步健康。不声明全局 Revision。close 停止续约、注销本实例并释放连接。Consumer-only 的 Agent 注册请求必须保持空 Service Address 和 0 端口；Consul Health 查询可能把空地址展开为 Node.Address，但解码只要求 Port=0、Role=CONSUMER、Weight=0 且无 Manifest，永不创建 RpcEndpoint。
 
 ## 3. Consul CAS + Session Fencing
 

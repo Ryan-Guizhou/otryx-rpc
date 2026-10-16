@@ -63,6 +63,10 @@ class ConsulV2ModelTest {
         Map<String, Object> raw = ConsulV2MemberCodec.encode(consumer("consumer-one"), "inc1", 30);
         JsonNode healthy = healthy(raw);
         assertEquals(consumer("consumer-one"), ConsulV2MemberCodec.decode(APP, healthy));
+        Map<String, Object> nodeAddress = new HashMap<>(raw);
+        nodeAddress.put("Address", "127.0.0.1");
+        assertEquals(consumer("consumer-one"), ConsulV2MemberCodec.decode(APP, healthy(nodeAddress)));
+        assertFalse(ConsulV2MemberCodec.decode(APP, healthy(nodeAddress)).routableProvider());
         Map<String, Object> forged = new HashMap<>(raw);
         forged.put("Port", 19090);
         assertThrows(IllegalArgumentException.class, () ->
