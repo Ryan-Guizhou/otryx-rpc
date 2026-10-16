@@ -113,7 +113,11 @@ class ConsulV2ModelTest {
                 () -> ConsulV2MemberCodec.encode(member, "inc", 30));
     }
 
-    private static JsonNode healthy(Map<String, Object> service) {
+    private static JsonNode healthy(Map<String, Object> registration) {
+        // Consul Agent register uses Name, while /v1/health/service uses Service.Service.
+        Map<String, Object> service = new HashMap<>(registration);
+        Object name = service.remove("Name");
+        service.put("Service", name);
         return MAPPER.valueToTree(Map.of(
                 "Service", service,
                 "Node", Map.of("Address", "127.0.0.1"),

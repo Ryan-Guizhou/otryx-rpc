@@ -39,6 +39,7 @@ final class ConsulV2MemberCodec {
     private static final String FIELD_META = "Meta";
     private static final String FIELD_ID = "ID";
     private static final String FIELD_NAME = "Name";
+    private static final String FIELD_HEALTH_SERVICE_NAME = "Service";
     private static final String FIELD_ADDRESS = "Address";
     private static final String FIELD_PORT = "Port";
     private static final String FIELD_STATUS = "Status";
@@ -112,7 +113,7 @@ final class ConsulV2MemberCodec {
         }
         if (!application.namespace().equals(meta.path(META_NAMESPACE).asText())
                 || !application.applicationName().equals(meta.path(META_APPLICATION).asText())
-                || !ConsulV2Keys.serviceName(application).equals(service.path(FIELD_NAME).asText())) {
+                || !ConsulV2Keys.serviceName(application).equals(service.path(FIELD_HEALTH_SERVICE_NAME).asText())) {
             throw new IllegalArgumentException("Consul application membership identity mismatch");
         }
         JsonNode checks = item.path(FIELD_CHECKS);
