@@ -7,6 +7,7 @@ import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
 import com.peachsoft.otryx.registry.ApplicationManifestRepository;
+import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationRegistrar;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
@@ -50,7 +51,8 @@ import org.slf4j.LoggerFactory;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/16 15:00
  */
-public final class ConsulApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar {
+public final class ConsulApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar,
+        ApplicationMetadataBackend {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ConsulApplicationRegistry.class);
     private static final RegistryCapabilities CAPABILITIES = RegistryCapabilities.of(

@@ -8,6 +8,8 @@ import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
+import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
+import com.peachsoft.otryx.registry.ServiceMappingOwnerSnapshot;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -39,7 +41,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/16 15:00
  */
-public final class ConsulServiceMappingRepository implements ServiceMappingRepository {
+public final class ConsulServiceMappingRepository implements ServiceMappingRepository, ServiceMappingCandidateSource {
 
     private static final String FIELD_FORMAT = "format";
     private static final String FIELD_NAMESPACE = "namespace";
@@ -176,37 +178,56 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
         Objects.requireNonNull(key, "key");
         identity.requireNamespace(key.namespace());
         return executor.submit("mapping-lookup", () -> {
-            List<ConsulV2Client.KvEntry> entries = client.list(identity.ownersPrefix());
-            Map<ApplicationKey, Set<String>> claimed = new HashMap<>();
-            long maximumIndex = 0;
-            for (ConsulV2Client.KvEntry entry : entries) {
-                OwnerState state = decode(entry.value(), null, null);
-                String expectedKey = identity.ownerKey(state.owner().application(), state.owner().instanceId());
-                if (!entry.key().equals(expectedKey)) {
-                    throw new IllegalArgumentException("Consul Owner KV identity mismatch");
-                }
-                maximumIndex = Math.max(maximumIndex, entry.modifyIndex());
-                if (state.services().contains(key.serviceKey())) {
-                    claimed.computeIfAbsent(state.owner().application(), ignored -> new HashSet<>())
-                            .add(state.owner().instanceId());
-                }
-            }
+            ServiceMappingOwnerSnapshot candidates = scanOwnerCandidates(key);
             Set<ApplicationKey> healthy = new HashSet<>();
-            if (claimed.size() > ServiceMappingSnapshot.MAX_APPLICATIONS) {
-                throw new IllegalStateException("Consul mapping candidate fanout exceeded");
-            }
-            for (Map.Entry<ApplicationKey, Set<String>> candidate : claimed.entrySet()) {
+            for (Map.Entry<ApplicationKey, Set<String>> candidate : candidates.ownerInstances().entrySet()) {
                 for (ApplicationInstance instance : liveMembers(candidate.getKey())) {
-                    if (instance.routableProvider() && candidate.getValue().contains(instance.instanceId())) {
+                    if (instance.routableProvider()
+                            && candidate.getValue().contains(instance.instanceId())) {
                         healthy.add(candidate.getKey());
                         break;
                     }
                 }
             }
-            long highWatermark = maximumIndex;
-            long revision = localRevision.updateAndGet(previous -> Math.max(previous + 1, highWatermark));
-            return new ServiceMappingSnapshot(key, healthy, revision);
+            return new ServiceMappingSnapshot(key, healthy, candidates.revision());
         });
+    }
+
+    /**
+     * 读取未按当前 Consul 成员过滤的 Owner 快照，用于 Eureka 等独立成员注册中心。
+     *
+     * @param key 命名空间和完整 ServiceKey
+     * @return 必须与权威注册中心实际 Provider instanceId 交叉验证的候选快照
+     */
+    @Override
+    public CompletionStage<ServiceMappingOwnerSnapshot> lookupCandidateOwners(ServiceMappingKey key) {
+        Objects.requireNonNull(key, "key");
+        identity.requireNamespace(key.namespace());
+        return executor.submit("mapping-candidates", () -> scanOwnerCandidates(key));
+    }
+
+    private ServiceMappingOwnerSnapshot scanOwnerCandidates(ServiceMappingKey key) throws Exception {
+        List<ConsulV2Client.KvEntry> entries = client.list(identity.ownersPrefix());
+        Map<ApplicationKey, Set<String>> claimed = new HashMap<>();
+        long maximumIndex = 0;
+        for (ConsulV2Client.KvEntry entry : entries) {
+            OwnerState state = decode(entry.value(), null, null);
+            String expectedKey = identity.ownerKey(state.owner().application(), state.owner().instanceId());
+            if (!entry.key().equals(expectedKey)) {
+                throw new IllegalArgumentException("Consul Owner KV identity mismatch");
+            }
+            maximumIndex = Math.max(maximumIndex, entry.modifyIndex());
+            if (state.services().contains(key.serviceKey())) {
+                claimed.computeIfAbsent(state.owner().application(), ignored -> new HashSet<>())
+                        .add(state.owner().instanceId());
+            }
+        }
+        if (claimed.size() > ServiceMappingSnapshot.MAX_APPLICATIONS) {
+            throw new IllegalStateException("Consul mapping candidate fanout exceeded");
+        }
+        long watermark = maximumIndex;
+        long revision = localRevision.updateAndGet(previous -> Math.max(previous + 1, watermark));
+        return new ServiceMappingOwnerSnapshot(key, claimed, revision);
     }
 
     private List<ApplicationInstance> liveMembers(ApplicationKey application) throws Exception {

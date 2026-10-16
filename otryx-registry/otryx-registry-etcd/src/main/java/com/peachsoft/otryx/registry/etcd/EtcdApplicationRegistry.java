@@ -9,6 +9,7 @@ import com.peachsoft.otryx.observability.RpcRegistryOperation;
 import com.peachsoft.otryx.observability.RpcRegistryRecoveryAction;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
 import com.peachsoft.otryx.registry.ApplicationManifestRepository;
+import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationRegistrar;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
@@ -67,7 +68,8 @@ import org.slf4j.LoggerFactory;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/16 10:33
  */
-public final class EtcdApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar {
+public final class EtcdApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar,
+        ApplicationMetadataBackend {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(EtcdApplicationRegistry.class);
     private static final int MAX_APPLICATION_MEMBERS = 256;
