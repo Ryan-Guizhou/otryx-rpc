@@ -154,7 +154,11 @@ final class ConsulV2MemberCodec {
             // Consul Health may expand the Agent's empty Address to its Node.Address.
             // Port=0 and role=CONSUMER are authoritative: never create an RpcEndpoint.
             if (port != 0 || meta.has(META_REVISION) || weight != 0) {
-                throw new IllegalArgumentException("Consul consumer-only member advertises a Provider endpoint");
+                // Safe boolean-only diagnostics: never include untrusted metadata or addresses.
+                throw new IllegalArgumentException(
+                        "Consul consumer-only endpoint invariant failed: portNonZero=" + (port != 0)
+                                + ", manifestPresent=" + meta.has(META_REVISION)
+                                + ", weightNonZero=" + (weight != 0));
             }
             rpcEndpoint = null;
             revision = null;
