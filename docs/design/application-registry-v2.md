@@ -330,3 +330,8 @@ sequenceDiagram
 实现 `NacosApplicationRegistry`、`NacosApplicationRegistryFactory`、`NacosApplicationManifestRepository` 与 `NacosServiceMappingRepository`，Naming 使用应用 ServiceName，Provider/Consumer/BOTH 均有真实应用成员；纯 Consumer 借助 Nacos 允许的 0 端口与真实主机 IP 表示心跳，不能进入 RPC Endpoint 列表。Config 采用内容寻址 Manifest 与分片 MD5-CAS Mapping Generation，严格容量和权威 MD5，所有阻塞 SDK 调用在有界控制面线程执行。配置和限制详见 [Nacos V2](../reference/registry-nacos-v2.md)。
 
 此阶段新增 V2 后端而不启用双读/双写；旧 `NacosRegistry` 仍仅是 #139 前的过渡源码，Starter/Quickstart 使用 V2 的正式装配需要 #137–#138。
+
+
+## V2-10 单一 Starter 装配（#137，开发中）
+
+Spring 层复用 Core `ApplicationMembershipCoordinator` 和 `ApplicationServiceResolver`：使用 `spring.application.name` 或显式 `registry.application-name`、固定单进程 `instance-id`、默认 `default` Namespace、共享唯一 `ApplicationRegistry` 和有界 Mapping/Manifest Cache。按实际 Consumer/Provider/BOTH 创建成员；禁止退回旧接口级注册，缺失 Registry Metadata Backend 或安全 Profile 时 fail-fast。Eureka 采用独立 Member Registry 与 Etcd/Nacos/Consul CAS Metadata。Starter 默认仍不依赖外部 SDK。完整生命周期与代码验收以 #137 的 PR Head 和 main Push CI 为准。

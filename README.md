@@ -43,7 +43,7 @@
 
 **设计原则：** 控制面与数据面分离；可替换实现位于 Adapter/SPI；单次调用热路径不做注册中心 IO、SPI 扫描和动态解析。
 
-**V2 应用级注册改造（进行中）：** 已具备 Provider/Consumer 共同的 Application 身份、Manifest/ServiceMapping、Memory 应用成员与有界映射缓存。Core Client/Server 已增加应用成员生命周期与基于 Manifest/Schema 的 Provider 本地解析通路，程序化装配可验证三接口 RPC。**Etcd 已新增独立的 V2 应用级成员/Manifest/Mapping Adapter**，但旧 Etcd SPI 仍因分阶段迁移暂留；Nacos 已新增独立应用级 Naming/Config V2 后端；Consul V2 应用成员/Manifest/Mapping Adapter 正在 #135 独立开发并等待真实后端验收；Eureka 应用级 Member + 外置元数据 Adapter 正在 #136 开发、等待真实 Server 验证；Spring Starter/Quickstart 仍待接入；#135–#139 负责其余后端、Starter 接线与最终清理，不能将 Core 的新通路等同于 V2 全面上线。[设计与状态](docs/design/application-registry-v2.md)。
+**V2 应用级注册改造（进行中）：** Core 已具备统一 Application 身份、共享 Provider/Consumer 成员生命周期、Manifest、按实例 CAS Mapping、服务发现 Resolver 及有界缓存。Memory、Etcd、Nacos、Consul（#135）、Eureka + 外置元数据（#136）的应用级 Adapter 已开发并完成各自 Issue 验收；其中 Consul 与 Eureka 具备真实容器 E2E/故障测试。单一 Spring Starter 的 V2 自动装配正在 #137 改造，独立 JVM Quickstart 与彻底删除旧接口级 SPI 仍由 #138、#139 承担，**全仓尚不可称已正式切换 V2**。[设计与进度](docs/design/application-registry-v2.md)。
 
 <!-- doc-section:compatibility -->
 ## 兼容性与迁移
@@ -132,4 +132,4 @@ V2 Etcd 应用级控制面的独立使用见 [Etcd](docs/reference/registry-etcd
 
 ## Registry Freshness / 服务发现可靠性
 
-Consumer 可选设置 `otryx.rpc.client.directory-max-staleness`，在 Registry **显式同步失败**且 LKG 超时后拒绝过期路由；默认不限制。Etcd、Nacos、Consul/Eureka 已实现健康通知与有界恢复。真实独立 JVM Nacos 重启验收和边界见 [Registry 健康与故障恢复](docs/reference/registry-freshness.md)。
+Spring Starter V2 默认 `otryx.rpc.client.directory-max-staleness=30s`，在 Registry **显式同步失败**且 LKG 超时后拒绝过期路由；应用级 Consumer 禁止显式 `0s` 无限 LKG。Etcd、Nacos、Consul/Eureka 已实现健康通知与有界恢复。真实独立 JVM Nacos 重启验收和边界见 [Registry 健康与故障恢复](docs/reference/registry-freshness.md)。

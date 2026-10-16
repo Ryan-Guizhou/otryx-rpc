@@ -26,7 +26,7 @@
 </dependency>
 ```
 
-Etcd、Consul/Eureka、CGLIB、ByteBuddy 或遥测模块也按照需求独立引入：`otryx-registry-etcd`、`otryx-registry-consul`、`otryx-registry-eureka`、`otryx-proxy-cglib`、`otryx-proxy-bytebuddy`。Consul/Eureka 通过 `otryx-registry-http` 共享协议实现，无需自己重复添加 HTTP 子模块。SPI 自动发现实际安装的 Adapter；`registry.type=nacos` 却没有 `otryx-registry-nacos` 将在启动时明确失败。
+Etcd、Consul/Eureka、CGLIB、ByteBuddy 或遥测模块也按照需求独立引入：`otryx-registry-etcd`、`otryx-registry-consul`、`otryx-registry-eureka`、`otryx-proxy-cglib`、`otryx-proxy-bytebuddy`。新应用级 Consul/Eureka 使用自身 V2 控制面；`otryx-registry-http` 仅用于待 #139 删除的旧接口级实现，不应作为新应用注册 SPI。SPI 自动发现实际安装的 Adapter；`registry.type=nacos` 却没有 `otryx-registry-nacos` 将在启动时明确失败。
 
 单一 Starter 只是依赖汇总，不复制运行时实现；Bean 自动装配与注解生命周期始终由 `otryx-spring-boot-autoconfigure` 提供。下图表示**默认依赖与显式可选依赖的边界**：
 
@@ -58,6 +58,33 @@ mvn -B -ntp -pl otryx-spring-boot-autoconfigure -am \
 
 这是源码测试命令。若业务项目单独引用单一 Starter，需先引入双方共享的 RPC 接口定义，然后分别声明 `@OtryxRpcService` 和 `@OtryxRpcReference`，单 JVM 内存模式适合本地冒烟，跨进程生产环境必须换用 Etcd、Nacos、Consul、Eureka 或等价的共享注册中心。
 
+### 1.3 V2 应用级身份、生命周期与路由
+
+`spring.application.name` 是默认 ApplicationName。也可以用 `otryx.rpc.registry.application-name` 显式覆盖；两者均未配置时直接拒绝启动，不会猜测历史 ServiceKey 或使用默认接口名。Namespace 默认为 `default`，可显式覆盖；`instance-id` 默认启动时生成一次 UUID，部署可设置稳定且全局唯一的实例 ID。
+
+```yaml
+spring:
+  application:
+    name: order-service
+otryx:
+  rpc:
+    security-profile: TRUSTED_DEVELOPMENT # 仅本地隔离
+    registry:
+      type: memory
+      namespace: demo
+      instance-id: local-order-node-1
+```
+
+- **Consumer-only**：仅在注入 `@OtryxRpcReference` 或程序化创建 Client 时注册真实 `ApplicationRole.CONSUMER` 成员；无监听端口、不产生虚构的 RPC Endpoint。没有实际引用时不提前打开 RPC Client。
+- **Provider-only**：业务接口先完成绑定，发布不可变 Manifest 和该实例唯一的 CAS Mapping Owner，监听真正 Ready 后注册 `PROVIDER` 成员。服务数量只增加 Manifest 导出记录，不增加成员数。
+- **BOTH**：同一个 Spring 进程只创建一个 `ApplicationMembershipCoordinator` 和固定 `ApplicationKey+instanceId`，在 Consumer/Provider 两角色就绪后升级为一个 `BOTH` 成员；停止 Provider 时保持真实 Consumer 成员、撤销 Provider Owner。
+- **Discovery**：`ServiceMappingCache` → `ApplicationDirectory` → `ManifestSnapshotCache` → Schema/Wire → 已验证 Provider 列表；RPC 调用数据面只能使用本地已验证路由，Registry/KV 请求全部经限额控制面执行。
+- **Lifecycle**：关闭阶段先排空 Provider，然后在有限预算内注销共享成员并撤销 Mapping；异步失败会告警，无法保证网络断开时立即清理。具体成员最终由后端租约收敛。
+
+**Eureka 特别说明**：Eureka 只管理应用成员，不能存储原子 Manifest/Mapping；必须显式声明 `otryx.rpc.registry.eureka.metadata-backend`（`etcd`、`nacos` 或 `consul`）及独立的 `metadata-endpoints` 并加入对应 Adapter 依赖。外置元数据后端不会额外注册同一业务实例。纯 Consumer 的 Eureka Port 保持 disabled。必要时使用 `metadata-options` 传递后端 ACL Token 等敏感配置，不要写进 README 或日志。
+
+**重要**：本文描述 #137 Starter 迁移的目标实现和验收边界；仍需以 PR Head 和合并后 main CI 实证确认。现存旧接口级 SPI 的彻底删除由 #139 执行。全部示例配置仍不能替代生产 mTLS/Codec allowlist 和方法授权策略。
+
 ## 2. Provider
 
 ```java
@@ -67,6 +94,9 @@ public class OrderServiceImpl implements OrderService {
 ```
 
 ```yaml
+spring:
+  application:
+    name: order-service
 otryx:
   rpc:
     registry:
@@ -82,7 +112,7 @@ otryx:
       advertised-host: 10.0.0.15
 ```
 
-存在 `@OtryxRpcService` 时才会创建 Provider 运行时，并在 `SmartLifecycle` 阶段统一启动。当前 Registry 必须暴露 `ServiceRegistrar`；discovery-only Registry 会 fail-fast。`@OtryxRpcService` 不允许使用 lazy 或非 singleton Bean，以保证全部服务在 Server 启动前完成绑定。
+存在 `@OtryxRpcService` 时才会创建 Provider 运行时，并在 `SmartLifecycle` 阶段统一启动。当前 Registry 必须通过 V2 `ApplicationRegistry.registrar()` 暴露 `ApplicationRegistrar`，且关联 `ApplicationMetadataBackend` Manifest/Mapping；任一依赖缺失即 fail-fast。`@OtryxRpcService` 不允许使用 lazy 或非 singleton Bean，以保证全部服务在 Server 启动前完成绑定。
 
 Provider 方法默认执行在虚拟线程。CPU 密集方法可以显式声明：
 
@@ -164,11 +194,13 @@ public interface OrderService {
 - `otryx.rpc.enabled`：总开关。
 - `otryx.rpc.registry.type`：`memory`、`etcd`、`nacos`、`consul` 或 `eureka`，也可以是自定义 SPI 名称。
 - `otryx.rpc.registry.endpoints`：默认空，由 Adapter 决定；Etcd 默认 `http://127.0.0.1:2379`，Nacos 默认 `127.0.0.1:8848`。
-- `otryx.rpc.registry.namespace`：默认空，由 Adapter 决定；Etcd 默认 `default`，Nacos 默认 `public`。
+- `otryx.rpc.registry.namespace`：Spring Starter 默认 `default`；不同 Provider/Consumer 必须一致。独立手动创建的 Adapter 可能有专用 Namespace 默认值，两者不可混为一谈。
+- `otryx.rpc.registry.application-name`：覆盖 `spring.application.name`；若两者均空则 fail-fast。`otryx.rpc.registry.instance-id`：显式固定当前进程实例 ID，未配置时启动生成一次随机 UUID。
+- `otryx.rpc.registry.nacos.member-host`：纯 Consumer 在 Nacos 中使用的真实主机 IP，不是可调用 RPC Endpoint。
 - `otryx.rpc.registry.nacos.group` / `cluster`：Nacos 管理分组与集群，默认 `OTRYX_RPC` / `DEFAULT`；RPC 接口自身的 group 仍属于 `ServiceKey`，两者不是同一概念。
 - `otryx.rpc.registry.nacos.username` / `password`：Nacos 用户名密码；日志和异常不得输出密码。
 - `otryx.rpc.registry.consul.*`：ACL Token、TTL、心跳、轮询、请求超时、Datacenter/Enterprise namespace，详见 [Consul](registry-consul.md)。
-- `otryx.rpc.registry.eureka.*`：Basic Auth、Lease、心跳、轮询、请求超时，详见 [Eureka](registry-eureka.md)。
+- `otryx.rpc.registry.eureka.*`：Basic Auth、Lease、心跳、轮询、请求超时、真实 `member-host`、强制 `metadata-backend` 和 `metadata-endpoints`。外置 Metadata 选项用 `metadata-options` 传递；详见 [Eureka V2](registry-eureka-v2.md)。
 - `otryx.rpc.transport.type`：默认 `vertx`。
 - `otryx.rpc.transport.handshake-timeout`：协议握手超时，默认 3 秒。
 - `otryx.rpc.transport.connections-per-endpoint`：每个服务端点连接分片数，默认 1。
@@ -185,6 +217,7 @@ public interface OrderService {
 - `otryx.rpc.transport.security.reload-interval`：证书文件变化检查周期，默认 30 秒。
 - `otryx.rpc.transport.security.expiry-warning-threshold`：证书过期前告警窗口，默认 7 天。
 - `otryx.rpc.client.enabled`：默认 true，表示允许 Consumer；没有 `@OtryxRpcReference` 时不会创建连接。
+- `otryx.rpc.client.directory-max-staleness`：应用级 V2 的 LKG 同步故障允许陈旧期限，Spring 默认 **30 秒**。显式设为 `0s`（无限 LKG）且使用 Consumer 时会 fail-fast；不得以历史旧默认推断 V2 安全边界。
 - `otryx.rpc.server.enabled`：默认 true，表示允许 Provider；没有 `@OtryxRpcService` 时不会监听端口。
 - `otryx.rpc.client.proxy`：Generated Stub 缺失时的 fallback，默认 `jdk`；可显式选择 `cglib` 或可选 Byte Buddy 模块提供的 `bytebuddy`。
 - `otryx.rpc.client.load-balancer`：默认 `p2c-ewma`。
@@ -267,7 +300,7 @@ Core 的 `RpcObserver`、`RpcTracingBridge`、`RpcMetadataPropagator` 不依赖�
 
 ## 9. Bean 覆盖
 
-自动配置对 Registry、Codec Registry、TransportFactory、LoadBalancer、ProxyFactory、Client、Server 均使用 `@ConditionalOnMissingBean`，业务项目可以通过声明同类型 Bean 覆盖默认装配。
+自动配置对 ApplicationRegistry、MembershipCoordinator、Resolver、Codec Registry、TransportFactory、LoadBalancer、ProxyFactory、Client、Server 均使用 `@ConditionalOnMissingBean`，业务项目可以通过声明同类型 Bean 覆盖默认装配。
 
 ## 10. 启动 Fail-fast 与脱敏诊断
 

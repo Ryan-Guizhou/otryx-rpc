@@ -3,12 +3,15 @@ package com.peachsoft.otryx.registry.memory;
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
+import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
+import com.peachsoft.otryx.registry.ApplicationManifestRepository;
 import com.peachsoft.otryx.registry.ApplicationRegistrar;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
 import com.peachsoft.otryx.registry.RegistryCapabilities;
 import com.peachsoft.otryx.registry.RegistryCapability;
 import com.peachsoft.otryx.registry.RegistrySubscription;
+import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -33,7 +36,8 @@ import org.slf4j.LoggerFactory;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/15 18:30
  */
-public final class MemoryApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar {
+public final class MemoryApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar,
+        ApplicationMetadataBackend {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MemoryApplicationRegistry.class);
     private static final int MAX_APPLICATIONS = 512;
@@ -49,6 +53,8 @@ public final class MemoryApplicationRegistry implements ApplicationRegistry, App
             RegistryCapability.HEALTH);
 
     private final Object monitor = new Object();
+    private final MemoryApplicationManifestRepository manifests = new MemoryApplicationManifestRepository();
+    private final MemoryServiceMappingRepository mappings = new MemoryServiceMappingRepository();
     private final Map<ApplicationKey, Map<String, ApplicationInstance>> directories = new HashMap<>();
     private final Map<ApplicationKey, List<Subscriber>> subscriptions = new HashMap<>();
     private int members;
@@ -58,6 +64,26 @@ public final class MemoryApplicationRegistry implements ApplicationRegistry, App
 
     /** 创建一个隔离、初始为空的应用成员注册中心。 */
     public MemoryApplicationRegistry() {
+    }
+
+    /**
+     * 返回与当前内存成员目录共享生命周期的不可变 Manifest 仓库。
+     *
+     * @return 本实例私有的 Manifest 仓库
+     */
+    @Override
+    public ApplicationManifestRepository manifestRepository() {
+        return manifests;
+    }
+
+    /**
+     * 返回本实例私有的 CAS Owner Mapping 仓库，不能跨 JVM 使用。
+     *
+     * @return 本实例私有的 Mapping 仓库
+     */
+    @Override
+    public ServiceMappingRepository serviceMappingRepository() {
+        return mappings;
     }
 
     /**
@@ -238,6 +264,7 @@ public final class MemoryApplicationRegistry implements ApplicationRegistry, App
             subscribers = 0;
         }
         all.forEach(Subscriber::stop);
+        manifests.close();
     }
 
     private static final class Subscriber {
