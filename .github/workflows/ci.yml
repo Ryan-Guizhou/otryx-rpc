@@ -39,12 +39,13 @@ jobs:
         shell: bash
         run: |
           for attempt in {1..60}; do
-            if timeout 1 bash -c '</dev/tcp/127.0.0.1/8848' 2>/dev/null; then
+            if timeout 1 bash -c '</dev/tcp/127.0.0.1/8848' 2>/dev/null \
+                && timeout 1 bash -c '</dev/tcp/127.0.0.1/9848' 2>/dev/null; then
               exit 0
             fi
             sleep 2
           done
-          echo "Nacos did not open port 8848 in time"
+          echo "Nacos did not open ports 8848/9848 in time"
           exit 1
 
       - name: Repository checks
@@ -52,6 +53,9 @@ jobs:
 
       - name: Verify the single Starter and runnable Quickstart contract
         run: python3 scripts/test_quickstart_layout.py
+
+      - name: Verify Quickstart snapshot and process orchestration failure contracts
+        run: python3 scripts/test_quickstart_scenarios.py
 
       - name: Verify squash-safe merged branch cleanup
         run: python3 scripts/test_cleanup_merged_branches.py
@@ -164,3 +168,20 @@ jobs:
 
       - name: Verify A-B-C deadline chain across three independent JVMs
         run: bash scripts/run_three_process_deadline_e2e.sh
+
+      - name: Verify two application Manifest revisions and rollback
+        run: bash scripts/run_quickstart_revision_e2e.sh
+
+      - name: Verify mTLS identities and service authorization
+        run: bash scripts/run_quickstart_mtls_e2e.sh
+
+      - name: Upload Quickstart application snapshots and scenario outcomes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickstart-application-evidence-${{ github.run_id }}
+          path: |
+            target/quickstart-e2e/**/*.json
+            target/quickstart-e2e/**/summary.log
+          if-no-files-found: warn
+          retention-days: 14

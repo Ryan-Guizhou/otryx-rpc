@@ -133,7 +133,9 @@ def test_scripts_and_documentation() -> None:
     """Old module links are forbidden in active entrypoints."""
     scripts = (
         "run_quickstart_memory.sh", "run_quickstart_process_e2e.sh",
-        "run_three_process_deadline_e2e.sh",
+        "run_three_process_deadline_e2e.sh", "run_quickstart_revision_e2e.sh",
+        "run_quickstart_mtls_e2e.sh", "run_quickstart_e2e.sh",
+        "observe_quickstart_nacos.sh", "quickstart_e2e_common.sh",
     )
     for script in scripts:
         path = ROOT / "scripts" / script
@@ -159,6 +161,8 @@ def test_scripts_and_documentation() -> None:
             "otryx-quickstart-memory", "otryx-quickstart-provider",
             "otryx-quickstart-consumer", "run_quickstart_memory.sh",
             "run_three_process_deadline_e2e.sh", "NETWORK_MTLS",
+            "run_quickstart_revision_e2e.sh", "run_quickstart_mtls_e2e.sh",
+            "run_quickstart_e2e.sh", "observe_quickstart_nacos.sh",
         ):
             assert term in text, (readme, term)
 

@@ -43,7 +43,7 @@
 
 **设计原则：** 控制面与数据面分离；可替换实现位于 Adapter/SPI；单次调用热路径不做注册中心 IO、SPI 扫描和动态解析。
 
-**V2 应用级注册改造（进行中）：** Core 已具备统一 Application 身份、共享 Provider/Consumer 成员生命周期、Manifest、按实例 CAS Mapping、服务发现 Resolver 及有界缓存；Memory、Etcd、Nacos、Consul（#135）、Eureka + 外置元数据（#136）的应用级 Adapter 已实现。当前 #137 分支将单一 Spring Starter 接入同一套应用控制面：一个进程实例共享一条成员记录，Consumer 入册成功后才完成运行时创建，关闭时有界等待 Client/Provider 后清理共享成员。#137 的验收仍以准确 PR Head 与合并后 main CI 为准；Quickstart 完整改写和旧接口级 SPI 删除仍由 #138、#139 承担，**全仓尚不可称已正式完成 V2 迁移**。[设计与进度](docs/design/application-registry-v2.md)。
+**V2 应用级注册改造（进行中）：** Core 已具备统一 Application 身份、共享 Provider/Consumer 成员生命周期、Manifest、按实例 CAS Mapping、服务发现 Resolver 及有界缓存；Memory、Etcd、Nacos、Consul（#135）、Eureka + 外置元数据（#136）的应用级 Adapter 已实现。已合并的 #137 将单一 Spring Starter 接入同一套控制面：一个进程实例共享一条成员记录，纯 Consumer 无 RPC Endpoint，关闭时有界清理 Client/Provider 与共享成员。#138 在原有四个 Quickstart 模块中提供成员诊断、两个真实 Manifest revision 和 mTLS 授权教程；验收以对应准确 Head 的真实结果为准。旧接口级 SPI 的全量删除仍归 #139，**全仓尚不可称已正式完成 V2 迁移**。[设计与进度](docs/design/application-registry-v2.md)。
 
 <!-- doc-section:compatibility -->
 ## 兼容性与迁移
@@ -69,9 +69,15 @@ Java 包名参与类型规范名、Method ID 和 Schema Fingerprint 计算，故
 
 Windows CMD/PowerShell 使用 `mvnw.cmd` 替代 `./mvnw`，无需预装全局 Maven。
 
-推荐先运行**无 Docker 的单 JVM Memory Quickstart**，再运行 Nacos 双独立进程与 A→B→C Deadline，见 [otryx-quickstart](otryx-quickstart/README.md)；详细启动方式见 [快速入门](docs/getting-started.md)。Consumer 示例内的 `QuickstartCallObserver` 演示可验证的自定义遥测 SPI 注入。
+推荐从**无 Docker 的单 JVM Memory Quickstart**开始，继续学习 Nacos 应用成员与已验证路由、A→B→C 的 BOTH 角色和 Deadline、同一应用两个真实导出 revision 的升级/回滚，以及 mTLS 客户端指纹与方法授权。完整命令、JSON 字段和预期结果见 [Quickstart 教程](otryx-quickstart/README.md)；简版路线见 [快速入门](docs/getting-started.md)。
 
-这些现有演示不代表 #138 的 V2 Quickstart 完整改写和验收已完成；#137 的 Starter 行为与源码测试入口见 [Starter 文档](docs/reference/starter.md)。
+构建完成并准备好本地 Nacos、Bash、Python 3、GNU `timeout` 和 OpenSSL 后，可顺序运行全部场景：
+
+~~~bash
+NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
+~~~
+
+跨进程场景自动初始化各自的独立 Nacos group。受限字段的 JSON 快照和 `summary.log` 保存在 `target/quickstart-e2e/`，不会将临时私钥保存为证据。此命令验证当前版本的行为，不代表生产容量、正式发布或 #139 旧路径删除已完成。Consumer 的 `QuickstartCallObserver` 另演示自定义遥测 SPI；装配与扩展见 [Starter 文档](docs/reference/starter.md)。
 
 <!-- doc-section:dependency -->
 ## Maven 坐标
@@ -108,7 +114,7 @@ otryx:
 
 `spring.application.name` 是默认应用身份；可用 `otryx.rpc.registry.application-name` 覆盖，均未配置时启动失败。`registry.control-plane-timeout` 独立于 `server.control-plane-timeout`，默认 `3s`，必须大于零且不超过 `30s`，约束共享成员操作和 Consumer 入册等待。未创建实际 Consumer/Provider 时不会产生虚构成员。
 
-实际网络部署必须显式选择 `NETWORK_MTLS`，同时配置双向 TLS、Fory 严格 DTO 白名单；可注入 `RpcAuthorizer` 对已验证证书身份按 ServiceKey/MethodId 授权。未指定安全意图会在 Spring 启动阶段失败；开发示例的 `TRUSTED_DEVELOPMENT` 不适用于不可信网络，详见[安全指南](docs/security.md)。
+实际网络部署必须显式选择 `NETWORK_MTLS`，同时配置双向 TLS、Fory 严格 DTO 白名单，并通过 `RpcAuthorizer` 对已验证证书身份按 ServiceKey/MethodId 授权；未提供授权器时 Provider 默认拒绝调用。未指定安全意图会在 Spring 启动阶段失败；开发示例的 `TRUSTED_DEVELOPMENT` 不适用于不可信网络，详见[安全指南](docs/security.md)。
 
 已实现的应用级后端见 [Etcd](docs/reference/registry-etcd.md)、[Nacos V2](docs/reference/registry-nacos-v2.md)、[Consul V2](docs/reference/registry-consul-v2.md) 和 [Eureka V2](docs/reference/registry-eureka-v2.md)。Consul 使用单个本地 Agent；Eureka 负责应用成员，必须另外配置 Etcd/Nacos/Consul 元数据后端与地址。Starter 不回退到旧接口级 Adapter，也不提供双读双写模式。
 
