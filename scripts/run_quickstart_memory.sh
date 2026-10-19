@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Process-recovery controls are not Memory application configuration properties.
+unset OTRYX_RPC_E2E_RESTART_NACOS OTRYX_RPC_E2E_MAX_STALENESS
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-memory/target" \
   -maxdepth 1 -name '*-exec.jar' -print -quit)"

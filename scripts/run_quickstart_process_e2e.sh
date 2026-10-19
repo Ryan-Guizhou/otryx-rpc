@@ -1,210 +1,136 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROVIDER_JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-provider/target" \
-  -maxdepth 1 -name '*-exec.jar' -print -quit)"
-CONSUMER_JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-consumer/target" \
-  -maxdepth 1 -name '*-exec.jar' -print -quit)"
-NACOS_ENDPOINT="${NACOS_TEST_ENDPOINT:-127.0.0.1:8848}"
-NACOS_NAMESPACE=public
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/quickstart_e2e_common.sh"
 RESTART_NACOS="${OTRYX_RPC_E2E_RESTART_NACOS:-${CI:-false}}"
-# Explicit freshness budget exercises LKG recovery; short outages may never enter STALE.
 MAX_STALENESS="${OTRYX_RPC_E2E_MAX_STALENESS:-3s}"
-# These are script controls, not Spring application configuration keys.
+# These script controls are not Spring configuration keys. Preserve normal application settings.
 unset OTRYX_RPC_E2E_RESTART_NACOS OTRYX_RPC_E2E_MAX_STALENESS
-
-if [[ -z "$PROVIDER_JAR" || -z "$CONSUMER_JAR" ]]; then
-  echo "Executable Quickstart JARs were not found. Build the reactor first." >&2
-  exit 1
-fi
-
-PROVIDER_LOG="$(mktemp)"
-CONSUMER_LOG="$(mktemp)"
-NACOS_GROUP="OTRYX_RPC_E2E_$(basename "$PROVIDER_LOG")"
+quickstart_prepare process
+PROVIDER_APP=otryx-quickstart-process-provider
+CONSUMER_APP=otryx-quickstart-process-consumer
 PROVIDER_PID=""
-CONSUMER_PID=""
-
-cleanup() {
-  if [[ -n "$CONSUMER_PID" ]]; then
-    kill "$CONSUMER_PID" 2>/dev/null || true
-    wait "$CONSUMER_PID" 2>/dev/null || true
-  fi
-  if [[ -n "$PROVIDER_PID" ]]; then
-    kill "$PROVIDER_PID" 2>/dev/null || true
-    wait "$PROVIDER_PID" 2>/dev/null || true
-  fi
-  rm -f "$PROVIDER_LOG" "$CONSUMER_LOG"
-}
-trap cleanup EXIT
+CONSUMER_LOG="$QUICKSTART_WORK_DIR/consumer.log"
 
 start_provider() {
-  local port="$1"
-  : >"$PROVIDER_LOG"
+  local port="$1" log="$QUICKSTART_WORK_DIR/provider-$1.log"
   java -jar "$PROVIDER_JAR" \
+    --spring.application.name="$PROVIDER_APP" \
+    --otryx.rpc.registry.application-name="$PROVIDER_APP" \
+    --otryx.rpc.registry.instance-id=provider-main \
     --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
     --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
     --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+    --otryx.rpc.quickstart.role=leaf \
+    --otryx.rpc.quickstart.details-enabled=false \
     --otryx.rpc.server.port="$port" \
-    --otryx.rpc.server.advertised-port="$port" \
-    >"$PROVIDER_LOG" 2>&1 &
+    --otryx.rpc.server.advertised-port="$port" >"$log" 2>&1 &
   PROVIDER_PID=$!
-
-  # TCP bind happens before registry registration and STARTED state.
-  # Wait for the explicit Provider-ready marker before launching the Consumer.
-  for _ in {1..300}; do
-    if ! kill -0 "$PROVIDER_PID" 2>/dev/null; then
-      echo "Provider process exited before becoming ready." >&2
-      cat "$PROVIDER_LOG" >&2
-      exit 1
-    fi
-    if grep -F "OTRYX RPC server started:" "$PROVIDER_LOG" | \
-        grep -Fq "advertised=127.0.0.1:$port" \
-        && timeout 1 bash -c "</dev/tcp/127.0.0.1/$port" 2>/dev/null; then
-      return
-    fi
-    sleep 0.1
-  done
-
-  echo "Provider was not fully registered and ready on port $port." >&2
-  cat "$PROVIDER_LOG" >&2
-  exit 1
+  quickstart_track_pid "$PROVIDER_PID"
+  quickstart_wait_provider "$PROVIDER_PID" "$log" "$port"
 }
 
-stop_provider() {
-  if [[ -z "$PROVIDER_PID" ]]; then
-    return
-  fi
-  kill "$PROVIDER_PID"
-  wait "$PROVIDER_PID" 2>/dev/null || true
-  PROVIDER_PID=""
-}
-
-success_count() {
-  grep -c "RPC quickstart completed successfully: Hello, OTRYX RPC!" "$CONSUMER_LOG" || true
-}
-
-wait_for_success_count() {
-  local expected="$1"
-  for _ in {1..300}; do
-    local current
-    current="$(success_count)"
-    if (( current >= expected )); then
-      return
-    fi
-    if ! kill -0 "$CONSUMER_PID" 2>/dev/null; then
-      echo "Consumer process exited before recovery completed." >&2
-      break
-    fi
-    sleep 0.1
-  done
-
-  echo "Independent JVM RPC recovery did not complete successfully." >&2
-  echo "----- provider log -----" >&2
-  cat "$PROVIDER_LOG" >&2
-  echo "----- consumer log -----" >&2
-  cat "$CONSUMER_LOG" >&2
-  exit 1
+observe_process() {
+  quickstart_snapshot process "$1" "" "$PROVIDER_APP" "$CONSUMER_APP"
 }
 
 wait_for_nacos_ports() {
-  for _ in {1..180}; do
+  local deadline=$((SECONDS + QUICKSTART_READY_SECONDS))
+  while (( SECONDS < deadline )); do
     if timeout 1 bash -c '</dev/tcp/127.0.0.1/8848' 2>/dev/null \
-        && timeout 1 bash -c '</dev/tcp/127.0.0.1/9848' 2>/dev/null; then
-      return
-    fi
+        && timeout 1 bash -c '</dev/tcp/127.0.0.1/9848' 2>/dev/null; then return 0; fi
     sleep 0.2
   done
   echo "Nacos did not reopen ports 8848/9848 in time." >&2
-  exit 1
+  return 1
 }
 
 probe_fresh_consumer() {
-  local probe_log
-  probe_log="$(mktemp)"
-  local probe_pid=""
-
-  for _ in {1..3}; do
-    : >"$probe_log"
+  local attempt pid log="$QUICKSTART_WORK_DIR/fresh-consumer.log"
+  for attempt in 1 2 3; do
     java -jar "$CONSUMER_JAR" \
+      --spring.application.name=otryx-quickstart-process-fresh-consumer \
+      --otryx.rpc.registry.application-name=otryx-quickstart-process-fresh-consumer \
+      --otryx.rpc.registry.instance-id=fresh-consumer \
       --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
       --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
       --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
       --otryx.rpc.client.directory-max-staleness="$MAX_STALENESS" \
-      >"$probe_log" 2>&1 &
-    probe_pid=$!
-
-    for _ in {1..150}; do
-      if grep -q "RPC quickstart completed successfully: Hello, OTRYX RPC!" "$probe_log"; then
-        kill "$probe_pid" 2>/dev/null || true
-        wait "$probe_pid" 2>/dev/null || true
-        rm -f "$probe_log"
-        return
-      fi
-      if ! kill -0 "$probe_pid" 2>/dev/null; then
-        break
-      fi
-      sleep 0.1
-    done
-
-    kill "$probe_pid" 2>/dev/null || true
-    wait "$probe_pid" 2>/dev/null || true
-    sleep 1
+      --otryx.rpc.quickstart.use-relay=false \
+      --otryx.rpc.quickstart.use-details=false \
+      --otryx.rpc.quickstart.expect-authorization-denied=false \
+      --otryx.rpc.quickstart.repeat-interval-millis=0 >"$log" 2>&1 &
+    pid=$!
+    quickstart_track_pid "$pid"
+    if quickstart_wait_log "$pid" "$log" 'RPC quickstart completed successfully: Hello, OTRYX RPC!'; then
+      quickstart_snapshot process fresh-consumer "" "$PROVIDER_APP" "$CONSUMER_APP" \
+        otryx-quickstart-process-fresh-consumer
+      quickstart_stop_pid "$pid"
+      quickstart_record "A fresh Consumer completed RPC after the registry restart."
+      return 0
+    fi
+    quickstart_stop_pid "$pid"
   done
-
-  echo "A fresh Consumer could not discover the running Provider after Nacos restart." >&2
-  cat "$probe_log" >&2
-  rm -f "$probe_log"
-  exit 1
+  echo "A fresh Consumer could not discover the Provider after Nacos restart." >&2
+  return 1
 }
 
-bash "$ROOT_DIR/scripts/bootstrap_quickstart_nacos.sh" \
-  "$PROVIDER_JAR" "$NACOS_ENDPOINT" "$NACOS_NAMESPACE" "$NACOS_GROUP"
-
+quickstart_bootstrap
 start_provider 19090
-
 java -jar "$CONSUMER_JAR" \
+  --spring.application.name="$CONSUMER_APP" \
+  --otryx.rpc.registry.application-name="$CONSUMER_APP" \
+  --otryx.rpc.registry.instance-id=consumer-main \
   --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
   --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
   --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
   --otryx.rpc.client.directory-max-staleness="$MAX_STALENESS" \
+  --otryx.rpc.quickstart.use-relay=false \
+  --otryx.rpc.quickstart.use-details=false \
+  --otryx.rpc.quickstart.expect-authorization-denied=false \
   --otryx.rpc.quickstart.repeat-interval-millis=200 \
   --otryx.rpc.client.resilience.circuit-open-duration=500ms \
-  --otryx.rpc.client.resilience.outlier-ejection-duration=500ms \
-  >"$CONSUMER_LOG" 2>&1 &
+  --otryx.rpc.client.resilience.outlier-ejection-duration=500ms >"$CONSUMER_LOG" 2>&1 &
 CONSUMER_PID=$!
+quickstart_track_pid "$CONSUMER_PID"
+quickstart_wait_success_count "$CONSUMER_PID" "$CONSUMER_LOG" 1
+observe_process initial
+quickstart_record "Long-lived Consumer started: pid=$CONSUMER_PID instanceId=consumer-main"
 
-wait_for_success_count 1
-
-# Verify transport recovery with the same Consumer JVM.
-stop_provider
-successes_before_provider_restart="$(success_count)"
+# The stopped Provider must leave without removing the independently registered Consumer.
+quickstart_stop_pid "$PROVIDER_PID"
+PROVIDER_PID=""
+observe_process provider-stopped
+successes="$(quickstart_success_count "$CONSUMER_LOG")"
 start_provider 19090
-wait_for_success_count "$((successes_before_provider_restart + 1))"
+quickstart_wait_success_count "$CONSUMER_PID" "$CONSUMER_LOG" "$((successes + 1))"
+observe_process provider-restarted
 
-if [[ "$RESTART_NACOS" == "true" ]]; then
-  nacos_container="$(docker ps --filter 'ancestor=nacos/nacos-server:v3.2.4' --format '{{.ID}}' | head -n 1)"
-  if [[ -z "$nacos_container" ]]; then
-    echo "Nacos container was not found for the recovery E2E." >&2
+if [[ "$RESTART_NACOS" == true ]]; then
+  if [[ "$NACOS_ENDPOINT" != 127.0.0.1:8848 ]]; then
+    echo "The Nacos container restart scenario requires the explicit local test endpoint." >&2
     exit 1
   fi
-
-  # The existing data-plane connection must remain usable while the control plane restarts.
-  successes_before_nacos_restart="$(success_count)"
-  docker restart "$nacos_container" >/dev/null
+  mapfile -t nacos_containers < <(docker ps --filter 'ancestor=nacos/nacos-server:v3.2.4' --format '{{.ID}}')
+  if (( ${#nacos_containers[@]} != 1 )); then
+    echo "Exactly one test Nacos container is required for the recovery E2E." >&2
+    exit 1
+  fi
+  successes="$(quickstart_success_count "$CONSUMER_LOG")"
+  timeout --kill-after=5s 120s docker restart "${nacos_containers[0]}" >/dev/null
   wait_for_nacos_ports
-  wait_for_success_count "$((successes_before_nacos_restart + 1))"
-
-  # A brand-new Consumer can only succeed if the still-running Provider has restored
-  # its ephemeral Nacos registration after the server restart.
+  quickstart_wait_success_count "$CONSUMER_PID" "$CONSUMER_LOG" "$((successes + 1))"
+  observe_process registry-recovered
   probe_fresh_consumer
 
-  # Move the Provider to a different port. The existing Consumer JVM must receive
-  # the recovered Nacos subscription snapshot; a stale 19090 directory cannot pass.
-  stop_provider
-  successes_before_endpoint_change="$(success_count)"
+  # A stale pre-restart directory pointing at 19090 cannot complete this phase.
+  quickstart_stop_pid "$PROVIDER_PID"
+  PROVIDER_PID=""
+  successes="$(quickstart_success_count "$CONSUMER_LOG")"
   start_provider 19091
-  wait_for_success_count "$((successes_before_endpoint_change + 1))"
+  quickstart_wait_success_count "$CONSUMER_PID" "$CONSUMER_LOG" "$((successes + 1))"
+  observe_process endpoint-changed
 fi
 
-echo "Independent JVM RPC recovery succeeded without restarting the long-lived Consumer."
+kill -0 "$CONSUMER_PID"
+quickstart_record "Independent JVM RPC recovery succeeded without restarting the long-lived Consumer."

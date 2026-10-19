@@ -34,6 +34,10 @@
             <groupId>com.peachsoft.otryx</groupId>
             <artifactId>otryx-registry-eureka</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
     </dependencies>
     <build>
         <plugins>
@@ -47,6 +51,7 @@
                         </goals>
                         <configuration>
                             <classifier>exec</classifier>
+                            <mainClass>com.peachsoft.otryx.quickstart.provider.ProviderApplication</mainClass>
                         </configuration>
                     </execution>
                 </executions>

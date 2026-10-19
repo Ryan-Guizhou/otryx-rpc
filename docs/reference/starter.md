@@ -2,7 +2,7 @@
 
 > 当前 Maven 坐标：`com.peachsoft.otryx:otryx-* : 1.0.0-SNAPSHOT`（源码开发版，须本地 install，尚未从 Maven Central 发布）。历史 Peach RPC 1.0.x Java API 不与 OTRYX 1.0 自动兼容。参见[迁移指南](../migration.md)。
 >
-> 本文描述 #137 分支的应用级 Starter 源码行为；测试与合并状态以准确 PR Head 及合并后 main CI 为准。Quickstart 完整改写（#138）和旧接口级 SPI 删除（#139）仍是独立待完成阶段。
+> 本文描述已合并 #137 的应用级 Starter 行为。#138 在同一 Starter 上补齐 Quickstart 成员诊断、真实导出 revision 与 mTLS 授权教程；每次修改的验收仍以准确 PR Head 及合并后 main CI 为准。#139 的全仓旧接口级 SPI 删除尚未完成。
 
 ## 1. 引入
 
@@ -63,6 +63,8 @@ flowchart LR
 ### 1.3 V2 应用级身份、生命周期与路由
 
 `spring.application.name` 是默认 ApplicationName。也可以用 `otryx.rpc.registry.application-name` 显式覆盖；两者均未配置时直接拒绝启动，不会猜测历史 ServiceKey 或使用默认接口名。Namespace 默认为 `default`，可显式覆盖；`instance-id` 默认启动时生成一次 UUID，部署可设置稳定且全局唯一的实例 ID。
+
+当前 Starter 以 `otryx.rpc.registry.namespace` 同时配置后端与 `ApplicationKey.namespace`，未提供或为空时应用 namespace 才回退 `default`。Quickstart Nacos 配置显式使用 `public`，因此其成员 ApplicationKey 也是 `public`；观察 CLI 的 Nacos namespace 与 application namespace 应同时传 `public`。Nacos group 和 ServiceKey group 是独立维度，不用它们代替 ApplicationName。
 
 ```yaml
 spring:
@@ -274,6 +276,8 @@ TCP connect
 
 完整证书校验、在线 Reload、迁移与测试说明见 [TLS / mTLS 安全指南](../security.md)。
 
+可运行的 [Quickstart mTLS 教程](../../otryx-quickstart/README.md#5-mtls已认证证书仍须通过方法授权) 使用现有 Provider/Consumer 的 `mtls` Profile：临时 CA 下的两个客户端都可通过证书信任检查，但仅显式授权的叶子证书指纹可调用指定 Greeting 方法。证书路径变量为 `OTRYX_QUICKSTART_TLS_CERT`、`OTRYX_QUICKSTART_TLS_KEY`、`OTRYX_QUICKSTART_TLS_CA`；旧 `OTRYX_RPC_TLS_*` 环境变量应移除，避免被 Starter 严格配置校验识别为未知键。
+
 ## 7. 可观测性
 
 Core 的 `RpcObserver`、`RpcTracingBridge`、`RpcMetadataPropagator` 不依赖具体观测框架。业务可按需添加 Adapter：
@@ -363,8 +367,11 @@ ServiceKey/MethodId 生成 `RpcAuthorizationContext`；若容器中声明
 授权等待截止时间为客户端剩余预算与服务端策略超时的较短者。
 
 `NETWORK_MTLS` Provider 未声明 `RpcAuthorizer` Bean 时默认拒绝所有方法，
-因此示例 mTLS 仅完成传输安全配置，并不自动授予业务访问；需要声明
-按证书身份和 ServiceKey/MethodId 验证的业务授权 Bean。
+业务须声明按证书身份和 ServiceKey/MethodId 验证的授权 Bean。
+
+Quickstart Provider 在 `mtls` Profile 下提供一个独立示例授权器；它不属于通用 Starter 的默认授权策略。必须设置 `otryx.rpc.quickstart.mtls.allowed-client-sha256` 为允许客户端叶子证书 DER 的 SHA-256（64 个小写十六进制字符、无冒号或首尾空白）。它同时限定 `GreetingService` / `1.0.0` / `default` 与 `hello` MethodId，Details 方法不在授权范围；CN/SAN 和注册中心 attributes 不能代替已验证证书身份。
+
+Consumer 的示例拒绝模式只把精确的 `RpcRemoteException`、`BAD_REQUEST` 和 `RPC authorization denied` 视为预期结果，不能把连接中断、CA/Hostname 校验或 TLS 握手失败算成授权验收成功。自动脚本还验证切回允许客户端后的真实调用成功，见 [Quickstart](../../otryx-quickstart/README.md)。
 
 
 ## 可运行的自定义 Observer 接入示例（U11）
@@ -378,3 +385,5 @@ Consumer 示例中的 [QuickstartCallObserver](../../otryx-quickstart/otryx-quic
 - [QuickstartCallObserverTest](../../otryx-quickstart/otryx-quickstart-consumer/src/test/java/com/peachsoft/otryx/quickstart/consumer/QuickstartCallObserverTest.java) 与 `OtryxRpcAutoConfigurationTest` 校验计数和覆盖行为。
 
 本示例不包含持久化、Exactly-once 审计或网络外部 Exporter；直接在隔离开发环境运行上述双 JVM 示例即可触发回调。
+
+应用注册状态另由 Quickstart 的只读 `QuickstartRegistrySnapshot` CLI 观察，输出指定应用的成员与 Manifest，并查询三个固定 Quickstart 契约的 ServiceMapping 候选与已验证 Provider；服务视图可能包含同 scope 中其他导出相同契约的应用。它不枚举整个注册中心、不创建观察者成员、不导出任意 attributes，也不替代调用遥测或事务快照。命令要求新输出文件，详见 [成员诊断](../../otryx-quickstart/README.md#24-观察真实成员manifest-与-mapping)。
