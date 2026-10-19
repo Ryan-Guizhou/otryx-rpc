@@ -2,7 +2,6 @@ package com.peachsoft.otryx.registry.nacos;
 
 import com.alibaba.nacos.api.NacosFactory;
 import com.alibaba.nacos.api.PropertyKeyConst;
-import com.alibaba.nacos.api.config.ConfigService;
 import com.alibaba.nacos.api.naming.NamingService;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.RpcSecurityProfile;
@@ -86,10 +85,10 @@ public final class NacosApplicationRegistryFactory implements ApplicationRegistr
         }
         Properties props = clientProperties(options, endpoints, namespace);
         NamingService naming = null;
-        ConfigService config = null;
+        NacosConfigOperations config = null;
         try {
             naming = NacosFactory.createNamingService(props);
-            config = NacosFactory.createConfigService(props);
+            config = new NacosConfigClient(props);
             return new NacosApplicationRegistry(naming, config, namespace, group, cluster,
                     host, options.observer(), RegistrySecuritySupport.installed(
                             options.security(), namespace, Optional.of(group),

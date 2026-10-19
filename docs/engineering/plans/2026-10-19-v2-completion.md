@@ -1,6 +1,6 @@
 # V2 剩余工作连续实施计划
 
-> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。2026-10-19（UTC）revision 4 提交前核验：#140 尚未完成；准确 Head 的原始执行结果与 run/check API 状态矛盾分别记录。
+> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。2026-10-19（UTC）revision 5 本地验证完成：#140 尚待准确新 Head 和合并后 main 的完整门禁；原始执行结果与 run/check API 状态矛盾分别记录。
 
 **目标：** 完成应用级注册唯一入口及其生产化能力，保持可运行、可验证、可追溯的主线。
 
@@ -77,7 +77,23 @@
 
 最小修复在两个相关测试中等待既有 `slowInvoked` 业务入口，再发送第二次调用。异步授权完成前，未结束的响应不能证明 admission 已取得；等待真实业务入口建立先后关系，仍能检测提前释放和 CPU worker 被异步 Stage 阻塞。保留全部结果、1 秒响应等待和 lease-release 断言，沿用现有 3 秒入口等待尺度。
 
-`build-55` 的 62 份原始 XML 实际通过 Core 319 项，0 failures/errors/skips，两个目标方法均运行。28.114 秒、684 冻结输入哈希不变、自有 Maven PID 已退出、清理无错误。下一步在同一 PR 发布 revision 4，准确新 Head 的全部相关 CI 与合并后 main 的独立验证均为 **PENDING**。#140 继续保持未完成；#141 仅有只读准备。精确 run/job、原始 ZIP/XML 哈希和恢复动作见[工程断点](../agent-governance-checkpoint.md)。
+`build-55` 的 62 份原始 XML 实际通过 Core 319 项，0 failures/errors/skips，两个目标方法均运行。28.114 秒、684 冻结输入哈希不变、自有 Maven PID 已退出、清理无错误。第四轮已经发布，实际结果见下节；该本地 Core 成功不能替代它的完整 CI。#140 继续保持未完成；#141 仅有只读准备。精确 run/job、原始 ZIP/XML 哈希和恢复动作见[工程断点](../agent-governance-checkpoint.md)。
+
+### 第四轮失败与 revision 5
+
+第四轮准确 Head 为 `27e92a2a5a7b41f38dd7af5a9f67d35431110913`，tree 为 `0349024ef332f4a3033b5d0563702237d84396b0`。[普通 CI 39281775964](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39281775964) 已通过 29 模块、118 份 XML、839 tests / 0 failures/errors / 18 条件 skips，随后 Nacos process 的 registry-recovered 阶段失败。三个先前阶段通过；31 份恢复快照中 Provider/Manifest/Mapping 正确，Consumer 成员为空。Consumer 在最终脚本 trap 之前已经记录 `Application run failed` 和 `METADATA_INTEGRITY_REJECTED`，随后进入成员注销与关闭流程，其中记录失败；日志没有实际进程退出码或首次推进安全 epoch 的事件，不作唯一根因断言。
+
+同一普通 CI 后续新 Consumer/端口迁移、A-B-C、revision、受保护 Etcd 9+2 项、17 阶段 mTLS 和安全计数未实际执行。独立专项的 20 个 Registry 目标、四后端 12 场景/44 快照、五组 rolling 均通过，只计各自 scope。[原版 Smoke 39281776169](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39281776169) 在原参数与 5% 门槛下为 OTRYX 34585/0 error、Dubbo 25318/0 error。Style 29 模块/400 个 main+test Java/零发现；Quality 406 文件/0 errors/26 warnings，元数据零 findings；86 Markdown、54 Mermaid、5 SVG 已核。API queued/null 状态与实际产物矛盾，不能记为全绿或均未执行。
+
+受控回归先确认八个 Nacos SDK Mapping Snapshot 已预热，再暂停真实自有 Nacos。`build-56` 在准确第四轮生产实现上得到 1 test / 1 failure / 0 errors/skips：普通远端不可用被公开 SDK 的本地回退路径转换成缺少 MD5 的结果，最终在指定断言表现为 RegistrySecurityException。684 冻结输入不变，70.846 秒，精确 PID/start 的暂停/恢复及自有进程清理通过；这是原生 SIGSTOP 测试，不冒称 Docker 验收。测试及原始 XML 哈希见[工程断点](../agent-governance-checkpoint.md)。
+
+revision 5 将远端 Config 查询与发布收敛到一个受管理 SDK worker，保留 namespace、凭据、过滤、权威 MD5 和真实读取安全拒绝；不用本地回退充当新鲜元数据，也不修改 Core 安全 epoch 或 LKG 期限。初版关闭竞态在应用前已修复：实际调用直到 body 退出才归还所有权，关闭拒绝新调用并唯一清理；Naming 失败仍关闭 Config，Bootstrap cleanup 不覆盖主要异常。关闭等待预算不等于同步 SDK cleanup 的硬期限，SDK 发布 false 也不能证明所有写入错误都已类型化。
+
+`build-57–59` 的三个受控生命周期反例均已准确失败，同一测试文件在正确实现 `build-61` 上五项全部通过。`build-60` 与原 RED 使用相同 ChaosTest，真实 Nacos 暂停/恢复为 1/0/0/0，并完成恢复后成员、Mapping 和 Consumer 无 Endpoint 检查。`build-61` 的 14 模块质量构建成功，Nacos 64/0/0/8，加上跳过的 Quickstart RoundTrip 1 项为总 65/0/0/9；两个新执行包内嵌实际修复后的 Nacos JAR。`build-62` 独立样式检查 29 模块、403 个 main+test 文件、零发现。各轮 687 冻结输入不变并清理自有进程；精确 XML/JAR 哈希和两条被忽略的 Javadoc 链接诊断保留于[工程断点](../agent-governance-checkpoint.md)。完整 native 进程链结果见下文，准确新 Head 门禁与合并后 main 验证仍为 **PENDING**，不提前关闭 #140。
+
+`build-63` 原进程脚本 exit 0，并完成六阶段、六份快照、真实 Nacos 重启与端口迁移；额外日志采集器没有识别原 Consumer 的 PID 和 RPC 事件，整体仍为 FAIL。临时 helper 只接受 `Z` 时间戳，而本地运行时使用 UTC+8。两项旧解析反例准确 RED 后，只增加显式 offset 解析与 UTC 归一化；新九项边界和原三项文件完整性回归分别通过。原 helper、失败结果、所有原脚本、预算和同批 JAR 均保留。
+
+`build-64` 同批 JAR 的完整原脚本和额外证据均通过：六阶段、六份首次快照、最终 marker 与脚本 exit 0；原 Consumer PID/start 在 Nacos 新代 ready 后的新 RPC 完成时仍相同且存活。第 64 次成功完成晚于 ready 1.048510 秒，全程采集 183 次成功，不据此推断调用发起时间或正式性能容量。138.077 秒、687 输入与 JAR 哈希不变，自有组及私有目录已清理。证据明确为 native 重启；新准确 Head 的 Docker/CI 与合并后 main 仍须独立核验。
 
 ## 3. #141：连接、编码与取消资源上界
 

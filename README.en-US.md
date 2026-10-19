@@ -125,6 +125,8 @@ Implemented application-level backends are documented in [Etcd](docs/reference/r
 
 Initialize Nacos V2 Mapping shards before starting any application, in an exclusive maintenance window for the same namespace/group. Quickstart provides a standalone initialization command; its independent-process verification scripts perform this step for a separate group per run. See the [Nacos startup steps](otryx-quickstart/README.en-US.md#2-nacos-two-independent-jvms).
 
+Nacos Manifest/Mapping reads accept only remote query results and their authoritative MD5. SDK local snapshots and failover files cannot become fresh successful snapshots or CAS inputs. Ordinary remote failures remain unavailable, subject to Core's existing finite LKG budget; actual authentication, authorization or integrity rejections still invalidate old security snapshots immediately. See the [Nacos metadata boundaries](docs/reference/registry-nacos-v2.md).
+
 See [Starter guide](docs/reference/starter.md) and [Production configuration](docs/configuration.md) for validated options, TLS and registry setup. The [Deadline and call-context reference](docs/reference/deadline-context.md) covers precedence, explicit scope propagation and A→B→C budget semantics (Chinese).
 
 <!-- doc-section:operations -->

@@ -1,13 +1,14 @@
 package com.peachsoft.otryx.registry.nacos;
 
-import com.alibaba.nacos.api.NacosFactory;
-import com.alibaba.nacos.api.config.ConfigService;
 import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Nacos V2 Config 分片的独占维护期初始化工具。
@@ -22,6 +23,8 @@ import java.util.concurrent.TimeUnit;
  * @CreateTime 2026/10/16 13:42
  */
 public final class NacosV2MetadataBootstrap {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(NacosV2MetadataBootstrap.class);
 
     private static final String OPTION_GROUP = "nacosGroup";
     private static final int COMMAND_ARGUMENT_COUNT = 4;
@@ -96,36 +99,7 @@ public final class NacosV2MetadataBootstrap {
         String group = options.providerOption(OPTION_GROUP, NacosApplicationRegistryFactory.DEFAULT_GROUP);
         Properties properties = NacosApplicationRegistryFactory.clientProperties(options, endpoints, namespace);
         try {
-            ConfigService config = NacosFactory.createConfigService(properties);
-            try {
-                NacosV2ConfigStore store = new NacosV2ConfigStore(config, group);
-                for (int shard = 0; shard < NacosV2Names.MAPPING_SHARDS; shard++) {
-                    String dataId = NacosV2Names.shardId(shard);
-                    NacosV2ConfigStore.Entry existing = store.read(dataId);
-                    if (existing.content() == null) {
-                        String empty = NacosV2MappingCodec.encode(Map.of());
-                        if (!config.publishConfig(dataId, group, empty)) {
-                            throw new IllegalStateException("Nacos Mapping bootstrap could not publish a shard");
-                        }
-                    }
-                    // Nacos Config publish ACK and query visibility can be briefly out of phase.
-                    // Never turn a missing CAS MD5 into a computed or locally cached substitute.
-                    for (int attempt = 0; attempt < VERIFY_ATTEMPTS
-                            && (existing.content() == null || existing.md5() == null); attempt++) {
-                        TimeUnit.MILLISECONDS.sleep(VERIFY_DELAY_MILLIS);
-                        existing = store.read(dataId);
-                    }
-                    if (existing.content() == null || existing.md5() == null) {
-                        throw new IllegalStateException(
-                                "Nacos bootstrap has no authoritative Config state: contentPresent="
-                                        + (existing.content() != null)
-                                        + ", md5Present=" + (existing.md5() != null));
-                    }
-                    NacosV2MappingCodec.decode(existing.content(), namespace, shard);
-                }
-            } finally {
-                config.shutDown();
-            }
+            initializeOwnedConfig(new NacosConfigClient(properties), namespace, group);
         } catch (Exception error) {
             if (error instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
@@ -135,6 +109,65 @@ public final class NacosV2MetadataBootstrap {
                 throw runtime;
             }
             throw new IllegalStateException("Nacos Mapping bootstrap failed; keep application writes disabled");
+        }
+    }
+
+    /**
+     * 执行完整分片初始化并接管配置客户端关闭，包内测试沿同一实际路径注入 SDK 边界。
+     *
+     * <p>正常初始化后的关闭失败仍向调用方报告；初始化已有失败时保留主要异常，
+     * 次要关闭错误仅按类型记录，不覆盖认证、权限或元数据完整性拒绝。
+     *
+     * @param config 已创建的非 null 配置客户端，方法接管其关闭责任
+     * @param namespace 已确定的应用命名空间
+     * @param group 已确定的 Config 组
+     * @throws Exception 初始化或正常完成后的 SDK 关闭失败时抛出
+     */
+    static void initializeOwnedConfig(NacosConfigOperations config, String namespace, String group) throws Exception {
+        Objects.requireNonNull(config, "config");
+        boolean initialized = false;
+        try {
+            NacosV2ConfigStore store = new NacosV2ConfigStore(
+                    config, group, RegistrySecurityDescriptor.unknown());
+            for (int shard = 0; shard < NacosV2Names.MAPPING_SHARDS; shard++) {
+                String dataId = NacosV2Names.shardId(shard);
+                NacosV2ConfigStore.Entry existing = store.read(dataId);
+                if (existing.content() == null) {
+                    String empty = NacosV2MappingCodec.encode(Map.of());
+                    if (!config.publishImmutable(dataId, group, empty)) {
+                        throw new IllegalStateException("Nacos Mapping bootstrap could not publish a shard");
+                    }
+                }
+                // Nacos Config publish ACK and query visibility can be briefly out of phase.
+                // Never turn a missing CAS MD5 into a computed or locally cached substitute.
+                for (int attempt = 0; attempt < VERIFY_ATTEMPTS
+                        && (existing.content() == null || existing.md5() == null); attempt++) {
+                    TimeUnit.MILLISECONDS.sleep(VERIFY_DELAY_MILLIS);
+                    existing = store.read(dataId);
+                }
+                if (existing.content() == null || existing.md5() == null) {
+                    throw new IllegalStateException(
+                            "Nacos bootstrap has no authoritative Config state: contentPresent="
+                                    + (existing.content() != null)
+                                    + ", md5Present=" + (existing.md5() != null));
+                }
+                NacosV2MappingCodec.decode(existing.content(), namespace, shard);
+            }
+            initialized = true;
+        } finally {
+            if (initialized) {
+                config.shutDown();
+            } else {
+                try {
+                    config.shutDown();
+                } catch (Throwable cleanupFailure) {
+                    if (cleanupFailure instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                    }
+                    LOGGER.warn("Nacos bootstrap secondary cleanup failed: errorType={}",
+                            cleanupFailure.getClass().getSimpleName());
+                }
+            }
         }
     }
 }

@@ -73,7 +73,7 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
 
     private final RegistrySecurityDescriptor descriptor;
     private final NamingService naming;
-    private final ConfigService config;
+    private final NacosConfigOperations config;
     private final NacosControlExecutor executor = new NacosControlExecutor();
     private final NacosApplicationManifestRepository manifests;
     private final NacosServiceMappingRepository mappings;
@@ -93,11 +93,12 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
     NacosApplicationRegistry(
             NamingService naming, ConfigService config, String namespace, String group,
             String cluster, String consumerHost, RpcObserver observer) {
-        this(naming, config, namespace, group, cluster, consumerHost, observer, RegistrySecurityDescriptor.unknown());
+        this(naming, NacosConfigOperations.fromInjectedService(config), namespace, group, cluster,
+                consumerHost, observer, RegistrySecurityDescriptor.unknown());
     }
 
     NacosApplicationRegistry(
-            NamingService naming, ConfigService config, String namespace, String group,
+            NamingService naming, NacosConfigOperations config, String namespace, String group,
             String cluster, String consumerHost, RpcObserver observer, RegistrySecurityDescriptor descriptor) {
         this.descriptor = Objects.requireNonNull(descriptor, "descriptor");
         this.naming = Objects.requireNonNull(naming, "naming");
@@ -305,8 +306,10 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
     }
 
     /**
-     * 关闭订阅、撤销本进程 Naming 成员并释放 SDK 的连接与后台线程。
-     * 本操作可能等待有界 SDK shutdown，不能从 RPC EventLoop 调用。
+     * 关闭订阅、撤销本进程 Naming 成员并通知两个 SDK 所有者清理资源。
+     *
+     * <p>控制任务等待受 CLOSE_TIMEOUT 约束，后续同步 SDK 清理不承诺硬退出时限，
+     * 不能从 RPC EventLoop 调用。shutdown 返回也不证明全部 SDK 后台线程已经退出。
      */
     @Override
     public void close() {
@@ -328,21 +331,48 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
                     }
                 }
                 registered.clear();
-                naming.shutDown();
-                config.shutDown();
+                closeClients();
                 return null;
             }).orTimeout(CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).join();
         } catch (RuntimeException error) {
             LOGGER.warn("Nacos V2 shutdown incomplete: errorType={}", error.getClass().getSimpleName());
             try {
-                naming.shutDown();
-                config.shutDown();
+                closeClients();
             } catch (Exception closeError) {
                 LOGGER.warn("Nacos V2 forced close failed: errorType={}",
                         closeError.getClass().getSimpleName());
             }
         } finally {
             executor.close();
+        }
+    }
+
+    /**
+     * 始终通知两个 SDK 所有者关闭；Naming 失败时仍执行 Config 的关闭协议。
+     *
+     * <p>主要关闭异常保留，次要清理失败只记录类型，不传播外部 cause 或 suppressed。
+     *
+     * @throws Exception 首个 SDK 关闭失败时抛出
+     */
+    private void closeClients() throws Exception {
+        boolean namingClosed = false;
+        try {
+            naming.shutDown();
+            namingClosed = true;
+        } finally {
+            if (namingClosed) {
+                config.shutDown();
+            } else {
+                try {
+                    config.shutDown();
+                } catch (Throwable cleanupFailure) {
+                    if (cleanupFailure instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                    }
+                    LOGGER.warn("Nacos V2 secondary Config cleanup failed: errorType={}",
+                            cleanupFailure.getClass().getSimpleName());
+                }
+            }
         }
     }
 

@@ -125,6 +125,8 @@ otryx:
 
 Nacos V2 的 Mapping 分片必须在所有应用启动前、同一 namespace/group 的独占维护窗口内初始化。Quickstart 提供独立初始化命令，跨进程验证脚本会为本轮独立 group 完成该步骤；参见 [Nacos 启动步骤](otryx-quickstart/README.md#2-第二条调用nacos-双独立-jvm)。
 
+Nacos 的 Manifest/Mapping 读取只接受远端查询结果及其权威 MD5，SDK 本地 Snapshot/Failover 不能成为新的成功快照或 CAS 基础。普通远端故障保留为不可用，Core 仅按既有有限 LKG 预算处理；真实认证、权限或完整性拒绝仍立即使旧安全快照失效。详见 [Nacos 元数据边界](docs/reference/registry-nacos-v2.md)。
+
 完整配置约束和 TLS/Nacos/Etcd 示例见 [Starter 文档](docs/reference/starter.md)、[生产配置](docs/configuration.md)。调用超时覆盖、作用域传播及 A→B→C 预算规则参见 [Deadline 与调用上下文](docs/reference/deadline-context.md)。
 
 <!-- doc-section:operations -->

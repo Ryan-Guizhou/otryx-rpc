@@ -2,9 +2,14 @@ package com.peachsoft.otryx.registry.nacos;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import com.alibaba.nacos.client.config.impl.LocalConfigInfoProcessor;
+import com.alibaba.nacos.client.utils.ClientBasicParamUtil;
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
@@ -34,7 +39,9 @@ import org.junit.jupiter.api.Timeout;
  * Nacos V2 独立 Provider/Consumer 的真实容器网络暂停恢复测试。
  *
  * <p>在 nacos-chaos Profile 启动；暂停期间第三个客户端的成员注册不能虚报成功。
- * 恢复后直接查询与已有订阅必须都发现新成员，并保留原先持久化的 Mapping。
+ * 已成功读取的 Mapping 在暂停期间必须报告普通读取失败，不能把 SDK 本地快照
+ * 当作新权威数据，也不能将纯断网误报为安全拒绝。恢复后直接查询与已有订阅
+ * 必须都发现新成员，并保留原先持久化的 Mapping。
  *
  * @Author OpenAI
  * @Version 1.0.0-SNAPSHOT
@@ -82,6 +89,9 @@ class NacosApplicationRegistryChaosTest {
                             .instances().containsAll(Set.of(provider, consumer))
                             && latest.get() != null
                             && latest.get().instances().containsAll(Set.of(provider, consumer))));
+            assertTrue(server.serviceMappingRepository().lookup(key).toCompletableFuture()
+                    .get(15, TimeUnit.SECONDS).applications().contains(application));
+            assertConfigSnapshotsReady(endpoint, group);
 
             docker("pause", container);
             paused = true;
@@ -89,6 +99,11 @@ class NacosApplicationRegistryChaosTest {
             Thread.sleep(PAUSE_OBSERVATION_MILLIS);
             assertFalse(duringPause.isDone() && !duringPause.isCompletedExceptionally(),
                     "Application registration must not succeed while Nacos is paused");
+            ExecutionException metadataFailure = assertThrows(ExecutionException.class,
+                    () -> server.serviceMappingRepository().lookup(key).toCompletableFuture()
+                            .get(10, TimeUnit.SECONDS));
+            assertInstanceOf(IllegalStateException.class, metadataFailure.getCause(),
+                    "An ordinary Nacos outage must not become a metadata-integrity rejection");
             docker("unpause", container);
             paused = false;
 
@@ -120,6 +135,18 @@ class NacosApplicationRegistryChaosTest {
                 RegistryOptions.trustedDevelopment(List.of(endpoint), "public", Map.of(
                         "nacosGroup", group, "nacosCluster", "DEFAULT",
                         "nacosMemberHost", "127.0.0.1")));
+    }
+
+    private static void assertConfigSnapshotsReady(String endpoint, String group) {
+        // The fixed-address SDK 3.2.4 client names snapshots from the same endpoint and namespace.
+        String name = ("Config-fixed-public-" + ClientBasicParamUtil.getNameSuffixByServerIps(endpoint))
+                .replace('/', '_').replace(':', '_');
+        for (int shard = 0; shard < NacosV2Names.MAPPING_SHARDS; shard++) {
+            String snapshot = LocalConfigInfoProcessor.getSnapshot(
+                    name, NacosV2Names.shardId(shard), group, "public");
+            assertNotNull(snapshot, "Every SDK Mapping snapshot must exist before the outage");
+            NacosV2MappingCodec.decode(snapshot, "public", shard);
+        }
     }
 
     private static boolean registerEventually(NacosApplicationRegistry registry, ApplicationInstance member)
