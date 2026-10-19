@@ -9,9 +9,9 @@ otryx:
     transport:
       security:
         mode: MTLS
-        certificate-path: ${OTRYX_RPC_TLS_CERT}
-        private-key-path: ${OTRYX_RPC_TLS_KEY}
-        trust-certificate-path: ${OTRYX_RPC_TLS_CA}
+        certificate-path: ${OTRYX_QUICKSTART_TLS_CERT}
+        private-key-path: ${OTRYX_QUICKSTART_TLS_KEY}
+        trust-certificate-path: ${OTRYX_QUICKSTART_TLS_CA}
         hostname-verification: true
         reload-interval: 30s
         expiry-warning-threshold: 7d

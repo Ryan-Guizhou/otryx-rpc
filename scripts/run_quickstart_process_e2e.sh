@@ -7,9 +7,12 @@ PROVIDER_JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-provider/targe
 CONSUMER_JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-consumer/target" \
   -maxdepth 1 -name '*-exec.jar' -print -quit)"
 NACOS_ENDPOINT="${NACOS_TEST_ENDPOINT:-127.0.0.1:8848}"
+NACOS_NAMESPACE=public
 RESTART_NACOS="${OTRYX_RPC_E2E_RESTART_NACOS:-${CI:-false}}"
 # Explicit freshness budget exercises LKG recovery; short outages may never enter STALE.
 MAX_STALENESS="${OTRYX_RPC_E2E_MAX_STALENESS:-3s}"
+# These are script controls, not Spring application configuration keys.
+unset OTRYX_RPC_E2E_RESTART_NACOS OTRYX_RPC_E2E_MAX_STALENESS
 
 if [[ -z "$PROVIDER_JAR" || -z "$CONSUMER_JAR" ]]; then
   echo "Executable Quickstart JARs were not found. Build the reactor first." >&2
@@ -18,6 +21,7 @@ fi
 
 PROVIDER_LOG="$(mktemp)"
 CONSUMER_LOG="$(mktemp)"
+NACOS_GROUP="OTRYX_RPC_E2E_$(basename "$PROVIDER_LOG")"
 PROVIDER_PID=""
 CONSUMER_PID=""
 
@@ -39,6 +43,8 @@ start_provider() {
   : >"$PROVIDER_LOG"
   java -jar "$PROVIDER_JAR" \
     --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
+    --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
+    --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
     --otryx.rpc.server.port="$port" \
     --otryx.rpc.server.advertised-port="$port" \
     >"$PROVIDER_LOG" 2>&1 &
@@ -122,6 +128,8 @@ probe_fresh_consumer() {
     : >"$probe_log"
     java -jar "$CONSUMER_JAR" \
       --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
+      --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
+      --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
       --otryx.rpc.client.directory-max-staleness="$MAX_STALENESS" \
       >"$probe_log" 2>&1 &
     probe_pid=$!
@@ -150,10 +158,15 @@ probe_fresh_consumer() {
   exit 1
 }
 
+bash "$ROOT_DIR/scripts/bootstrap_quickstart_nacos.sh" \
+  "$PROVIDER_JAR" "$NACOS_ENDPOINT" "$NACOS_NAMESPACE" "$NACOS_GROUP"
+
 start_provider 19090
 
 java -jar "$CONSUMER_JAR" \
   --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
+  --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
+  --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
   --otryx.rpc.client.directory-max-staleness="$MAX_STALENESS" \
   --otryx.rpc.quickstart.repeat-interval-millis=200 \
   --otryx.rpc.client.resilience.circuit-open-duration=500ms \

@@ -30,6 +30,8 @@ flowchart LR
 
 From the **repository root**: JDK 21, Maven Wrapper (Maven 3.9.11), access to Maven Central for the first dependency download. Docker is required only for the Nacos walkthrough, not for the Memory Quickstart.
 
+The Bash initialization and independent-process verification scripts require GNU coreutils `timeout` on `PATH`. It is not included in a default macOS installation; install and configure it before using those scripts.
+
 ```bash
 git clone https://github.com/Ryan-Guizhou/otryx-rpc.git
 cd otryx-rpc
@@ -56,6 +58,8 @@ Quickstart memory RPC succeeded: Hello, Quickstart!
 
 `MemoryGreetingRunner` invokes `@OtryxRpcReference`, the Consumer encodes with Fory, Vert.x sends over loopback to `MemoryGreetingServiceImpl`, and the response is decoded. This tests a **real** RPC round trip. It does not make the development security profile suitable for an untrusted network.
 
+Provider routes refresh asynchronously after application membership is acknowledged. The Memory demo retries explicit unavailable results only for the declared idempotent `hello`, within a discovery budget of at most 10 seconds. An existing parent deadline shortens that budget, and each RPC uses the remaining time. Business, protocol and response-validation failures stop immediately; interruption preserves the interrupt flag and ends the wait.
+
 Source: [Provider](otryx-quickstart-memory/src/main/java/com/peachsoft/otryx/quickstart/memory/MemoryGreetingServiceImpl.java) · [Consumer](otryx-quickstart-memory/src/main/java/com/peachsoft/otryx/quickstart/memory/MemoryGreetingRunner.java) · [Configuration](otryx-quickstart-memory/src/main/resources/application.yml).
 
 ## 2. Nacos: two independent JVMs
@@ -67,6 +71,16 @@ docker compose -f otryx-quickstart/docker-compose.yml up -d
 ```
 
 Both applications explicitly depend on `otryx-registry-nacos` and configure `registry.type=nacos` in their respective `application.yml`. The single Starter deliberately does **not** transitively pull Nacos.
+
+**Initialize Nacos V2 Mapping shards before starting any Provider or Consumer.** Wait for Nacos HTTP port `8848` and client gRPC port `9848`, then run this command in an exclusive maintenance window with no application writing to the same namespace/group:
+
+```bash
+bash scripts/bootstrap_quickstart_nacos.sh \
+  otryx-quickstart/otryx-quickstart-provider/target/otryx-quickstart-provider-1.0.0-SNAPSHOT-exec.jar \
+  127.0.0.1:8848 public OTRYX_RPC
+```
+
+The standalone JVM invokes the existing `NacosV2MetadataBootstrap` with the same endpoint, namespace and Nacos group used below. It creates missing shards and validates and preserves existing contents. Resolve initialization failures before starting applications. Normal Starter startup does not replace this maintenance step, which must never run concurrently with application Mapping writes. See the [Nacos V2 contract](../docs/reference/registry-nacos-v2.md#4-nacos-config-servicemappingmd5-casfencing分片).
 
 Provider terminal:
 
@@ -89,9 +103,11 @@ sequenceDiagram
     participant P as Provider JVM
     participant N as Nacos
     participant C as Consumer JVM
-    P->>N: Register ServiceKey + Endpoint
-    C->>N: Subscribe directory
-    N-->>C: Provider endpoint
+    P->>N: Write Manifest, Mapping and Provider member
+    C->>N: Register Consumer member without RPC endpoint
+    C->>N: Read Mapping, members and Manifest
+    N-->>C: Candidate data
+    C->>C: Validate role, contract and endpoint
     C->>P: HELLO / HELLO_ACK
     C->>P: REQUEST (Fory)
     P-->>C: RESPONSE
@@ -104,6 +120,8 @@ OTRYX_RPC_E2E_RESTART_NACOS=false bash scripts/run_quickstart_process_e2e.sh
 ```
 
 The CI version can additionally restart the test Nacos container and verify subscription recovery and endpoint changes.
+
+The two-process, three-process and rolling verification scripts each use a separate Nacos group per run. They initialize shards before the first application starts and pass the same scope to every application start, restart and fresh Consumer probe.
 
 ## 3. Three independent JVMs: A → B → C
 
@@ -168,11 +186,28 @@ java -jar otryx-quickstart/otryx-quickstart-provider/target/otryx-quickstart-pro
 java -jar otryx-quickstart/otryx-quickstart-consumer/target/otryx-quickstart-consumer-1.0.0-SNAPSHOT-exec.jar --spring.profiles.active=consul
 ```
 
-Use `eureka` instead of `consul` for Eureka. Credentials belong in environment variables such as `CONSUL_HTTP_TOKEN`, `EUREKA_USERNAME`, and `EUREKA_PASSWORD`, never in source control. See [Consul](../docs/reference/registry-consul.md) and [Eureka](../docs/reference/registry-eureka.md).
+Eureka stores application membership and requires a separate Manifest/Mapping backend. The following example requires both Eureka and Consul; both adapters are already explicit Quickstart dependencies. Configure the same Consul KV backend in both JVMs:
+
+```bash
+# Provider terminal:
+java -jar otryx-quickstart/otryx-quickstart-provider/target/otryx-quickstart-provider-1.0.0-SNAPSHOT-exec.jar \
+  --spring.profiles.active=eureka \
+  --otryx.rpc.registry.eureka.metadata-backend=consul \
+  --otryx.rpc.registry.eureka.metadata-endpoints=http://127.0.0.1:8500
+# Consumer terminal:
+java -jar otryx-quickstart/otryx-quickstart-consumer/target/otryx-quickstart-consumer-1.0.0-SNAPSHOT-exec.jar \
+  --spring.profiles.active=eureka \
+  --otryx.rpc.registry.eureka.metadata-backend=consul \
+  --otryx.rpc.registry.eureka.metadata-endpoints=http://127.0.0.1:8500
+```
+
+The Consul profile reads `CONSUL_HTTP_TOKEN`; Eureka membership reads `EUREKA_USERNAME`/`EUREKA_PASSWORD`. Credentials for Eureka's external metadata backend must be supplied separately through `metadata-options`, as described in the [Starter backend configuration](../docs/reference/starter.md). Never commit real credentials. See [Consul V2](../docs/reference/registry-consul-v2.md) and [Eureka V2](../docs/reference/registry-eureka-v2.md) for backend contracts.
 
 ## 6. TLS / mTLS safety boundaries
 
-The optional `application-tls.yml` and `application-mtls.yml` profiles use `OTRYX_RPC_TLS_CERT`, `OTRYX_RPC_TLS_KEY`, and `OTRYX_RPC_TLS_CA` for PEM credentials. Enable with `--spring.profiles.active=tls` or `mtls` and provision matching CA/hostname identities.
+The optional `application-tls.yml` and `application-mtls.yml` profiles use `OTRYX_QUICKSTART_TLS_CERT`, `OTRYX_QUICKSTART_TLS_KEY`, and `OTRYX_QUICKSTART_TLS_CA` for PEM credentials. Enable with `--spring.profiles.active=tls` or `mtls` and provision matching CA/hostname identities.
+
+Update older launch scripts that use `OTRYX_RPC_TLS_CERT`, `OTRYX_RPC_TLS_KEY` or `OTRYX_RPC_TLS_CA` to the names above and remove the old environment variables, which strict configuration validation rejects. The underlying `otryx.rpc.transport.security.*` certificate properties and security requirements are unchanged.
 
 The mTLS profile selects `NETWORK_MTLS` with a strict Fory DTO allowlist. **This is not sufficient for an authorized business RPC call**: Provider must also expose an `RpcAuthorizer` validating authenticated client identity, ServiceKey and MethodId. Without it, network-profile calls are rejected by default. Read the [security guide](../docs/security.md) before network exposure.
 
@@ -205,3 +240,21 @@ docker compose -f otryx-quickstart/docker-compose.yml down
 ```
 
 Read next: [User guide](../docs/user-guide.md) · [Starter reference](../docs/reference/starter.md) · [Architecture](../docs/architecture.md) · [Protocol compatibility](../docs/wire-compatibility.md). A short Quickstart run is **not** a production performance SLO or GA certification.
+
+## V2 application registry migration status (development branch)
+
+Core provides `ApplicationMembershipCoordinator`, `ApplicationServiceResolver`,
+`OtryxRpcClient.applicationControlPlane(...)` and `OtryxRpcServer.applicationMembership(...)`.
+`ApplicationRuntimeEndToEndTest` exercises real Wire v1 RPC with three contracts,
+an independent Consumer and a same-process BOTH role.
+
+The #137 branch connects the single Spring Starter to the same application control plane.
+The Spring Quickstarts register Provider, Consumer or BOTH members through that Starter;
+a consumer-only member has no RPC endpoint. The Nacos process scripts initialize an isolated
+scope before starting applications. Acceptance of #137 depends on the exact PR head and
+post-merge main CI.
+
+The complete membership diagnostics, two-real-revision rolling example and mTLS authorization
+walkthrough remain #138. Full removal of the legacy interface-level SPI remains #139.
+A successful existing Quickstart does not establish project-wide V2 migration or production
+readiness. See [V2 design and status](../docs/design/application-registry-v2.md) for stage boundaries.

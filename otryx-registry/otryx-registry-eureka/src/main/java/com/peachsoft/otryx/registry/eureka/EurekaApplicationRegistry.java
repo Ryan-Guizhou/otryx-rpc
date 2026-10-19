@@ -5,6 +5,7 @@ import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
 import com.peachsoft.otryx.registry.ApplicationManifestRepository;
+import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationRegistrar;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
@@ -56,7 +57,8 @@ import org.slf4j.LoggerFactory;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/16 18:09
  */
-public final class EurekaApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar {
+public final class EurekaApplicationRegistry implements ApplicationRegistry, ApplicationRegistrar,
+        ApplicationMetadataBackend {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(EurekaApplicationRegistry.class);
     private static final RegistryCapabilities CAPABILITIES = RegistryCapabilities.of(

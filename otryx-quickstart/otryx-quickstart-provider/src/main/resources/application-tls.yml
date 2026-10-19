@@ -3,7 +3,7 @@ otryx:
     transport:
       security:
         mode: TLS
-        certificate-path: ${OTRYX_RPC_TLS_CERT}
-        private-key-path: ${OTRYX_RPC_TLS_KEY}
+        certificate-path: ${OTRYX_QUICKSTART_TLS_CERT}
+        private-key-path: ${OTRYX_QUICKSTART_TLS_KEY}
         reload-interval: 30s
         expiry-warning-threshold: 7d

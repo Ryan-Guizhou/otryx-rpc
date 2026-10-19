@@ -11,7 +11,11 @@ import com.peachsoft.otryx.quickstart.api.GreetingRequest;
 import com.peachsoft.otryx.quickstart.api.GreetingService;
 import com.peachsoft.otryx.quickstart.provider.ProviderApplication;
 import com.peachsoft.otryx.generated.RpcGeneratedClients;
+import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.nacos.NacosV2MetadataBootstrap;
+import com.peachsoft.otryx.spring.autoconfigure.OtryxRpcProperties;
 import java.time.Duration;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.Test;
@@ -28,6 +32,10 @@ import org.springframework.context.ConfigurableApplicationContext;
  */
 class NacosRoundTripTest {
 
+    private static final String NAMESPACE = "public";
+    private static final String PROVIDER_APPLICATION = "otryx-quickstart-e2e-provider";
+    private static final String CONSUMER_APPLICATION = "otryx-quickstart-e2e-consumer";
+
     @Test
     void providerLifecycleShouldPropagateThroughNacos()
             throws Exception {
@@ -41,30 +49,21 @@ class NacosRoundTripTest {
                 + UUID.randomUUID()
                         .toString()
                         .replace("-", "");
+        NacosV2MetadataBootstrap.initialize(RegistryOptions.fromCsv(
+                endpoint, NAMESPACE, Map.of("nacosGroup", group)));
         ConfigurableApplicationContext provider = null;
         ConfigurableApplicationContext consumer = null;
         try {
             provider = new SpringApplicationBuilder(
                     ProviderApplication.class)
                     .web(WebApplicationType.NONE)
-                    .properties(
-                            registryProperties(
-                                    endpoint,
-                                    group))
-                    .properties(
-                            "otryx.rpc.server.host=127.0.0.1",
-                            "otryx.rpc.server.port=0",
-                            "otryx.rpc.server.advertised-host=127.0.0.1",
-                            "otryx.rpc.server.advertised-port=0")
-                    .run();
+                    .run(applicationArguments(endpoint, group, PROVIDER_APPLICATION));
+            assertScope(provider, endpoint, group, PROVIDER_APPLICATION);
             consumer = new SpringApplicationBuilder(
                     ConsumerApplication.class)
                     .web(WebApplicationType.NONE)
-                    .properties(
-                            registryProperties(
-                                    endpoint,
-                                    group))
-                    .run();
+                    .run(applicationArguments(endpoint, group, CONSUMER_APPLICATION));
+            assertScope(consumer, endpoint, group, CONSUMER_APPLICATION);
 
             assertTrue(
                     RpcGeneratedClients.find(
@@ -136,16 +135,34 @@ class NacosRoundTripTest {
         return condition.get();
     }
 
-    private static String[] registryProperties(
+    private static String[] applicationArguments(
             String endpoint,
-            String group) {
+            String group,
+            String applicationName) {
         return new String[]{
-                "otryx.rpc.registry.type=nacos",
-                "otryx.rpc.registry.endpoints=" + endpoint,
-                "otryx.rpc.registry.namespace=public",
-                "otryx.rpc.registry.nacos.group=" + group,
-                "otryx.rpc.registry.nacos.cluster=DEFAULT"
+                "--spring.application.name=" + applicationName,
+                "--otryx.rpc.registry.application-name=" + applicationName,
+                "--otryx.rpc.registry.type=nacos",
+                "--otryx.rpc.registry.endpoints=" + endpoint,
+                "--otryx.rpc.registry.namespace=" + NAMESPACE,
+                "--otryx.rpc.registry.nacos.group=" + group,
+                "--otryx.rpc.registry.nacos.cluster=DEFAULT",
+                "--otryx.rpc.server.host=127.0.0.1",
+                "--otryx.rpc.server.port=0",
+                "--otryx.rpc.server.advertised-host=127.0.0.1",
+                "--otryx.rpc.server.advertised-port=0"
         };
+    }
+
+    private static void assertScope(ConfigurableApplicationContext context,
+            String endpoint, String group, String applicationName) {
+        OtryxRpcProperties properties = context.getBean(OtryxRpcProperties.class);
+        assertEquals(endpoint, properties.getRegistry().getEndpoints());
+        assertEquals(NAMESPACE, properties.getRegistry().getNamespace());
+        assertEquals(group, properties.getRegistry().getNacos().getGroup());
+        assertEquals(applicationName, properties.getRegistry().getApplicationName());
+        assertEquals(0, properties.getServer().getPort());
+        assertEquals(0, properties.getServer().getAdvertisedPort());
     }
 
     @FunctionalInterface

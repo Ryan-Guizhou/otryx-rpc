@@ -24,10 +24,48 @@ import java.util.concurrent.TimeUnit;
 public final class NacosV2MetadataBootstrap {
 
     private static final String OPTION_GROUP = "nacosGroup";
+    private static final int COMMAND_ARGUMENT_COUNT = 3;
+    private static final String VALID_GROUP = "[A-Za-z0-9._:-]{1,128}";
     private static final int VERIFY_ATTEMPTS = 16;
     private static final long VERIFY_DELAY_MILLIS = 250L;
 
     private NacosV2MetadataBootstrap() {
+    }
+
+    /**
+     * 在独立部署进程中初始化显式指定的 Nacos Mapping Scope。
+     *
+     * <p>此入口执行阻塞控制面 IO，只能在应用写入前的独占维护窗口运行，
+     * 不得嵌入 Spring 启动、EventLoop 或业务故障恢复回调。连接与验证失败直接
+     * 终止命令；已有分片仍遵守 {@link #initialize(RegistryOptions)} 的保留规则。
+     *
+     * @param args 依次为逗号分隔 endpoint、namespace、group，三项均须显式非空
+     * @throws IllegalArgumentException 参数缺失、目标为空或 endpoint 内嵌凭据时抛出
+     * @throws IllegalStateException Nacos 初始化或已有分片验证失败时抛出
+     */
+    public static void main(String[] args) {
+        initialize(commandLineOptions(args));
+    }
+
+    /** 解析显式部署目标；验证阶段不创建 SDK Client，也不允许回退到默认目标。 */
+    static RegistryOptions commandLineOptions(String[] args) {
+        if (args == null || args.length != COMMAND_ARGUMENT_COUNT) {
+            throw new IllegalArgumentException("Nacos bootstrap requires endpoint, namespace and group");
+        }
+        for (String argument : args) {
+            if (argument == null || argument.isBlank()) {
+                throw new IllegalArgumentException("Nacos bootstrap endpoint, namespace and group must be explicit");
+            }
+        }
+        String group = args[2].trim();
+        if (!group.matches(VALID_GROUP)) {
+            throw new IllegalArgumentException("Invalid Nacos bootstrap group");
+        }
+        RegistryOptions options = RegistryOptions.fromCsv(args[0], args[1], Map.of(OPTION_GROUP, group));
+        if (options.endpoints().isEmpty()) {
+            throw new IllegalArgumentException("Nacos bootstrap requires at least one explicit endpoint");
+        }
+        return options;
     }
 
     /**

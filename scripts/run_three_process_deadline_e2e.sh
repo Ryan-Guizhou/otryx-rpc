@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROVIDER_JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-provider/target" -maxdepth 1 -name '*-exec.jar' -print -quit)"
 CONSUMER_JAR="$(find "$ROOT_DIR/otryx-quickstart/otryx-quickstart-consumer/target" -maxdepth 1 -name '*-exec.jar' -print -quit)"
 NACOS_ENDPOINT="${NACOS_TEST_ENDPOINT:-127.0.0.1:8848}"
+NACOS_NAMESPACE=public
 
 if [[ -z "$PROVIDER_JAR" || -z "$CONSUMER_JAR" ]]; then
   echo "Executable Quickstart JARs missing; build otryx-quickstart first." >&2
@@ -12,6 +13,7 @@ if [[ -z "$PROVIDER_JAR" || -z "$CONSUMER_JAR" ]]; then
 fi
 
 LOG_DIR="$(mktemp -d)"
+NACOS_GROUP="OTRYX_RPC_E2E_$(basename "$LOG_DIR")"
 LEAF_PID=""
 RELAY_PID=""
 CONSUMER_PID=""
@@ -34,6 +36,8 @@ start_provider() {
   java -jar "$PROVIDER_JAR" \
     --otryx.rpc.quickstart.role="$role" \
     --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
+    --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
+    --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
     --otryx.rpc.server.port="$port" \
     --otryx.rpc.server.advertised-port="$port" \
     --otryx.rpc.quickstart.relay-delay-millis=250 \
@@ -63,11 +67,16 @@ start_provider() {
   exit 1
 }
 
+bash "$ROOT_DIR/scripts/bootstrap_quickstart_nacos.sh" \
+  "$PROVIDER_JAR" "$NACOS_ENDPOINT" "$NACOS_NAMESPACE" "$NACOS_GROUP"
+
 start_provider leaf 19090
 start_provider relay 19091
 
 java -jar "$CONSUMER_JAR" \
   --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
+  --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
+  --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
   --otryx.rpc.quickstart.use-relay=true \
   >"$LOG_DIR/consumer.log" 2>&1 &
 CONSUMER_PID=$!

@@ -1,8 +1,10 @@
 package com.peachsoft.otryx.spring.autoconfigure;
 
+import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
+import com.peachsoft.otryx.core.ApplicationMembershipCoordinator;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.core.RpcAuthorizer;
@@ -13,26 +15,53 @@ import com.peachsoft.otryx.observability.RpcMetadataPropagator;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.observability.RpcTracingBridge;
 import com.peachsoft.otryx.proxy.ProxyFactory;
+import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
+import com.peachsoft.otryx.registry.ApplicationRegistry;
+import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
+import com.peachsoft.otryx.registry.ApplicationServiceResolver;
+import com.peachsoft.otryx.registry.ManifestSnapshotCache;
 import com.peachsoft.otryx.registry.Registry;
-import com.peachsoft.otryx.registry.RegistryFactory;
+import com.peachsoft.otryx.registry.ServiceDiscovery;
+import com.peachsoft.otryx.registry.ServiceMappingCache;
+import com.peachsoft.otryx.registry.ServiceRegistrar;
 import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.peachsoft.otryx.spring.lifecycle.OtryxRpcServerLifecycle;
 import com.peachsoft.otryx.spring.processor.OtryxRpcReferenceBeanPostProcessor;
 import com.peachsoft.otryx.spring.processor.OtryxRpcServiceBeanDefinitionValidator;
 import com.peachsoft.otryx.spring.processor.OtryxRpcServiceBeanPostProcessor;
+import com.peachsoft.otryx.spring.runtime.OtryxRpcApplicationIdentity;
 import com.peachsoft.otryx.spring.runtime.OtryxRpcRuntimeCoordinator;
 import com.peachsoft.otryx.transport.RpcTransportFactory;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
 import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import com.peachsoft.otryx.transport.RpcTransportSecurityOptions;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.stream.Collectors;
+import org.springframework.core.env.Environment;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.context.properties.bind.BindException;
+import org.springframework.boot.context.properties.bind.BindHandler;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.bind.PropertySourcesPlaceholdersResolver;
+import org.springframework.boot.context.properties.bind.UnboundConfigurationPropertiesException;
+import org.springframework.boot.context.properties.bind.handler.NoUnboundElementsBindHandler;
+import org.springframework.boot.context.properties.source.ConfigurationPropertyName;
+import org.springframework.boot.context.properties.source.ConfigurationPropertySource;
+import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Lazy;
 
@@ -59,13 +88,22 @@ public class OtryxRpcAutoConfiguration {
     private static final String DESTROY_METHOD_CLOSE = "close";
     private static final String CONFIG_REGISTRY_TYPE = "otryx.rpc.registry.type";
     private static final String CONFIG_TRANSPORT_TYPE = "otryx.rpc.transport.type";
+    private static final String CONFIG_APPLICATION_NAME = "otryx.rpc.registry.application-name";
+    private static final String SPRING_APPLICATION_NAME = "spring.application.name";
+    private static final String DEFAULT_APPLICATION_NAMESPACE = "default";
+    private static final Duration MAPPING_REFRESH_RETRY = Duration.ofMillis(200);
+    private static final List<ConfigurationPropertyName> DELEGATED_PROPERTY_PREFIXES = List.of(
+            ConfigurationPropertyName.of("otryx.rpc.observability"),
+            ConfigurationPropertyName.of("otryx.rpc.quickstart"));
+    private static final List<Class<?>> LEGACY_REGISTRY_TYPES = List.of(
+            Registry.class, ServiceRegistrar.class, ServiceDiscovery.class);
     private static final String PROVIDER_OPTION_LEASE_TTL_SECONDS = "leaseTtlSeconds";
     private static final String PROVIDER_OPTION_NACOS_GROUP = "nacosGroup";
     private static final String PROVIDER_OPTION_NACOS_CLUSTER = "nacosCluster";
     private static final String PROVIDER_OPTION_NACOS_USERNAME = "nacosUsername";
     private static final String PROVIDER_OPTION_NACOS_PASSWORD = "nacosPassword";
+    private static final String PROVIDER_OPTION_NACOS_MEMBER_HOST = "nacosMemberHost";
     private static final String PROVIDER_OPTION_CONSUL_TOKEN = "consulToken";
-    private static final String PROVIDER_OPTION_CONSUL_DATACENTER = "consulDatacenter";
     private static final String PROVIDER_OPTION_CONSUL_ENTERPRISE_NAMESPACE = "consulEnterpriseNamespace";
     private static final String PROVIDER_OPTION_CONSUL_TTL_SECONDS = "consulTtlSeconds";
     private static final String PROVIDER_OPTION_CONSUL_HEARTBEAT_SECONDS = "consulHeartbeatSeconds";
@@ -77,6 +115,10 @@ public class OtryxRpcAutoConfiguration {
     private static final String PROVIDER_OPTION_EUREKA_HEARTBEAT_SECONDS = "eurekaHeartbeatSeconds";
     private static final String PROVIDER_OPTION_EUREKA_POLL_INTERVAL_MILLIS = "eurekaPollIntervalMillis";
     private static final String PROVIDER_OPTION_EUREKA_REQUEST_TIMEOUT_MILLIS = "eurekaRequestTimeoutMillis";
+    private static final String PROVIDER_OPTION_EUREKA_METADATA_BACKEND = "eurekaMetadataBackend";
+    private static final String PROVIDER_OPTION_EUREKA_METADATA_ENDPOINTS = "eurekaMetadataEndpoints";
+    private static final String PROVIDER_OPTION_EUREKA_MEMBER_HOST = "eurekaMemberHost";
+    private static final String PROVIDER_OPTION_EUREKA_METADATA_PREFIX = "eurekaMetadata.";
 
     /**
      * 创建 OTRYX RPC 自动配置。
@@ -85,56 +127,215 @@ public class OtryxRpcAutoConfiguration {
     }
 
     /**
-     * 创建注册中心实例。
+     * 在创建任何 RPC 资源之前拒绝旧接口级 Bean 和无法绑定的 Starter 配置键。
      *
-     * @param properties OTRYX RPC 配置
-     * @param observerProvider Registry 控制面 Observer 提供器
-     * @return 注册中心实例
+     * <p>仅检查 Bean 定义，不提前实例化用户的 lazy Bean。观测 Adapter 与
+     * Quickstart 独立拥有的配置子树交由对应模块校验；其余配置用实际属性模型
+     * 严格试绑定。试绑定不调用初始化钩子，也不创建 Registry 或 Transport。
+     *
+     * @param environment 当前应用的属性源及占位符解析器
+     * @return 无网络副作用的启动校验器
+     */
+    @Bean
+    public static BeanFactoryPostProcessor peachRpcApplicationConfigurationValidator(Environment environment) {
+        return beanFactory -> {
+            for (Class<?> legacyType : LEGACY_REGISTRY_TYPES) {
+                if (beanFactory.getBeanNamesForType(legacyType, true, false).length != 0) {
+                    throw new IllegalStateException("Legacy interface-level Registry beans are unsupported; "
+                            + "use application-level ApplicationRegistry with ApplicationMetadataBackend");
+                }
+            }
+            validateConfigurationKeys(environment);
+        };
+    }
+
+    private static void validateConfigurationKeys(Environment environment) {
+        List<ConfigurationPropertySource> sources = new ArrayList<>();
+        ConfigurationPropertySources.get(environment).forEach(source -> sources.add(source.filter(name ->
+                DELEGATED_PROPERTY_PREFIXES.stream().noneMatch(prefix ->
+                        prefix.equals(name) || prefix.isAncestorOf(name)))));
+        Binder binder = new Binder(sources, new PropertySourcesPlaceholdersResolver(environment));
+        try {
+            binder.bind(PROPERTY_PREFIX, Bindable.of(OtryxRpcProperties.class),
+                    new NoUnboundElementsBindHandler(BindHandler.DEFAULT));
+        } catch (BindException failure) {
+            Throwable cause = failure;
+            while (cause.getCause() != null && !(cause instanceof UnboundConfigurationPropertiesException)) {
+                cause = cause.getCause();
+            }
+            if (cause instanceof UnboundConfigurationPropertiesException unbound) {
+                String keys = unbound.getUnboundProperties().stream()
+                        .map(property -> property.getName().toString()).sorted().collect(Collectors.joining(", "));
+                throw new IllegalStateException("Unsupported OTRYX RPC configuration keys: " + keys
+                        + ". Check spelling and remove interface-level registration settings; "
+                        + "application-level registration uses " + CONFIG_APPLICATION_NAME);
+            }
+            throw failure;
+        }
+    }
+
+    /**
+     * 使用唯一 ApplicationRegistryFactory SPI 创建 V2 注册中心；禁止旧的 ServiceKey 工厂。
+     *
+     * @param properties 应用级 Registry Adapter 配置
+     * @param observerProvider 控制面 Observer 提供器
+     * @return Provider、Consumer、BOTH 共享的单一 Application Registry
      */
     @Bean(destroyMethod = DESTROY_METHOD_CLOSE)
     @ConditionalOnMissingBean
-    public Registry peachRpcRegistry(
+    public ApplicationRegistry peachRpcRegistry(
             OtryxRpcProperties properties,
             ObjectProvider<RpcObserver> observerProvider) {
         OtryxRpcProperties.Registry registry = properties.getRegistry();
-        RegistryFactory factory = requireExtension(
-                RegistryFactory.class,
-                CONFIG_REGISTRY_TYPE,
-                registry.getType());
+        OtryxRpcStartupDiagnostics.validateRegistryBackend(registry);
+        ApplicationRegistryFactory factory = requireExtension(
+                ApplicationRegistryFactory.class, CONFIG_REGISTRY_TYPE, registry.getType());
+        Map<String, String> opts = new HashMap<>();
+        opts.put(PROVIDER_OPTION_LEASE_TTL_SECONDS, Long.toString(registry.getLeaseTtlSeconds()));
+        opts.put(PROVIDER_OPTION_NACOS_GROUP, registry.getNacos().getGroup());
+        opts.put(PROVIDER_OPTION_NACOS_CLUSTER, registry.getNacos().getCluster());
+        opts.put(PROVIDER_OPTION_NACOS_USERNAME, registry.getNacos().getUsername());
+        opts.put(PROVIDER_OPTION_NACOS_PASSWORD, registry.getNacos().getPassword());
+        opts.put(PROVIDER_OPTION_NACOS_MEMBER_HOST, registry.getNacos().getMemberHost());
+        opts.put(PROVIDER_OPTION_CONSUL_TOKEN, registry.getConsul().getToken());
+        opts.put(PROVIDER_OPTION_CONSUL_ENTERPRISE_NAMESPACE,
+                registry.getConsul().getEnterpriseNamespace());
+        opts.put(PROVIDER_OPTION_CONSUL_TTL_SECONDS, Long.toString(registry.getConsul().getTtlSeconds()));
+        opts.put(PROVIDER_OPTION_CONSUL_HEARTBEAT_SECONDS,
+                Long.toString(registry.getConsul().getHeartbeatSeconds()));
+        opts.put(PROVIDER_OPTION_CONSUL_POLL_INTERVAL_MILLIS,
+                Long.toString(registry.getConsul().getPollIntervalMillis()));
+        opts.put(PROVIDER_OPTION_CONSUL_REQUEST_TIMEOUT_MILLIS,
+                Long.toString(registry.getConsul().getRequestTimeoutMillis()));
+        opts.put(PROVIDER_OPTION_EUREKA_USERNAME, registry.getEureka().getUsername());
+        opts.put(PROVIDER_OPTION_EUREKA_PASSWORD, registry.getEureka().getPassword());
+        opts.put(PROVIDER_OPTION_EUREKA_LEASE_SECONDS, Long.toString(registry.getEureka().getLeaseSeconds()));
+        opts.put(PROVIDER_OPTION_EUREKA_HEARTBEAT_SECONDS,
+                Long.toString(registry.getEureka().getHeartbeatSeconds()));
+        opts.put(PROVIDER_OPTION_EUREKA_POLL_INTERVAL_MILLIS,
+                Long.toString(registry.getEureka().getPollIntervalMillis()));
+        opts.put(PROVIDER_OPTION_EUREKA_REQUEST_TIMEOUT_MILLIS,
+                Long.toString(registry.getEureka().getRequestTimeoutMillis()));
+        opts.put(PROVIDER_OPTION_EUREKA_METADATA_BACKEND, registry.getEureka().getMetadataBackend());
+        opts.put(PROVIDER_OPTION_EUREKA_METADATA_ENDPOINTS, registry.getEureka().getMetadataEndpoints());
+        opts.put(PROVIDER_OPTION_EUREKA_MEMBER_HOST, registry.getEureka().getMemberHost());
+        registry.getEureka().getMetadataOptions().forEach((key, value) ->
+                opts.put(PROVIDER_OPTION_EUREKA_METADATA_PREFIX + key, value));
         return factory.create(RegistryOptions.fromCsv(
-                registry.getEndpoints(),
-                registry.getNamespace(),
-                Map.ofEntries(
-                        Map.entry(PROVIDER_OPTION_LEASE_TTL_SECONDS,
-                                Long.toString(registry.getLeaseTtlSeconds())),
-                        Map.entry(PROVIDER_OPTION_NACOS_GROUP, registry.getNacos().getGroup()),
-                        Map.entry(PROVIDER_OPTION_NACOS_CLUSTER, registry.getNacos().getCluster()),
-                        Map.entry(PROVIDER_OPTION_NACOS_USERNAME, registry.getNacos().getUsername()),
-                        Map.entry(PROVIDER_OPTION_NACOS_PASSWORD, registry.getNacos().getPassword()),
-                        Map.entry(PROVIDER_OPTION_CONSUL_TOKEN, registry.getConsul().getToken()),
-                        Map.entry(PROVIDER_OPTION_CONSUL_DATACENTER, registry.getConsul().getDatacenter()),
-                        Map.entry(PROVIDER_OPTION_CONSUL_ENTERPRISE_NAMESPACE,
-                                registry.getConsul().getEnterpriseNamespace()),
-                        Map.entry(PROVIDER_OPTION_CONSUL_TTL_SECONDS,
-                                Long.toString(registry.getConsul().getTtlSeconds())),
-                        Map.entry(PROVIDER_OPTION_CONSUL_HEARTBEAT_SECONDS,
-                                Long.toString(registry.getConsul().getHeartbeatSeconds())),
-                        Map.entry(PROVIDER_OPTION_CONSUL_POLL_INTERVAL_MILLIS,
-                                Long.toString(registry.getConsul().getPollIntervalMillis())),
-                        Map.entry(PROVIDER_OPTION_CONSUL_REQUEST_TIMEOUT_MILLIS,
-                                Long.toString(registry.getConsul().getRequestTimeoutMillis())),
-                        Map.entry(PROVIDER_OPTION_EUREKA_USERNAME, registry.getEureka().getUsername()),
-                        Map.entry(PROVIDER_OPTION_EUREKA_PASSWORD, registry.getEureka().getPassword()),
-                        Map.entry(PROVIDER_OPTION_EUREKA_LEASE_SECONDS,
-                                Long.toString(registry.getEureka().getLeaseSeconds())),
-                        Map.entry(PROVIDER_OPTION_EUREKA_HEARTBEAT_SECONDS,
-                                Long.toString(registry.getEureka().getHeartbeatSeconds())),
-                        Map.entry(PROVIDER_OPTION_EUREKA_POLL_INTERVAL_MILLIS,
-                                Long.toString(registry.getEureka().getPollIntervalMillis())),
-                        Map.entry(PROVIDER_OPTION_EUREKA_REQUEST_TIMEOUT_MILLIS,
-                                Long.toString(registry.getEureka().getRequestTimeoutMillis()))),
-                RpcObserver.composite(
-                        observerProvider.orderedStream().toList())));
+                registry.getEndpoints(), namespace(registry), opts,
+                RpcObserver.composite(observerProvider.orderedStream().toList())));
+    }
+
+    /**
+     * 获取不可变进程级身份；默认 applicationName 来自 spring.application.name。
+     *
+     * @param properties 明确的 Registry 身份覆盖
+     * @param environment Spring 环境，未给出应用名称时必须启动失败
+     * @return 供 Provider、Consumer 和 BOTH 共用的进程身份
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public OtryxRpcApplicationIdentity peachRpcApplicationIdentity(
+            OtryxRpcProperties properties, Environment environment) {
+        OtryxRpcProperties.Registry registry = properties.getRegistry();
+        String name = registry.getApplicationName();
+        if (name == null || name.isBlank()) {
+            name = environment.getProperty(SPRING_APPLICATION_NAME, "");
+        }
+        if (name.isBlank()) {
+            throw new IllegalStateException(
+                    "Configure " + SPRING_APPLICATION_NAME + " or " + CONFIG_APPLICATION_NAME);
+        }
+        String id = registry.getInstanceId();
+        if (id == null || id.isBlank()) {
+            id = UUID.randomUUID().toString();
+        }
+        return new OtryxRpcApplicationIdentity(new ApplicationKey(namespace(registry), name), id);
+    }
+
+    private static String namespace(OtryxRpcProperties.Registry registry) {
+        String value = registry.getNamespace();
+        return value == null || value.isBlank() ? DEFAULT_APPLICATION_NAMESPACE : value.trim();
+    }
+
+    private static ApplicationMetadataBackend requireMetadata(ApplicationRegistry registry) {
+        if (!(registry instanceof ApplicationMetadataBackend backend)) {
+            throw new IllegalStateException(
+                    "ApplicationRegistry must implement ApplicationMetadataBackend "
+                            + "for Manifest and Mapping repositories");
+        }
+        Objects.requireNonNull(backend.manifestRepository(), "ApplicationMetadataBackend.manifestRepository");
+        Objects.requireNonNull(backend.serviceMappingRepository(),
+                "ApplicationMetadataBackend.serviceMappingRepository");
+        return backend;
+    }
+
+    /**
+     * 创建 Spring 全进程共享的一份应用成员协调器，只有实际 Consumer/Provider 被创建时入册。
+     *
+     * @param registry 实际 Member Registry
+     * @param identity 应用级进程身份
+     * @param properties 操作超时配置
+     * @return 有界成员发布与撤销协调器
+     */
+    @Bean(destroyMethod = DESTROY_METHOD_CLOSE)
+    @ConditionalOnMissingBean
+    public ApplicationMembershipCoordinator peachRpcMembershipCoordinator(
+            ApplicationRegistry registry, OtryxRpcApplicationIdentity identity,
+            OtryxRpcProperties properties) {
+        ApplicationMetadataBackend metadata = requireMetadata(registry);
+        return new ApplicationMembershipCoordinator(identity.application(), identity.instanceId(),
+                registry.registrar().orElseThrow(() ->
+                        new IllegalStateException("Application Registry does not support membership registration")),
+                metadata.manifestRepository(), metadata.serviceMappingRepository(),
+                properties.getRegistry().getControlPlaneTimeout());
+    }
+
+    /**
+     * 创建有界 ServiceMapping 缓存，只有显式控制面刷新才能访问后端。
+     *
+     * @param registry 拥有 Mapping 仓库的应用级注册中心
+     * @param properties Consumer 新鲜度配置
+     * @return 本地 ServiceMapping 控制面缓存
+     */
+    @Bean(destroyMethod = DESTROY_METHOD_CLOSE)
+    @ConditionalOnMissingBean
+    public ServiceMappingCache peachRpcMappingCache(
+            ApplicationRegistry registry, OtryxRpcProperties properties) {
+        ApplicationMetadataBackend metadata = requireMetadata(registry);
+        Duration stale = properties.getClient().getDirectoryMaxStaleness();
+        return new ServiceMappingCache(metadata.serviceMappingRepository(),
+                stale, MAPPING_REFRESH_RETRY);
+    }
+
+    /**
+     * 创建受限的不可变 Manifest 缓存。
+     *
+     * @param registry 拥有 Manifest 仓库的应用级注册中心
+     * @return 防止无界修订号膨胀的 ManifestSnapshotCache
+     */
+    @Bean(destroyMethod = DESTROY_METHOD_CLOSE)
+    @ConditionalOnMissingBean
+    public ManifestSnapshotCache peachRpcManifestCache(ApplicationRegistry registry) {
+        return new ManifestSnapshotCache(requireMetadata(registry).manifestRepository());
+    }
+
+    /**
+     * 应用级服务解析采用 Mapping→Eureka/Etcd/Nacos/Consul Member→Manifest→Schema。
+     *
+     * @param mappingCache 映射缓存
+     * @param registry 唯一权威成员目录
+     * @param manifestCache 不可变 Manifest 缓存
+     * @param properties Consumer 最长陈旧窗口
+     * @return 非 EventLoop 阻塞的 V2 Resolver
+     */
+    @Bean(destroyMethod = DESTROY_METHOD_CLOSE)
+    @ConditionalOnMissingBean
+    public ApplicationServiceResolver peachRpcApplicationResolver(
+            ServiceMappingCache mappingCache, ApplicationRegistry registry,
+            ManifestSnapshotCache manifestCache, OtryxRpcProperties properties) {
+        return new ApplicationServiceResolver(
+                mappingCache, registry, manifestCache, properties.getClient().getDirectoryMaxStaleness());
     }
 
     /**
@@ -319,7 +520,10 @@ public class OtryxRpcAutoConfiguration {
     /**
      * 创建运行时协调器。
      *
-     * @param registry 注册中心
+     * @param registry 应用级成员注册中心
+     * @param membership Provider/Consumer 共享的成员发布协调器
+     * @param resolver V2 应用级服务发现和安全过滤解析器
+     * @param identity 应用级名称和进程实例 ID
      * @param codecRegistry Codec 注册表
      * @param transportFactory Transport 工厂
      * @param transportOptions Transport 配置
@@ -337,7 +541,10 @@ public class OtryxRpcAutoConfiguration {
     @Bean(destroyMethod = DESTROY_METHOD_CLOSE)
     @ConditionalOnMissingBean
     public OtryxRpcRuntimeCoordinator peachRpcRuntimeCoordinator(
-            Registry registry,
+            ApplicationRegistry registry,
+            ApplicationMembershipCoordinator membership,
+            ApplicationServiceResolver resolver,
+            OtryxRpcApplicationIdentity identity,
             RpcCodecRegistry codecRegistry,
             RpcTransportFactory transportFactory,
             RpcTransportOptions transportOptions,
@@ -352,6 +559,9 @@ public class OtryxRpcAutoConfiguration {
             OtryxRpcProperties properties) {
         return new OtryxRpcRuntimeCoordinator(
                 registry,
+                membership,
+                resolver,
+                identity,
                 codecRegistry,
                 transportFactory,
                 transportOptions,

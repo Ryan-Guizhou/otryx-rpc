@@ -1,7 +1,9 @@
 package com.peachsoft.otryx.spring.autoconfigure;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
+import com.peachsoft.otryx.api.RpcUnavailableException;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
@@ -12,6 +14,7 @@ import com.peachsoft.otryx.transport.RpcTransportOptions;
 import com.peachsoft.otryx.spring.annotation.OtryxRpcReference;
 import com.peachsoft.otryx.spring.annotation.OtryxRpcService;
 import com.peachsoft.otryx.spring.runtime.OtryxRpcRuntimeCoordinator;
+import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -36,8 +39,92 @@ public class OtryxRpcAutoConfigurationTest {
                             AutoConfigurations.of(
                                     OtryxRpcAutoConfiguration.class))
                     .withPropertyValues(
-                            "otryx.rpc.security-profile=TRUSTED_DEVELOPMENT");
+                            "otryx.rpc.security-profile=TRUSTED_DEVELOPMENT",
+                            "spring.application.name=otryx-test-service");
 
+
+    @Test
+    void applicationDirectoryMustHaveBoundedStalenessByDefault() {
+        contextRunner.run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(OtryxRpcProperties.class)
+                    .getClient().getDirectoryMaxStaleness()).isEqualTo(java.time.Duration.ofSeconds(30));
+        });
+    }
+
+    @Test
+    void explicitUnboundedDirectoryConfigurationMustFailInV2Consumer() {
+        contextRunner.withPropertyValues("otryx.rpc.client.directory-max-staleness=0s")
+                .withBean(ConsumerBean.class)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("Application discovery requires bounded directory staleness");
+                });
+    }
+
+    @Test
+    void enabledSpringRuntimeRequiresNonemptyApplicationNameByDefault() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OtryxRpcAutoConfiguration.class))
+                .withPropertyValues("otryx.rpc.security-profile=TRUSTED_DEVELOPMENT")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasStackTraceContaining("spring.application.name");
+                });
+    }
+
+    @Test
+    void explicitlyConfiguredApplicationIdentityMustOverrideSpringName() {
+        contextRunner.withPropertyValues(
+                        "spring.application.name=unrelated-default",
+                        "otryx.rpc.registry.namespace=testing",
+                        "otryx.rpc.registry.application-name=explicit-orders",
+                        "otryx.rpc.registry.instance-id=stable-node-9")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    var identity = context.getBean(
+                            com.peachsoft.otryx.spring.runtime.OtryxRpcApplicationIdentity.class);
+                    assertThat(identity.application().namespace()).isEqualTo("testing");
+                    assertThat(identity.application().applicationName()).isEqualTo("explicit-orders");
+                    assertThat(identity.instanceId()).isEqualTo("stable-node-9");
+                });
+    }
+
+    @Test
+    void consumerOnlyRuntimeRegistersRealApplicationMembershipWithoutEndpoint() {
+        contextRunner.withBean(ConsumerBean.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            var identity = context.getBean(
+                    com.peachsoft.otryx.spring.runtime.OtryxRpcApplicationIdentity.class);
+            var registry = context.getBean(com.peachsoft.otryx.registry.ApplicationRegistry.class);
+            var coordinator = context.getBean(OtryxRpcRuntimeCoordinator.class);
+            coordinator.clientIfCreated().orElseThrow().membershipReady().toCompletableFuture().join();
+            var instances = registry.lookup(identity.application()).toCompletableFuture().join().instances();
+            assertThat(instances).hasSize(1);
+            assertThat(instances.getFirst().role())
+                    .isEqualTo(com.peachsoft.otryx.api.ApplicationRole.CONSUMER);
+            assertThat(instances.getFirst().rpcEndpoint()).isNull();
+        });
+    }
+
+    @Test
+    void providerAndConsumerInOneProcessShareOneBothMember() {
+        providerRunner().withBean(ServiceBean.class).withBean(ConsumerBean.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            var identity = context.getBean(
+                    com.peachsoft.otryx.spring.runtime.OtryxRpcApplicationIdentity.class);
+            var registry = context.getBean(com.peachsoft.otryx.registry.ApplicationRegistry.class);
+            var current = context.getBean(OtryxRpcRuntimeCoordinator.class);
+            current.clientIfCreated().orElseThrow().membershipReady().toCompletableFuture().join();
+            var instances = registry.lookup(identity.application()).toCompletableFuture().join().instances();
+            assertThat(instances).hasSize(1);
+            assertThat(instances.getFirst().role())
+                    .isEqualTo(com.peachsoft.otryx.api.ApplicationRole.BOTH);
+            assertThat(instances.getFirst().routableProvider()).isTrue();
+        });
+    }
 
     @Test
     void unspecifiedSecurityPolicyMustFailWithActionableMessage() {
@@ -385,7 +472,11 @@ public class OtryxRpcAutoConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     ConsumerBean consumer = context.getBean(ConsumerBean.class);
-                    assertThat(consumer.service.call()).isEqualTo("ok");
+                    // Consumer 可早于 Provider 发布完成首次空快照；仅等待预期的发现收敛失败。
+                    await().ignoreExceptionsMatching(failure -> failure instanceof CompletionException
+                                    && failure.getCause() instanceof RpcUnavailableException)
+                            .atMost(java.time.Duration.ofSeconds(5))
+                            .untilAsserted(() -> assertThat(consumer.service.call()).isEqualTo("ok"));
                 });
     }
 

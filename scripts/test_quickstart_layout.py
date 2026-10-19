@@ -25,10 +25,11 @@ def pom(relative: str) -> ET.Element:
 
 
 def dependencies(root: ET.Element) -> set[str]:
-    """Return direct dependencies without mistaking dependency-management entries."""
+    """Return production dependencies without mistaking tests or dependency management."""
     return {
         dep.findtext("m:artifactId", namespaces=NS)
         for dep in root.findall("m:dependencies/m:dependency", NS)
+        if dep.findtext("m:scope", default="compile", namespaces=NS).strip() != "test"
     }
 
 
@@ -39,6 +40,25 @@ def modules(root: ET.Element) -> set[str]:
         for mod in root.findall("m:modules/m:module", NS)
         if mod.text
     }
+
+
+def test_memory_runtime_dependency_scope_guard() -> None:
+    """Test libraries must be excluded without allowing an extra runtime SDK."""
+    required = {"otryx-quickstart-api", "otryx-spring-boot-starter"}
+
+    def fixture(scope: str | None) -> ET.Element:
+        scope_xml = "" if scope is None else f"<scope>{scope}</scope>"
+        return ET.fromstring(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><dependencies>'
+            '<dependency><artifactId>otryx-quickstart-api</artifactId></dependency>'
+            '<dependency><artifactId>otryx-spring-boot-starter</artifactId></dependency>'
+            f'<dependency><artifactId>extra-sdk</artifactId>{scope_xml}</dependency>'
+            '</dependencies></project>'
+        )
+
+    assert dependencies(fixture("test")) == required
+    for scope in (None, "compile", "runtime", "provided", "system", "unknown", ""):
+        assert dependencies(fixture(scope)) != required, f"Extra {scope!r} dependency escaped the Memory gate"
 
 
 def test_single_starter() -> None:
@@ -144,6 +164,7 @@ def test_scripts_and_documentation() -> None:
 
 
 if __name__ == "__main__":
+    test_memory_runtime_dependency_scope_guard()
     test_single_starter()
     test_quickstart_maven_modules()
     test_quickstart_actual_runtime()
