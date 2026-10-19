@@ -21,40 +21,21 @@
 
 ## 1. #139：应用级迁移清理与统一真实契约
 
-**文件边界：** Core `OtryxRpcClient`、`OtryxRpcServer`、`ServiceDirectory`、`RpcDirectoryFreshnessOptions`；Registry 旧 SPI/Factory/实现；所有受影响测试、benchmark、Starter、Quickstart CLI、scripts、CI 和中英文文档。
+**文件边界：** Core Client/Server/Directory、Registry SPI/Factory/实现、共享合同及故障测试、benchmark、Starter、Quickstart CLI、scripts、CI 和中英文文档。
 
-**接口：** 保留 `applicationControlPlane(resolver, membership, namespace)` 和 `applicationMembership(coordinator)`；删除旧 Builder 入口。应用 SPI 与 Wire v1 不变。`ServiceInstance` 仅是已验证 Provider 的本地 LB 载体。
+**接口：** 保留 `applicationControlPlane(resolver, membership, namespace)` 和 `applicationMembership(coordinator)`；删除旧 Builder 入口。应用 SPI 与 Wire v1 保持当前版本内自洽。`ServiceInstance` 仅是已验证 Provider 的本地负载均衡载体。
 
-- [x] 先运行公开入口删除及有限目录预算的失败测试，并核验未修改主线的基线。
-- [x] 删除旧生产体系，将所有有价值的异常/并发测试迁至应用级链路。
-- [x] 使用 Core test-jar 共享合同：Memory 单 Registry；四个真实后端各 10 个独立客户端、30 个真实接口，报告原生成员数、SPI 操作、订阅与收敛时间。
-- [x] 保留应用级五组 rolling、跨 JVM process/chain/revision、mTLS、真实后端与 Chaos 门禁；旧模式基线明确拒绝。
-- [x] 创建完整 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160)，首个 Head 为 `585b569175c048144b603863cfa1ef9401410157`。
-- [x] 首个 Head 的四后端 process/chain/revision 矩阵、实际五组 rolling、独立 JVM comparison smoke、Java Style Audit 与 Documentation Previews 已成功，并读取实际日志/artifact。
-- [x] 首轮普通 CI 的 benchmark 环境变量泄漏、Eureka 共享契约的 Resolver Future/状态竞态，以及 Dependency Review 因 SNAPSHOT 提取失败产生空结果却显示绿色的问题，已完成各自范围的本地修复验证；新准确 Head 仍待远端闭环。
-- [x] Resolver success/failure 完成顺序修复后的 fresh quality 返回 exit 0：604 tests、0 failures/errors、4 个条件 skips、92 份 XML，包含四个真实后端；此条不包含随后新增的 cancel 回调重入测试。
-- [x] 最终 cancel 回调重入补充已有独立 RED/GREEN：Resolver 8、Mapping 4、Manifest 4、Kit 4，共 20 tests，0 failures/errors/skips；不与 604-test 全量结果相加。
-- [x] 最终 Java 源树隔离 style 已成功：29 reports / 333 files / 0 findings，376 个输入 SHA-256 当时与工作树一致；随后 comparison POM 修补，不把此前 hash 核对扩大为当前 376 项仍匹配。Java / main reactor 输入未变，check_project 和 Java 元数据 339 / 0 也通过。
-- [x] 依赖门禁 15 个 Python 测试、两个修改 workflow 的严格 YAML / 31 个 shell 块静态复核通过；真实三根 SBOM/OSV 检出 comparison 回退后，修补工作树的 comparison 单根固定 reporter exit 0、新增漏洞差异为空，真实 Etcd smoke 也成功。
-- [ ] 形成修复提交；在新准确 Head 重新核验完整三根依赖审查及其他必需门禁，全部通过后才合并，再核验合并后 main。
+- [x] 删除旧公开注册入口，将有价值的异常、取消、并发和关闭断言迁至应用级链路。
+- [x] Core test-jar 共享合同覆盖 Memory 与四个真实后端；各真实后端 10 个独立 Registry clients、30 个真实接口，分别报告原生成员、SPI 完成、订阅和收敛。
+- [x] 四后端 process/chain/revision、五组 rolling、comparison smoke 以及真实后端/Chaos/ACL 门禁保留并实际执行；旧接口模式基线明确拒绝。
+- [x] 完整 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 已提交；本批收尾补丁提交前核验 Head `3133c8fb1a39bb53b4618e0eb94c419a39f15775`，base `793e942287f16677d56091f0ce45c61ac461c137`。
+- [x] 当前 Head 的 benchmark 环境变量作用域、Resolver Future/状态完成竞态和真实三根依赖审查已闭环；Dependency Review 的 34 个 POM/侧扫描有效，无新增漏洞差异，不代表零既有漏洞。
+- [x] 完成 Consumer 重复 Greeting 故障恢复、Eureka standalone self-peer/缓存期限/重启断言、Nacos 发布可见性确认和重启日志竞态的整批修复及本地真实后端验证。
+- [ ] 新准确 Head 所有相关门禁通过后合并，核验准确 main CI，再更新 #139/#127。
 
-**当前状态：PR 已创建，尚未合并，#139 尚未完成验收。** 首个 Head 的 14 条 workflow 已结束，普通 CI 与 Eureka 专项失败；其余 12 条显示 success，其中 Dependency Vulnerability Review 的空结果不构成漏洞验收。本轮三项修复已完成各自范围的本地闭环。根代理的 Resolver success/failure 完成顺序修复后完整 quality 已成功，固化证据为 `/tmp/otryx-build/quality-resolver-fix-evidence/summary.json`；随后新增的 cancel 回调重入测试不在这次 604-test 构建中，其最终版本的独立 20-test GREEN 见 `/tmp/otryx-build/resolver-cancellation-green.log`，对应 RED 为 `resolver-cancellation-red.log`。最终 style 39.978 秒 BUILD SUCCESS，聚合证据为 `/tmp/otryx-build/checkstyle-139-fix.json`，输入 hash 匹配只限 comparison POM 后续修补前。上述结果不等同最终代码已重新完成 605 项全量测试；下一 Head 的远端门禁尚未触发，不能预填通过。
+**当前状态：#139 尚未完成。** 本批补丁提交前核验的 Head 有 14 条 workflow 已结束，12 success、2 failure。普通 [CI 39228392049](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39228392049) 的 reactor 已通过 605 tests/0 failures/errors/18 条件 skips，但后续 Nacos Provider 停止时 Consumer 因本地超时退出；[Eureka 39228392137](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39228392137) 的 fixture self-replication 导致成员删除无法收敛。其他成功专项不能覆盖这两个失败路径。
 
-依赖门禁的三根双边实测覆盖 34 个 POM，来源为原 base / 首 Head 的拟合并树 `c9fc354f27412d8c1d56bdd216dd922e2de94e4e`，固定 reporter 实际检出新增 43 个 unique advisory ID / 44 个 occurrence / 8 个 package。comparison POM 随后优先恢复 Vert.x 4.5.34 原有的 Netty 4.1.138.Final / Jackson 2.21.6；修补后的 working-tree 单根 comparison reporter exit 0、新增差异为空。外部包数 66 → 89，两侧仍各有 24 个 vulnerable-package occurrence，不能写成零漏洞。证据为 `/tmp/otryx-build/comparison-bom-fix-evidence/verified-comparison.json`、`vulnerability-diff.json` 与 `source-provenance.json`；它们不代表补丁后的三根或新 Head 已通过。
-
-同一工作树重新安装 Core、clean package 后，真实共享 Etcd 的 OTRYX / Dubbo 独立 JVM smoke 分别为 47,361 / 28,036 次成功、均 0 errors，exit 0 且拥有的进程全部回收，见该目录 `smoke-process-status.json` / `smoke/`。fresh、installed、comparison shaded runtime 中的三份 Resolver.class SHA-256 一致。smoke JSON 的 git_sha 仍记录首 Head，实际补丁来源以 source-provenance 为准；不得据此宣称首 Head 或下一 Head 精确验证。15 个依赖脚本测试与 31 个 workflow shell 块的静态复核见 `dependency-gate-green.log`、`workflow-review-139-fix.json`。
-
-| 首轮证据 | 实际结果 |
-| --- | --- |
-| [普通 CI · 39221767557](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39221767557) | job 级 `OTRYX_RPC_BENCHMARK_COMMIT` 被 Starter 严格校验识别为未知配置，reactor 失败；本地已限制为 preflight/matrix/soak 三个 step 的准确 Head 输入，不放宽 Binder，待新 Head 实测 |
-| [Eureka 专项 · 39221767693](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39221767693) | 共享契约要求 HEALTHY 时观察到 NOT_READY；Resolver 本地已修复为先发布状态，再对外完成 Future，最终取消回调有独立 GREEN。首轮专属 restart 未执行，仍需新 Head 补验，不能由其他成功场景覆盖 |
-| [Dependency Review · 39221767605](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39221767605) | 未发布的 `1.0.0-SNAPSHOT` 依赖无法完成提取，results 为空；工作流显示 success 也不能算验收。实际提取 / 覆盖 / 失败关闭门禁本地已修复，并通过真实 reporter RED 定位 comparison 依赖回退；后续单根 working-tree GREEN 的范围见上文 |
-| [四后端 JVM · 39221767646](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39221767646) | 四后端 × 三场景成功；44 份快照与 12 份 summary，原 Consumer 进程恢复/晋级/回滚、真实额外方法和三 JVM 链均有日志 |
-| [Rolling · 39221767575](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39221767575) | 五组组合及 rollback 全部 PASS；归档实际 N=`793e942287f16677d56091f0ce45c61ac461c137`、N+1=`585b569175c048144b603863cfa1ef9401410157` |
-| [Comparison · 39221767757](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39221767757) | 真实共享 Etcd、两框架独立 JVM、0 errors、validator 成功；只有 2 秒预热/3 秒测量的 smoke，不属于 #146 正式性能验收 |
-| [Style · 39221767391](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39221767391) / [Docs · 39221767470](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39221767470) | 首个准确 Head 实际成功，后续 Head 仍需重新核验相关检查 |
-
-完整失败原因、Job/Artifact、已通过/跳过/未执行边界与恢复命令见[工程断点](../agent-governance-checkpoint.md)。本地旧绿色结果与首轮专项成功都不能替代修复后提交的验收。
+本轮修复均已完成定向回归与独立审查：Nacos 仅发布一次，在 ACK 后用 3 秒总预算确认可见性；三个进程启动点先由父进程清空本轮日志，避免旧 ready 被误用。真实 quality 基线在隔离源码、依赖目录通过：638 tests/0 failures/errors/4 条件 skips、93 XML；最后追加测试变更后再次清缓存执行全量 style，严格聚合 29 reports/334 Java files/0 findings，元数据 340 类型和生产语义字面量 239 文件均无发现。Nacos process 及独立 revision 完整升级/回滚通过，Consumer 未重启，原预算未放宽。Eureka 初始失败后追加四个运行输入：fixture 读写缓存过期 1s、参数回归、workflow 和分阶段重启断言；受控真实缓存机制四案通过，最后 6 integration + 1 真实 JVM restart 均通过、进程确实更换、成员恢复且服务已清理。其余 489 个运行输入不变。原初始失败没有足够诊断来唯一归因缓存竞态，原始失败记录保留；fixture 参数不是生产默认缓存的收敛保证。准确新 Head/main CI 尚未发生。详细日志、历史失败、已执行/跳过边界及下一命令见[工程断点](../agent-governance-checkpoint.md)；不同工作树阶段的测试数不能相加或互相替代。
 
 ## 2. #140：安全默认值与身份/元数据可信
 

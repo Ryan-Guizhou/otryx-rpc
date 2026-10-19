@@ -17,6 +17,8 @@ CONSUMER_LOG="$QUICKSTART_WORK_DIR/consumer.log"
 
 start_revision() {
   local instance="$1" port="$2" details="$3" log="$QUICKSTART_WORK_DIR/$1.log"
+  # Clear the old readiness marker before the background shell opens this log.
+  : >"$log"
   java -jar "$PROVIDER_JAR" \
     --spring.application.name="$PROVIDER_APP" \
     --otryx.rpc.registry.application-name="$PROVIDER_APP" \

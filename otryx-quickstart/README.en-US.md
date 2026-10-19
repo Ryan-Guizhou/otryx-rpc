@@ -196,6 +196,8 @@ OTRYX_RPC_E2E_RESTART_NACOS=false bash scripts/run_quickstart_process_e2e.sh
 
 The script uses `otryx-quickstart-process-provider` and `otryx-quickstart-process-consumer` in a scope separate from the manual example. It observes `initial`, `provider-stopped` and `provider-restarted` while one Consumer JVM stays alive. With the Provider stopped, the Consumer member remains but Greeting has no verified provider; after restoration the same Consumer must complete RPC again.
 
+Explicit repeat mode additionally tolerates a local `RpcTimeoutException` only for ordinary `GreetingService.hello`, which has no side effects and is marked idempotent, while preserving the default `3s` deadline for each RPC. The new timeout handling does not apply to one-shot, Relay, Details or expected-denial modes. Other failures keep the existing classification: explicit `UNAVAILABLE` may be retried, while remote deadline and other business, protocol and authorization errors propagate. The script's finite stage waits and TERM/KILL cleanup bound the recovery scenario.
+
 For a local test container you own and can restart, set `OTRYX_RPC_E2E_RESTART_NACOS=true` to also check `registry-recovered`, discovery by a fresh Consumer, and `endpoint-changed` (19090 → 19091). This extension requires exactly one `nacos/nacos-server:v3.2.4` container and endpoint `127.0.0.1:8848`. The switch defaults to `CI`; explicitly set it to `false` for shared or non-container Nacos. The aggregate entrypoint inherits this choice.
 
 The two-process, three-process and rolling verification scripts each use a separate Nacos group per run. They initialize shards before the first application starts and pass the same scope to every application start, restart and fresh Consumer probe.

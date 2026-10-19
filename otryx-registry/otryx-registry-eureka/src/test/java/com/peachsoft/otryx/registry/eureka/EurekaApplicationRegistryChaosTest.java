@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.registry.eureka;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.peachsoft.otryx.api.ApplicationInstance;
@@ -10,12 +11,14 @@ import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
 import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.registry.RegistrySubscription;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -44,45 +47,124 @@ class EurekaApplicationRegistryChaosTest {
                 new RpcEndpoint("127.0.0.1", 19391), 100, "sha256:" + "a".repeat(64), Map.of());
         ApplicationInstance consumer = new ApplicationInstance("consumer", app, ApplicationRole.CONSUMER,
                 null, 0, null, Map.of());
-        CountDownLatch initial = new CountDownLatch(1);
-        CountDownLatch failed = new CountDownLatch(1);
-        CountDownLatch recovered = new CountDownLatch(1);
-        AtomicBoolean outageObserved = new AtomicBoolean();
+        SubscriptionProbe probe = new SubscriptionProbe(provider, consumer);
 
         try (EurekaApplicationRegistry server = registry(ns);
              EurekaApplicationRegistry client = registry(ns);
-             RegistrySubscription ignored = client.subscribe(app, new ApplicationRegistryListener() {
-                 @Override
-                 public void onSnapshot(ApplicationDirectorySnapshot snapshot) {
-                     if (snapshot.instances().containsAll(List.of(provider, consumer))) {
-                         initial.countDown();
-                         if (outageObserved.get()) {
-                             recovered.countDown();
-                         }
-                     }
-                 }
-
-                 @Override
-                 public void onSynchronizationFailed(Throwable error) {
-                     outageObserved.set(true);
-                     failed.countDown();
-                 }
-             })) {
+             RegistrySubscription ignored = client.subscribe(app, probe)) {
             server.register(provider).toCompletableFuture().get(10, TimeUnit.SECONDS);
             server.register(consumer).toCompletableFuture().get(10, TimeUnit.SECONDS);
-            assertTrue(initial.await(25, TimeUnit.SECONDS));
+            assertTrue(probe.initial.await(25, TimeUnit.SECONDS),
+                    () -> "Eureka initial membership did not converge: " + probe.diagnostics());
             String script = System.getProperty("eureka.test.control");
+            probe.beginOutage();
             control(script, "stop");
             try {
-                assertTrue(failed.await(20, TimeUnit.SECONDS),
-                        "Eureka subscription must signal unavailable server");
+                assertTrue(probe.failed.await(20, TimeUnit.SECONDS),
+                        () -> "Eureka subscription must signal unavailable server: " + probe.diagnostics());
             } finally {
                 control(script, "start");
+                probe.restartCompleted();
             }
-            assertTrue(recovered.await(65, TimeUnit.SECONDS),
-                    "Eureka provider and Consumer members must reappear after a real restart");
-            assertTrue(client.lookup(app).toCompletableFuture().join().instances().stream()
-                    .filter(ApplicationInstance::routableProvider).allMatch(member -> member.equals(provider)));
+            assertTrue(probe.recovered.await(65, TimeUnit.SECONDS),
+                    () -> "Eureka members must recover after a real restart: " + probe.diagnostics());
+            ApplicationDirectorySnapshot finalSnapshot = client.lookup(app).toCompletableFuture().join();
+            assertTrue(finalSnapshot.instances().containsAll(List.of(provider, consumer)),
+                    () -> "Eureka final membership is incomplete: " + probe.describe(finalSnapshot));
+            assertEquals(List.of(provider), finalSnapshot.instances().stream()
+                    .filter(ApplicationInstance::routableProvider).toList(),
+                    () -> "Eureka final Provider pool is incorrect: " + probe.describe(finalSnapshot));
+        }
+    }
+
+    /** 仅记录本次订阅证据；阶段切换由控制真实 Server 的测试线程负责。 */
+    static final class SubscriptionProbe implements ApplicationRegistryListener {
+        private enum Phase { INITIAL, OUTAGE, RECOVERY }
+
+        private final List<ApplicationInstance> expected;
+        private final AtomicInteger snapshotCount = new AtomicInteger();
+        private final AtomicInteger successfulSyncs = new AtomicInteger();
+        private final AtomicInteger failedSyncs = new AtomicInteger();
+        private final AtomicReference<ApplicationDirectorySnapshot> lastSnapshot = new AtomicReference<>();
+        private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
+        private final AtomicReference<Phase> phase = new AtomicReference<>(Phase.INITIAL);
+        final CountDownLatch initial = new CountDownLatch(1);
+        final CountDownLatch failed = new CountDownLatch(1);
+        final CountDownLatch recovered = new CountDownLatch(1);
+
+        SubscriptionProbe(ApplicationInstance provider, ApplicationInstance consumer) {
+            expected = List.of(provider, consumer);
+        }
+
+        void beginOutage() {
+            if (!phase.compareAndSet(Phase.INITIAL, Phase.OUTAGE)) {
+                throw new IllegalStateException("Eureka outage phase is out of order");
+            }
+        }
+
+        void restartCompleted() {
+            if (!phase.compareAndSet(Phase.OUTAGE, Phase.RECOVERY)) {
+                throw new IllegalStateException("Eureka recovery phase is out of order");
+            }
+        }
+
+        @Override
+        public void onSnapshot(ApplicationDirectorySnapshot snapshot) {
+            Phase observedPhase = phase.get();
+            lastSnapshot.set(snapshot);
+            snapshotCount.incrementAndGet();
+            if (observedPhase == Phase.INITIAL && containsExpected(snapshot)) {
+                initial.countDown();
+            }
+        }
+
+        @Override
+        public void onSynchronizationSucceeded() {
+            Phase observedPhase = phase.get();
+            successfulSyncs.incrementAndGet();
+            // A healthy post-restart poll may retain the previous member list,
+            // so recovery must not depend on another content-change callback.
+            if (observedPhase == Phase.RECOVERY && failed.getCount() == 0 && containsExpected(lastSnapshot.get())) {
+                recovered.countDown();
+            }
+        }
+
+        @Override
+        public void onSynchronizationFailed(Throwable error) {
+            Phase observedPhase = phase.get();
+            lastFailure.set(error);
+            failedSyncs.incrementAndGet();
+            if (observedPhase == Phase.OUTAGE) {
+                failed.countDown();
+            }
+        }
+
+        private boolean containsExpected(ApplicationDirectorySnapshot snapshot) {
+            return snapshot != null && snapshot.instances().containsAll(expected);
+        }
+
+        String diagnostics() {
+            List<String> failureTypes = new ArrayList<>();
+            Throwable failure = lastFailure.get();
+            for (int depth = 0; failure != null && depth < 4; depth++) {
+                failureTypes.add(failure.getClass().getName());
+                failure = failure.getCause();
+            }
+            return "phase=" + phase.get() + ", snapshots=" + snapshotCount.get()
+                    + ", successfulSyncs=" + successfulSyncs.get() + ", failedSyncs=" + failedSyncs.get()
+                    + ", lastSnapshot=" + describe(lastSnapshot.get()) + ", lastFailureTypes=" + failureTypes;
+        }
+
+        String describe(ApplicationDirectorySnapshot snapshot) {
+            if (snapshot == null) {
+                return "none";
+            }
+            List<String> members = snapshot.instances().stream()
+                    .map(member -> member.instanceId() + ":" + member.role()
+                            + ":matchesExpected=" + expected.contains(member))
+                    .toList();
+            return "revision=" + snapshot.revision() + ", members=" + members
+                    + ", expectedMembersPresent=" + containsExpected(snapshot);
         }
     }
 

@@ -24,6 +24,8 @@ CONSUMER_LOG="$QUICKSTART_WORK_DIR/consumer.log"
 
 start_provider() {
   local port="$1" log="$QUICKSTART_WORK_DIR/provider-$1.log"
+  # Clear the old readiness marker before the background shell opens this log.
+  : >"$log"
   java -jar "$PROVIDER_JAR" \
     --spring.application.name="$PROVIDER_APP" \
     --otryx.rpc.registry.application-name="$PROVIDER_APP" \
@@ -56,6 +58,8 @@ wait_for_nacos_ports() {
 probe_fresh_consumer() {
   local attempt pid log="$QUICKSTART_WORK_DIR/fresh-consumer.log"
   for attempt in 1 2 3; do
+    # Clear the previous attempt's outcome before the background shell opens this log.
+    : >"$log"
     java -jar "$CONSUMER_JAR" \
       --spring.application.name=otryx-quickstart-process-fresh-consumer \
       --otryx.rpc.registry.application-name=otryx-quickstart-process-fresh-consumer \

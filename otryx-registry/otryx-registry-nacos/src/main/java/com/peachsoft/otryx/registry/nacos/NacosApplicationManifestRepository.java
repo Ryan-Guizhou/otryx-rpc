@@ -9,6 +9,9 @@ import java.util.Base64;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.LongSupplier;
 
 /**
  * Nacos Config 不可变、内容寻址的应用 Manifest 后端。
@@ -23,18 +26,34 @@ import java.util.concurrent.CompletionStage;
 public final class NacosApplicationManifestRepository implements ApplicationManifestRepository {
 
     private static final String FORMAT_PREFIX = "otryx-v2-manifest:";
+    private static final long CONFIRMATION_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(3L);
+    private static final long CONFIRMATION_POLL_NANOS = TimeUnit.MILLISECONDS.toNanos(25L);
     private final NacosV2ConfigStore store;
     private final NacosControlExecutor executor;
     private final String namespace;
+    private final LongSupplier clock;
 
     NacosApplicationManifestRepository(
             NacosV2ConfigStore store, NacosControlExecutor executor, String namespace) {
+        this(store, executor, namespace, System::nanoTime);
+    }
+
+    /** 使用可注入的单调纳秒时钟核验发布后的总确认预算。 */
+    NacosApplicationManifestRepository(
+            NacosV2ConfigStore store, NacosControlExecutor executor, String namespace, LongSupplier clock) {
         this.store = Objects.requireNonNull(store, "store");
         this.executor = Objects.requireNonNull(executor, "executor");
         this.namespace = Objects.requireNonNull(namespace, "namespace");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    /** 幂等创建不可变应用清单，拒绝错误归属和内容哈希污染。 */
+    /**
+     * 幂等创建不可变应用清单，拒绝错误归属和内容哈希污染。
+     *
+     * <p>发布 ACK 不代表 Nacos 查询缓存已经可见；仅在既有控制面线程中以三秒总预算
+     * 确认缺失记录，不重复写入。SDK 异常、错误内容或线程中断立即失败；确认超时后
+     * 远端写入仍可能已完成，调用方可用同一 Manifest 幂等重试。
+     */
     @Override
     public CompletionStage<Void> publish(ApplicationManifest manifest) {
         Objects.requireNonNull(manifest, "manifest");
@@ -52,16 +71,43 @@ public final class NacosApplicationManifestRepository implements ApplicationMani
                 return null;
             }
             boolean created = store.publishImmutable(dataId, encoded);
-            NacosV2ConfigStore.Entry confirmed = store.read(dataId);
-            if (confirmed.content() == null) {
-                throw new IllegalStateException("Nacos immutable Manifest was not persisted");
-            }
-            requireContent(confirmed.content(), manifest);
-            if (!created && !encoded.equals(confirmed.content())) {
-                throw new IllegalStateException("Nacos Manifest CAS was rejected");
-            }
+            confirmPublished(dataId, manifest, encoded, created);
             return null;
         });
+    }
+
+    private void confirmPublished(
+            String dataId, ApplicationManifest manifest, String encoded, boolean created) throws Exception {
+        long startedAt = clock.getAsLong();
+        while (true) {
+            long remainingMillis = TimeUnit.NANOSECONDS.toMillis(remainingConfirmationNanos(startedAt));
+            if (remainingMillis == 0L) {
+                throw new TimeoutException("Nacos Manifest confirmation deadline exceeded");
+            }
+            NacosV2ConfigStore.Entry confirmed = store.read(dataId, remainingMillis);
+            remainingConfirmationNanos(startedAt);
+            if (confirmed.content() != null) {
+                requireContent(confirmed.content(), manifest);
+                if (!created && !encoded.equals(confirmed.content())) {
+                    throw new IllegalStateException("Nacos Manifest CAS was rejected");
+                }
+                remainingConfirmationNanos(startedAt);
+                return;
+            }
+            TimeUnit.NANOSECONDS.sleep(Math.min(
+                    CONFIRMATION_POLL_NANOS, remainingConfirmationNanos(startedAt)));
+        }
+    }
+
+    private long remainingConfirmationNanos(long startedAt) throws InterruptedException, TimeoutException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("Nacos Manifest confirmation interrupted");
+        }
+        long remaining = CONFIRMATION_TIMEOUT_NANOS - (clock.getAsLong() - startedAt);
+        if (remaining <= 0L) {
+            throw new TimeoutException("Nacos Manifest confirmation deadline exceeded");
+        }
+        return remaining;
     }
 
     /** 按应用身份与完整 SHA256 Revision 读取并校验 Manifest。 */

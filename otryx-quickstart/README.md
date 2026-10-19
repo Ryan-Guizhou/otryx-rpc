@@ -206,6 +206,8 @@ OTRYX_RPC_E2E_RESTART_NACOS=false bash scripts/run_quickstart_process_e2e.sh
 
 脚本的应用名是 `otryx-quickstart-process-provider` 和 `otryx-quickstart-process-consumer`，与手工演示使用不同的隔离 scope。它在单个 Consumer JVM 存活期间观察 `initial`、`provider-stopped` 和 `provider-restarted`。停止 Provider 后，Consumer 成员仍存在，但 Greeting 的已验证 Provider 应为空；恢复后同一 Consumer 应重新完成 RPC。
 
+显式重复模式只对无副作用且已标记幂等的普通 `GreetingService.hello` 额外容忍本地 `RpcTimeoutException`，每次 RPC 仍受默认 `3s` deadline 约束。新增超时处理不适用于一次性调用、Relay、Details 或授权负例。其他异常沿用现有分类：明确的 `UNAVAILABLE` 可以重试，远端 deadline 及其他业务、协议、授权错误继续向上传播。脚本的有限阶段等待与 TERM/KILL 清理约束整个恢复场景。
+
 在拥有且允许重启的本地测试容器环境，可设置 `OTRYX_RPC_E2E_RESTART_NACOS=true`，再验证 `registry-recovered`、新 Consumer 的发现和 `endpoint-changed`（19090 → 19091）。此扩展要求唯一一个 `nacos/nacos-server:v3.2.4` 容器与 `127.0.0.1:8848` endpoint。该开关默认跟随 `CI`；使用共享或非容器 Nacos 时明确设为 `false`，统一入口也会继承这个选择。
 
 双进程、三进程和滚动验证脚本分别使用本轮独立 Nacos group，在首个应用启动前完成分片初始化，并把同一 scope 传给所有启动、重启和新 Consumer 探测进程。

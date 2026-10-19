@@ -173,6 +173,116 @@ class SnapshotAdversarialTest(unittest.TestCase):
             assert_snapshot("revision", "rolled-back", data, revision_fixture(), namespace="otryx-e2e-isolated")
 
 
+class LaunchLogGenerationTest(unittest.TestCase):
+    """Hold child redirection until the parent can inspect the previous launch's log."""
+
+    @staticmethod
+    def shell_function(script: str, name: str) -> str:
+        source = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+        start = source.index(name + "() {\n")
+        return source[start:source.index("\n}\n", start) + 3]
+
+    def run_launch_fixture(self, script: str, function: str, calls: str,
+                           marker: str, fail_outcome: bool = False) -> subprocess.CompletedProcess:
+        launch = self.shell_function(script, function).replace(
+            '>"$log" 2>&1 &', '>"$(fixture_log_destination "$log")" 2>&1 &')
+        waiter = self.shell_function("quickstart_e2e_common.sh", "quickstart_wait_log").replace(
+            "quickstart_wait_log() {", "fixture_wait_log() {", 1)
+        harness = textwrap.dedent('''\
+            set -euo pipefail
+            source "$2"
+            QUICKSTART_WORK_DIR="$1"
+            QUICKSTART_READY_SECONDS=3
+            QUICKSTART_STOP_SECONDS=2
+            PROVIDER_JAR=provider-fixture
+            CONSUMER_JAR=consumer-fixture
+            PROVIDER_APP=provider-fixture
+            CONSUMER_APP=consumer-fixture
+            MAX_STALENESS=3s
+            fixture_marker="$3"
+            fixture_fail_outcome="$4"
+
+            fixture_cleanup() {
+              local pid
+              for pid in "${QUICKSTART_PIDS[@]}"; do
+                kill -KILL "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+              done
+            }
+            trap fixture_cleanup EXIT
+
+            fixture_log_destination() {
+              local deadline=$((SECONDS + 3))
+              while [[ ! -f "$QUICKSTART_WORK_DIR/release-child" ]]; do
+                (( SECONDS < deadline )) || return 1
+                sleep 0.01
+              done
+              printf '%s' "$1"
+            }
+
+            quickstart_track_pid() {
+              QUICKSTART_PIDS+=("$1")
+              # The child cannot have opened its log yet. This is the same boundary
+              # at which the production waiter can otherwise accept an old marker.
+              if [[ -f "$log" ]] && grep -Fq "$fixture_marker" "$log"; then
+                printf 'stale\n'
+              else
+                printf 'clean\n'
+              fi
+              rm -f "$QUICKSTART_WORK_DIR/child-started"
+              : >"$QUICKSTART_WORK_DIR/release-child"
+            }
+
+            java() {
+              printf '%s\n' "$fixture_marker"
+              : >"$QUICKSTART_WORK_DIR/child-started"
+              exec sleep 30
+            }
+
+            quickstart_wait_log() {
+              local deadline=$((SECONDS + 3))
+              while [[ ! -f "$QUICKSTART_WORK_DIR/child-started" ]]; do
+                (( SECONDS < deadline )) || return 1
+                sleep 0.01
+              done
+              fixture_wait_log "$@" || return $?
+              if [[ "$fixture_fail_outcome" == true ]]; then
+                # Model a failed attempt that leaves a late success marker behind.
+                rm -f "$QUICKSTART_WORK_DIR/release-child"
+                return 1
+              fi
+            }
+            ''')
+        with tempfile.TemporaryDirectory() as work:
+            fixture = Path(work) / "launch.sh"
+            fixture.write_text(harness + waiter + "\n" + launch + "\n" + calls, encoding="utf-8")
+            return subprocess.run(["bash", str(fixture), work,
+                                   str(ROOT / "scripts" / "quickstart_e2e_common.sh"),
+                                   marker, "true" if fail_outcome else "false"],
+                                  capture_output=True, text=True, check=False, timeout=12)
+
+    def test_provider_restarts_cannot_reuse_the_previous_readiness_marker(self) -> None:
+        marker = "OTRYX RPC server started: bind=0.0.0.0:19090, advertised=127.0.0.1:19090"
+        for script, function, arguments, pid in (
+                ("run_quickstart_revision_e2e.sh", "start_revision", "baseline 19090 false", "BASELINE_PID"),
+                ("run_quickstart_process_e2e.sh", "start_provider", "19090", "PROVIDER_PID")):
+            with self.subTest(script=script):
+                calls = (f'{function} {arguments}\nquickstart_stop_pid "${pid}"\n'
+                         'rm -f "$QUICKSTART_WORK_DIR/release-child"\n'
+                         f'{function} {arguments}\n')
+                result = self.run_launch_fixture(script, function, calls, marker)
+                self.assertEqual(result.stdout.splitlines(), ["clean", "clean"], result.stdout + result.stderr)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_each_fresh_consumer_attempt_discards_previous_outcome_markers(self) -> None:
+        result = self.run_launch_fixture(
+            "run_quickstart_process_e2e.sh", "probe_fresh_consumer", "probe_fresh_consumer\n",
+            "RPC quickstart completed successfully: Hello, OTRYX RPC!", fail_outcome=True)
+        self.assertEqual(result.stdout.splitlines(), ["clean", "clean", "clean"], result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("A fresh Consumer could not discover the Provider", result.stderr)
+
+
 class ShellScenarioTest(unittest.TestCase):
     """Run production shell scripts with explicit fake external processes, never as RPC proof."""
 

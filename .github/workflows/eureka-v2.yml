@@ -15,6 +15,7 @@ on:
       - 'otryx-core/src/main/java/com/peachsoft/otryx/registry/ApplicationMetadataBackend.java'
       - 'otryx-core/src/main/java/com/peachsoft/otryx/registry/ServiceMappingCandidateSource.java'
       - '.github/test-fixtures/eureka-server/**'
+      - 'scripts/test_eureka_fixture_control.py'
       - '.github/workflows/eureka-v2.yml'
   push:
     branches: [main]
@@ -30,6 +31,7 @@ on:
       - 'otryx-core/src/main/java/com/peachsoft/otryx/registry/ApplicationMetadataBackend.java'
       - 'otryx-core/src/main/java/com/peachsoft/otryx/registry/ServiceMappingCandidateSource.java'
       - '.github/test-fixtures/eureka-server/**'
+      - 'scripts/test_eureka_fixture_control.py'
       - '.github/workflows/eureka-v2.yml'
 
 concurrency:
@@ -49,6 +51,8 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Verify standalone fixture address, peer exclusion and cache budget
+        run: python3 scripts/test_eureka_fixture_control.py
       - name: Start real Consul Metadata KV
         run: |
           docker run -d --name otryx-eureka-metadata -p 8500:8500 \
