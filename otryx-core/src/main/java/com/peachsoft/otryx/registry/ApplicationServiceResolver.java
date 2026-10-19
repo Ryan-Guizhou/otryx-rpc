@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
@@ -148,6 +149,7 @@ public final class ApplicationServiceResolver implements AutoCloseable {
 
     /**
      * 在控制面刷新完整解析链。单个业务键的并发刷新共享同一待完成任务。
+     * 本地状态与刷新配额先于返回任务的完成信号提交，完成回调可立即读取最新状态。
      *
      * @param key 服务映射键
      * @param expectedSchema 调用方 Schema 指纹
@@ -173,6 +175,10 @@ public final class ApplicationServiceResolver implements AutoCloseable {
         }
         CompletableFuture<VerifiedProviderSnapshot> target;
         synchronized (slot) {
+            if (closed.get()) {
+                slots.remove(route, slot);
+                return CompletableFuture.failedFuture(new IllegalStateException("Resolver closed"));
+            }
             if (slot.pending != null) {
                 return slot.pending;
             }
@@ -180,46 +186,58 @@ public final class ApplicationServiceResolver implements AutoCloseable {
                 running.decrementAndGet();
                 return CompletableFuture.failedFuture(new IllegalStateException("Too many discovery refreshes"));
             }
-            target = new CompletableFuture<>();
+            target = new RefreshFuture(slot);
             slot.pending = target;
-            Slot selected = slot;
-            target.whenComplete((snapshot, error) -> {
-                synchronized (selected) {
-                    if (!closed.get()) {
-                        if (error == null) {
-                            selected.state = new State(snapshot, null);
-                        } else {
-                            Long since = selected.state.failureSince;
-                            selected.state = new State(selected.state.snapshot,
-                                    since == null ? clock.getAsLong() : since);
-                        }
-                    }
-                    if (selected.pending == target) {
-                        selected.pending = null;
-                    }
-                    running.decrementAndGet();
-                }
-            });
         }
         CompletionStage<VerifiedProviderSnapshot> work;
         try {
             work = build(key, expectedSchema);
         } catch (Throwable error) {
-            target.completeExceptionally(error);
+            complete(slot, target, null, error);
             return target;
         }
-        work.whenComplete((snapshot, error) -> {
-            if (error != null) {
-                target.completeExceptionally(error);
-            } else {
-                target.complete(snapshot);
-            }
-        });
+        Slot selected = slot;
+        work.whenComplete((snapshot, error) -> complete(selected, target, snapshot, error));
         if (!target.isDone()) {
             CompletableFuture.delayedExecutor(REFRESH_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() ->
-                    target.completeExceptionally(new TimeoutException("Application discovery refresh timeout")));
+                    complete(selected, target, null, new TimeoutException("Application discovery refresh timeout")));
         }
         return target;
+    }
+
+    private void complete(
+            Slot slot, CompletableFuture<VerifiedProviderSnapshot> target,
+            VerifiedProviderSnapshot snapshot, Throwable error) {
+        CompletionOutcome outcome = claimCompletion(slot, target, snapshot, error);
+        if (outcome != null) {
+            if (outcome.failure() == null) {
+                target.complete(snapshot);
+            } else {
+                target.completeExceptionally(outcome.failure());
+            }
+        }
+    }
+
+    private CompletionOutcome claimCompletion(
+            Slot slot, CompletableFuture<VerifiedProviderSnapshot> target,
+            VerifiedProviderSnapshot snapshot, Throwable error) {
+        Throwable failure = error;
+        synchronized (slot) {
+            if (slot.pending != target) {
+                return null;
+            }
+            if (closed.get()) {
+                failure = new IllegalStateException("Resolver closed");
+            } else if (failure == null) {
+                slot.state = new State(snapshot, null);
+            } else {
+                Long since = slot.state.failureSince;
+                slot.state = new State(slot.state.snapshot, since == null ? clock.getAsLong() : since);
+            }
+            slot.pending = null;
+            running.decrementAndGet();
+        }
+        return new CompletionOutcome(failure);
     }
 
     private CompletionStage<VerifiedProviderSnapshot> build(ServiceMappingKey key, String expectedSchema) {
@@ -289,7 +307,7 @@ public final class ApplicationServiceResolver implements AutoCloseable {
                     pending = slot.pending;
                 }
                 if (pending != null) {
-                    pending.completeExceptionally(new IllegalStateException("Resolver closed"));
+                    complete(slot, pending, null, new IllegalStateException("Resolver closed"));
                 }
             });
             slots.clear();
@@ -304,6 +322,25 @@ public final class ApplicationServiceResolver implements AutoCloseable {
                 throw new IllegalArgumentException("Invalid schema fingerprint");
             }
         }
+    }
+
+    /** 解析器拥有的刷新任务，取消在通知调用方之前提交本地终态。 */
+    private final class RefreshFuture extends CompletableFuture<VerifiedProviderSnapshot> {
+        private final Slot slot;
+
+        private RefreshFuture(Slot slot) {
+            this.slot = slot;
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            CompletionOutcome outcome = claimCompletion(slot, this, null,
+                    new CancellationException("Application discovery refresh cancelled"));
+            return outcome == null ? isCancelled() : super.cancel(mayInterruptIfRunning);
+        }
+    }
+
+    private record CompletionOutcome(Throwable failure) {
     }
 
     private static final class Slot {

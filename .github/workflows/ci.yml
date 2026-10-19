@@ -26,7 +26,6 @@ jobs:
           - 9848:9848
     env:
       NACOS_TEST_ENDPOINT: 127.0.0.1:8848
-      OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -116,6 +115,7 @@ jobs:
           OTRYX_RPC_RUNNER_ID: ci-self-test
           OTRYX_RPC_EXPECT_RUNNER_ID: ci-self-test
           OTRYX_RPC_JVM_FLAGS: "-Xms128m -Xmx128m"
+          OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           bash scripts/preflight_v2d2_runner.sh target/v2d2-preflight-self-test
 
@@ -149,10 +149,12 @@ jobs:
       - name: Verify V2-D.2 benchmark harness
         env:
           OTRYX_RPC_JVM_FLAGS: "-Xms256m -Xmx256m"
+          OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash scripts/run_v2d2_benchmark_matrix.sh smoke target/v2d2-matrix-smoke
 
       - name: Verify 10k virtual-thread soak harness
         env:
+          OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           OTRYX_RPC_SOAK_CONCURRENCY: "10000"
           OTRYX_RPC_SOAK_PAYLOAD_SIZE: "64"
           OTRYX_RPC_SOAK_CONNECTIONS: "4"
