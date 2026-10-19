@@ -43,17 +43,17 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 
 **Design**: control-plane/data-plane isolation; SPI and adapters for implementations; no registry I/O, SPI scan or dynamic parsing per request.
 
-**V2 application-level registry migration (in progress):** Core now has a shared Provider/Consumer application identity, Manifest, per-instance CAS Mapping, verified Resolver and bounded control-plane caches. Application-scoped Memory, Etcd, Nacos, Consul (#135) and Eureka with external CAS metadata (#136) adapters have passed their individual Issue acceptance gates; Consul/Eureka include real backend E2E and fault-injection tests. The single Spring Boot Starter is being rewired in #137, while cross-JVM Quickstart and irreversible legacy interface-level SPI deletion remain #138–#139. **This is not yet a complete project-wide V2 rollout.** [Design and status](docs/design/application-registry-v2.md).
+**V2 application-level registry migration (in progress):** Core has a shared Provider/Consumer application identity, Manifest, per-instance CAS Mapping, service Resolver and bounded control-plane caches; application-scoped Memory, Etcd, Nacos, Consul (#135) and Eureka with external metadata (#136) adapters are implemented. The current #137 branch connects the single Spring Boot Starter to that control plane: each process instance shares one member record, Consumer creation waits for membership acknowledgement, and shutdown waits within a budget for Client/Provider cleanup before shared membership teardown. Acceptance of #137 still depends on the exact PR head and post-merge main CI. The complete Quickstart rewrite and legacy interface-level SPI deletion remain #138 and #139. **The project-wide V2 migration is not yet complete.** [Design and status](docs/design/application-registry-v2.md).
 
 <!-- doc-section:compatibility -->
 ## Compatibility and migration
 
-Wire v1 keeps its 32-byte header, message/codec IDs and historical registry compatibility metadata.
-However, full Java class names affect type and method identifiers and schema fingerprints. the current OTRYX namespace change is therefore a **breaking API migration**.
+Wire v1 keeps its 32-byte header and message/codec IDs; this does not establish interoperability between different registry models or Java namespaces.
+Full Java class names affect type and method identifiers and schema fingerprints, so the current OTRYX namespace change is a **breaking API migration**.
 
 - The original Peach RPC baseline remains available and is not republished under a new GAV.
-- Isolate deployments or use blue/green upgrades until cross-version service contract compatibility is independently verified.
-- Frozen registry keys remain peach.rpc.protocol.version / peach.rpc.schema.version / peach.rpc.schema.fingerprint.
+- Rolling checks select their matrix from the Starter's active registry generation: matching generations retain the complete N/N+1 and rollback combinations; interface/application migration requires only N/N and N+1/N+1 independent-JVM pairs and does not establish mixed-generation interoperability.
+- Use isolated registry scopes across generations, and migrate or roll back matching Provider/Consumer pairs. Legacy interface-level metadata keys belong only to the historical implementation retained until #139.
 
 [Wire compatibility](docs/wire-compatibility.md) · [Migration/rollback](docs/migration.md)
 
@@ -70,6 +70,8 @@ Requires **JDK 21 and Spring Boot 3.5.4**. The checked-in Maven Wrapper pins Mav
 Use `mvnw.cmd` on Windows CMD/PowerShell; a globally installed Maven is optional.
 
 Start with the **no-Docker single-JVM Memory Quickstart**, then Nacos Provider/Consumer and A→B→C Deadline walkthroughs in [otryx-quickstart](otryx-quickstart/README.md); see [Getting started](docs/getting-started.md) for complete setup. The consumer's `QuickstartCallObserver` demonstrates a safe, Spring-managed custom observability SPI.
+
+These existing examples do not establish completion of the full V2 Quickstart rewrite and acceptance in #138. See the [Starter guide](docs/reference/starter.md) for #137 behavior and source-test commands.
 
 <!-- doc-section:dependency -->
 ## Maven coordinates
@@ -92,17 +94,25 @@ First-release RC/GA candidates use an [unsigned non-publishing dry-run](docs/ref
 ## Configuration
 
 ~~~yaml
+spring:
+  application:
+    name: order-service
 otryx:
   rpc:
     enabled: true
     security-profile: TRUSTED_DEVELOPMENT # isolated development only
     registry:
       type: memory
+      control-plane-timeout: 3s
 ~~~
+
+`spring.application.name` supplies the default application identity; override it with `otryx.rpc.registry.application-name`. Startup fails if both are absent. `registry.control-plane-timeout` is independent of `server.control-plane-timeout`, defaults to `3s`, and must be positive and no greater than `30s`; it bounds shared membership operations and the Consumer membership wait. No member is created before an actual Consumer or Provider runtime is needed.
 
 Real network deployments must explicitly choose `NETWORK_MTLS` with mutual TLS and a strict Fory DTO allowlist. An optional `RpcAuthorizer` bean checks the verified peer against ServiceKey/MethodId. Missing security intent fails Spring startup; `TRUSTED_DEVELOPMENT` is for isolated demos only. See the [security guide](docs/security.md).
 
-The in-progress [Eureka V2](docs/reference/registry-eureka-v2.en-US.md) control plane separates Eureka members from CAS metadata. The Consul V2 control plane is documented in [Consul V2](docs/reference/registry-consul-v2.en-US.md). Legacy Consul and Eureka are opt-in adapters with polling-based subscriptions. See [Consul](docs/reference/registry-consul.md) and [Eureka](docs/reference/registry-eureka.md).
+Implemented application-level backends are documented in [Etcd](docs/reference/registry-etcd.md), [Nacos V2](docs/reference/registry-nacos-v2.md), [Consul V2](docs/reference/registry-consul-v2.en-US.md) and [Eureka V2](docs/reference/registry-eureka-v2.en-US.md). Consul uses a single local Agent. Eureka owns application members and requires a separately configured Etcd/Nacos/Consul metadata backend and endpoints. The Starter provides neither fallback to legacy interface-level adapters nor dual reads/writes.
+
+Initialize Nacos V2 Mapping shards before starting any application, in an exclusive maintenance window for the same namespace/group. Quickstart provides a standalone initialization command; its independent-process verification scripts perform this step for a separate group per run. See the [Nacos startup steps](otryx-quickstart/README.en-US.md#2-nacos-two-independent-jvms).
 
 See [Starter guide](docs/reference/starter.md) and [Production configuration](docs/configuration.md) for validated options, TLS and registry setup. The [Deadline and call-context reference](docs/reference/deadline-context.md) covers precedence, explicit scope propagation and A→B→C budget semantics (Chinese).
 
@@ -132,7 +142,8 @@ The repository requires **Chinese standard Javadoc, English structured logs and 
 
 ## Registry freshness
 
-Consumers can opt in to `otryx.rpc.client.directory-max-staleness` to reject expired last-known-good snapshots
-**after explicit registry synchronization failure**. The default remains unbounded; a quiet Watch is not considered
-unhealthy. Etcd, Nacos, and Consul/Eureka report health and use bounded recovery.
-See the [registry recovery and independent-JVM test guide](docs/reference/registry-freshness.md) for limitations.
+Spring Starter V2 defaults to `otryx.rpc.client.directory-max-staleness=30s` and rejects expired last-known-good routes
+**after explicit registry synchronization failure**; a quiet Watch alone is not considered unhealthy.
+When `client.enabled=true`, an explicit `0s` unbounded setting is rejected even before any reference is created.
+Etcd, Nacos, and Consul/Eureka report health and use bounded recovery. See the
+[registry recovery and independent-JVM test guide](docs/reference/registry-freshness.md) for the real Nacos restart checks and their limits.

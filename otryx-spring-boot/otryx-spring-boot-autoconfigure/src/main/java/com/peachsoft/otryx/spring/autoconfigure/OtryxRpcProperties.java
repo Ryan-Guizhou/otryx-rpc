@@ -16,6 +16,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <p>内部属性组包括 Registry、Transport、Client、Server 与 Codec。
  * 字段默认值应以当前代码和对应启动测试为准；影响 TLS、重试、背压和
  * 线程资源的配置必须验证合法范围及生效时机，不能只依赖 Javadoc。
+ * Starter 在 BeanFactory 阶段严格检查本类拥有的配置键，观测 Adapter 和
+ * Quickstart 的独立配置子树不由本类绑定或校验。
  *
  * @Author Ryan
  * @Version 1.0.0
@@ -263,6 +265,7 @@ public class OtryxRpcProperties implements InitializingBean {
      * 注册中心配置。
      */
     public static class Registry {
+        private static final Duration DEFAULT_CONTROL_PLANE_TIMEOUT = Duration.ofSeconds(3);
 
         /**
          * 创建注册中心配置。
@@ -274,6 +277,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private String namespace = "";
         private String applicationName = "";
         private String instanceId = "";
+        private Duration controlPlaneTimeout = DEFAULT_CONTROL_PLANE_TIMEOUT;
         private long leaseTtlSeconds = 30;
         private final Nacos nacos = new Nacos();
         private final Consul consul = new Consul();
@@ -367,6 +371,27 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public void setInstanceId(String instanceId) {
             this.instanceId = instanceId;
+        }
+
+        /**
+         * 返回共享应用成员每次控制面操作的超时，与 Provider 是否启用无关。
+         *
+         * @return 正数且不超过 30 秒的超时，默认 3 秒
+         */
+        public Duration getControlPlaneTimeout() {
+            return controlPlaneTimeout;
+        }
+
+        /**
+         * 设置 Provider、Consumer、BOTH 共享成员的注册与注销操作超时。
+         *
+         * <p>Spring 绑定后按 Core 成员协调器的上限校验；不会改变
+         * server.control-plane-timeout 所控制的 Provider 启停步骤。
+         *
+         * @param controlPlaneTimeout 非空正数，最大 30 秒
+         */
+        public void setControlPlaneTimeout(Duration controlPlaneTimeout) {
+            this.controlPlaneTimeout = controlPlaneTimeout;
         }
 
         /**
@@ -1306,6 +1331,7 @@ public class OtryxRpcProperties implements InitializingBean {
      * Consumer 配置。
      */
     public static class Client {
+        private static final Duration DEFAULT_DIRECTORY_MAX_STALENESS = Duration.ofSeconds(30);
 
         /**
          * 创建Consumer配置。
@@ -1315,7 +1341,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private boolean enabled = true;
         private Duration timeout = Duration.ofSeconds(3);
         private Map<String, Duration> methodTimeouts = Map.of();
-        private Duration directoryMaxStaleness = Duration.ofSeconds(30);
+        private Duration directoryMaxStaleness = DEFAULT_DIRECTORY_MAX_STALENESS;
         private String loadBalancer = "p2c-ewma";
         private String proxy = "jdk";
         private final Resilience resilience = new Resilience();

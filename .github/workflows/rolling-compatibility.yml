@@ -14,11 +14,15 @@ on:
       - 'otryx-serialization/otryx-serialization-fory/**'
       - 'otryx-transport/otryx-transport-vertx/**'
       - 'otryx-registry/**'
+      - 'otryx-spring-boot/**'
       - 'otryx-quickstart/**'
       - 'otryx-examples/**'
       - 'pom.xml'
       - 'docs/release-status.properties'
       - 'scripts/run_rolling_compatibility_e2e.sh'
+      - 'scripts/bootstrap_quickstart_nacos.sh'
+      - 'scripts/check_registry_generation_boundary.py'
+      - 'scripts/test_registry_generation_boundary.py'
       - '.github/workflows/rolling-compatibility.yml'
 
 concurrency:
@@ -55,6 +59,9 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+
+      - name: Verify registry generation and required JVM matrix fixtures
+        run: python3 scripts/test_registry_generation_boundary.py
 
       - name: Wait for Nacos
         shell: bash
@@ -126,7 +133,7 @@ jobs:
           package
           -DskipTests
 
-      - name: Verify N/N+1 and rollback (same Quickstart API namespace)
+      - name: Verify both Quickstart generations and supported rolling pairs
         if: steps.baseline.outputs.family == 'otryx-quickstart'
         run: >
           bash scripts/run_rolling_compatibility_e2e.sh

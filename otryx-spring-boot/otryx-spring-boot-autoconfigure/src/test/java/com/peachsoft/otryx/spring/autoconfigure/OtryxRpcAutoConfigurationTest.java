@@ -1,7 +1,9 @@
 package com.peachsoft.otryx.spring.autoconfigure;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
+import com.peachsoft.otryx.api.RpcUnavailableException;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
@@ -12,6 +14,7 @@ import com.peachsoft.otryx.transport.RpcTransportOptions;
 import com.peachsoft.otryx.spring.annotation.OtryxRpcReference;
 import com.peachsoft.otryx.spring.annotation.OtryxRpcService;
 import com.peachsoft.otryx.spring.runtime.OtryxRpcRuntimeCoordinator;
+import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -469,7 +472,11 @@ public class OtryxRpcAutoConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     ConsumerBean consumer = context.getBean(ConsumerBean.class);
-                    assertThat(consumer.service.call()).isEqualTo("ok");
+                    // Consumer 可早于 Provider 发布完成首次空快照；仅等待预期的发现收敛失败。
+                    await().ignoreExceptionsMatching(failure -> failure instanceof CompletionException
+                                    && failure.getCause() instanceof RpcUnavailableException)
+                            .atMost(java.time.Duration.ofSeconds(5))
+                            .untilAsserted(() -> assertThat(consumer.service.call()).isEqualTo("ok"));
                 });
     }
 

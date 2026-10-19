@@ -34,6 +34,7 @@ flowchart LR
 - JDK **21**，确认 `java -version`；
 - 仓库自带 Maven Wrapper（固定 Maven 3.9.11），Linux/macOS 使用 `./mvnw`，Windows 使用 `mvnw.cmd`；
 - 首次下载 Maven/依赖需要 Maven Central 网络访问；
+- Bash 初始化与跨进程验证脚本需要 GNU coreutils 的 `timeout` 命令在 `PATH` 中可用；macOS 默认不带该命令，需先安装并配置；
 - 仅进行 Nacos、Consul 或 Eureka 双进程路径时才需要对应外部服务；Memory 路径不需要 Docker。
 
 ```bash
@@ -67,6 +68,8 @@ Quickstart memory RPC succeeded: Hello, Quickstart!
 
 该应用的完整调用路径是：`MemoryGreetingRunner` 中的 `@OtryxRpcReference` → Consumer（JDK Proxy，优先 Generated Stub）→ Fory 编码 → Vert.x loopback → `MemoryGreetingServiceImpl` → Response。只运行在单进程、回环地址、动态端口，**不代表网络环境安全配置已经完成**。
 
+应用成员入册后，Provider 路由仍需异步刷新。Memory 演示对已声明幂等的 `hello` 在最多 10 秒的发现预算内重试明确的不可用结果；已有父调用 Deadline 时使用更短预算，每次 RPC 也受剩余时间约束。业务、协议和响应校验失败会立即终止，线程中断会保留中断标记并退出等待。
+
 主要源码：
 
 - [Memory Provider](otryx-quickstart-memory/src/main/java/com/peachsoft/otryx/quickstart/memory/MemoryGreetingServiceImpl.java)
@@ -83,6 +86,16 @@ docker compose -f otryx-quickstart/docker-compose.yml up -d
 ```
 
 确认 Nacos 本地 TCP `127.0.0.1:8848` 可达。Quickstart Provider 和 Consumer 的 `application.yml` 均配置了 `registry.type=nacos`，并在各自 Maven POM 中**显式引入** `otryx-registry-nacos`。单一 Starter 不会偷偷引入未使用的注册中心。
+
+**在启动任何 Provider/Consumer 前初始化 Nacos V2 Mapping 分片。** 等待 Nacos 的 HTTP `8848` 和客户端 gRPC `9848` 端口就绪，然后在该 namespace/group 没有业务进程写入的独占维护窗口执行：
+
+```bash
+bash scripts/bootstrap_quickstart_nacos.sh \
+  otryx-quickstart/otryx-quickstart-provider/target/otryx-quickstart-provider-1.0.0-SNAPSHOT-exec.jar \
+  127.0.0.1:8848 public OTRYX_RPC
+```
+
+该命令通过独立 JVM 调用已有 `NacosV2MetadataBootstrap`，与后续示例使用相同的 endpoint、namespace 和 Nacos group。它只创建缺失分片并校验、保留已有内容；初始化失败时先解决错误，再启动应用。普通 Starter 启动不会代替这一步，也不能与业务 Mapping 写入并发执行。参数和 CAS 约束见 [Nacos V2 文档](../docs/reference/registry-nacos-v2.md#4-nacos-config-servicemappingmd5-casfencing分片)。
 
 ### 2.2 启动 Provider（终端 A）
 
@@ -115,9 +128,11 @@ sequenceDiagram
     participant P as Provider JVM
     participant N as Nacos
     participant C as Consumer JVM
-    P->>N: 注册 ServiceKey 和 Endpoint
-    C->>N: 订阅服务目录
-    N-->>C: Endpoint 快照
+    P->>N: 写入 Manifest、Mapping 和 Provider 成员
+    C->>N: 注册 Consumer 成员（无 RPC Endpoint）
+    C->>N: 读取 Mapping、应用成员和 Manifest
+    N-->>C: 候选数据
+    C->>C: 验证角色、契约及 Endpoint
     C->>P: HELLO / HELLO_ACK
     C->>P: REQUEST (Fory)
     P-->>C: RESPONSE
@@ -130,6 +145,8 @@ OTRYX_RPC_E2E_RESTART_NACOS=false bash scripts/run_quickstart_process_e2e.sh
 ```
 
 这还会在单个 Consumer JVM 存活期间验证 Provider 停止与恢复。CI 在具备可重启的测试 Nacos 容器时可额外验证 Nacos 控制面恢复、注册恢复与端点更换。
+
+双进程、三进程和滚动验证脚本分别使用本轮独立 Nacos group，在首个应用启动前完成分片初始化，并把同一 scope 传给所有启动、重启和新 Consumer 探测进程。
 
 ## 3. 第三条调用：三个 JVM 的 Deadline 和 Metadata
 
@@ -194,7 +211,22 @@ java -jar otryx-quickstart/otryx-quickstart-provider/target/otryx-quickstart-pro
 java -jar otryx-quickstart/otryx-quickstart-consumer/target/otryx-quickstart-consumer-1.0.0-SNAPSHOT-exec.jar --spring.profiles.active=consul
 ```
 
-把 `consul` 换成 `eureka` 即可选择 Eureka。认证通过 `CONSUL_HTTP_TOKEN` 或 `EUREKA_USERNAME`/`EUREKA_PASSWORD` 等环境变量传递，**不要提交真实密钥**。详见 [Consul](../docs/reference/registry-consul.md) 和 [Eureka](../docs/reference/registry-eureka.md)。
+Eureka 只保存应用成员，必须另外配置提供 Manifest/Mapping 的元数据后端。下面示例要求同时运行 Eureka 和 Consul；Quickstart 已显式引入这两个 Adapter，两个进程均指定同一个 Consul KV 后端：
+
+```bash
+# Provider 终端
+java -jar otryx-quickstart/otryx-quickstart-provider/target/otryx-quickstart-provider-1.0.0-SNAPSHOT-exec.jar \
+  --spring.profiles.active=eureka \
+  --otryx.rpc.registry.eureka.metadata-backend=consul \
+  --otryx.rpc.registry.eureka.metadata-endpoints=http://127.0.0.1:8500
+# Consumer 终端
+java -jar otryx-quickstart/otryx-quickstart-consumer/target/otryx-quickstart-consumer-1.0.0-SNAPSHOT-exec.jar \
+  --spring.profiles.active=eureka \
+  --otryx.rpc.registry.eureka.metadata-backend=consul \
+  --otryx.rpc.registry.eureka.metadata-endpoints=http://127.0.0.1:8500
+```
+
+Consul Profile 的认证通过 `CONSUL_HTTP_TOKEN` 传递，Eureka 成员面的认证通过 `EUREKA_USERNAME`/`EUREKA_PASSWORD` 传递。Eureka 的外置元数据凭据须另外通过 `metadata-options` 配置，见 [Starter 后端装配](../docs/reference/starter.md)。不要提交真实密钥。后端约束见 [Consul V2](../docs/reference/registry-consul-v2.md) 和 [Eureka V2](../docs/reference/registry-eureka-v2.md)。
 
 ## 6. 安全运行：TLS / mTLS
 
@@ -202,9 +234,11 @@ Provider、Consumer 的 `application-tls.yml`、`application-mtls.yml` 都读取
 
 | 环境变量 | 用途 |
 |---|---|
-| `OTRYX_RPC_TLS_CERT` | 当前进程的 PEM 证书 |
-| `OTRYX_RPC_TLS_KEY` | 对应私钥 |
-| `OTRYX_RPC_TLS_CA` | 信任 CA 证书 |
+| `OTRYX_QUICKSTART_TLS_CERT` | 当前进程的 PEM 证书 |
+| `OTRYX_QUICKSTART_TLS_KEY` | 对应私钥 |
+| `OTRYX_QUICKSTART_TLS_CA` | 信任 CA 证书 |
+
+旧启动脚本中的 `OTRYX_RPC_TLS_CERT`、`OTRYX_RPC_TLS_KEY`、`OTRYX_RPC_TLS_CA` 应改用上述新名，并移除旧环境变量；旧名会被严格配置校验拒绝。证书路径对应的 `otryx.rpc.transport.security.*` 属性与安全要求保持不变。
 
 使用 `--spring.profiles.active=tls` 或 `--spring.profiles.active=mtls` 启动。Consumer 默认执行 Hostname Verification，证书身份必须与目标地址匹配。mTLS Profile 会启用 `NETWORK_MTLS`、严格 Fory DTO allowlist；**还必须提供基于验证过的客户端身份、ServiceKey、MethodId 的 `RpcAuthorizer` Bean**，否则网络 Profile 下 Provider 会默认拒绝业务调用。这里的 TLS/mTLS 文件是安全配置起点，不应在未配置真实证书与授权时误认为端到端生产接入已完成。
 
@@ -249,7 +283,11 @@ Core 编程式 `ApplicationMembershipCoordinator`、`ApplicationServiceResolver`
 `OtryxRpcClient.applicationControlPlane(...)` / `OtryxRpcServer.applicationMembership(...)`
 已经建立独立的应用级 RPC 路径。可运行的 **Core 单 JVM Wire v1 E2E**
 在 `ApplicationRuntimeEndToEndTest` 中验证三接口、独立 Consumer 与同进程 BOTH。
-当前本目录的 Spring Quickstart **尚未迁移到应用级 Registry**，仍使用旧链路；
-不能以运行本目录来证明 V2 Provider/Consumer 应用级身份已生产可用。
-Starter 自动配置和所有 Registry Adapter 迁移见 [V2 设计与状态](../docs/design/application-registry-v2.md)
-及 #133–#139；保留当前 Quickstart 行为仅为分阶段构建验证，非最终双模式支持。
+当前 #137 分支已将唯一 Spring Starter 接入同一套应用级控制面，
+本目录的 Spring Quickstart 通过该 Starter 注册 Provider、Consumer 或 BOTH 成员；
+纯 Consumer 不注册 RPC Endpoint。Nacos 独立进程脚本在启动应用前初始化本轮独立 scope。
+#137 的验收以准确 PR Head 和合并后 main CI 为准。
+
+完整的成员诊断、两个真实 Manifest revision 滚动和 mTLS 授权教程仍归 #138；
+旧接口级 SPI 的全量删除仍归 #139。现有 Quickstart 成功不能作为全仓 V2 迁移完成或
+生产就绪的证明。各阶段范围与剩余工作见 [V2 设计与状态](../docs/design/application-registry-v2.md)。

@@ -22,6 +22,14 @@ final class OtryxRpcStartupDiagnostics {
             LoggerFactory.getLogger(OtryxRpcStartupDiagnostics.class);
     private static final String PREFIX = "otryx.rpc.";
     private static final String NACOS_REGISTRY_TYPE = "nacos";
+    private static final String CONSUL_REGISTRY_TYPE = "consul";
+    private static final String EUREKA_REGISTRY_TYPE = "eureka";
+    private static final String REGISTRY_CONTROL_PLANE_TIMEOUT = "registry.control-plane-timeout";
+    private static final String CONSUL_DATACENTER = "registry.consul.datacenter";
+    private static final String EUREKA_METADATA_BACKEND = "registry.eureka.metadata-backend";
+    private static final String EUREKA_METADATA_ENDPOINTS = "registry.eureka.metadata-endpoints";
+    private static final Set<String> EUREKA_METADATA_BACKENDS = Set.of("etcd", "nacos", "consul");
+    private static final Duration MAX_MEMBERSHIP_CONTROL_TIMEOUT = Duration.ofSeconds(30);
 
     private OtryxRpcStartupDiagnostics() {
     }
@@ -35,6 +43,10 @@ final class OtryxRpcStartupDiagnostics {
         OtryxRpcProperties.Registry registry = properties.getRegistry();
         requireText("registry.type", registry.getType());
         positive("registry.lease-ttl-seconds", registry.getLeaseTtlSeconds());
+        positive(REGISTRY_CONTROL_PLANE_TIMEOUT, registry.getControlPlaneTimeout());
+        if (registry.getControlPlaneTimeout().compareTo(MAX_MEMBERSHIP_CONTROL_TIMEOUT) > 0) {
+            throw invalid(REGISTRY_CONTROL_PLANE_TIMEOUT, "must not exceed 30 seconds");
+        }
         if (NACOS_REGISTRY_TYPE.equals(registry.getType())) {
             requireText("registry.nacos.group", registry.getNacos().getGroup());
             requireText("registry.nacos.cluster", registry.getNacos().getCluster());
@@ -120,6 +132,10 @@ final class OtryxRpcStartupDiagnostics {
         if (client.isEnabled()) {
             positive("client.timeout", client.getTimeout());
             nonNegative("client.directory-max-staleness", client.getDirectoryMaxStaleness());
+            if (client.getDirectoryMaxStaleness().isZero()) {
+                throw invalid("client.directory-max-staleness",
+                        "Application discovery requires bounded directory staleness");
+            }
             requireText("client.proxy", client.getProxy());
             requireText("client.load-balancer", client.getLoadBalancer());
             validateResilience(client.getResilience());
@@ -186,6 +202,33 @@ final class OtryxRpcStartupDiagnostics {
             LOGGER.warn(
                     "OTRYX RPC Fory uses TRUSTED_COMPATIBILITY; enable STRICT_ALLOWLIST "
                             + "when peers are not fully trusted");
+        }
+    }
+
+    /**
+     * 在默认 Registry 工厂加载之前校验其专属后端，错误仅输出公开配置键。
+     *
+     * <p>自定义 ApplicationRegistry Bean 不经过默认工厂，因此不受未使用的
+     * Eureka/Consul 属性影响；其元数据和注册能力仍由自动装配验证。
+     *
+     * @param registry 当前由 Starter 创建的注册中心配置
+     */
+    static void validateRegistryBackend(OtryxRpcProperties.Registry registry) {
+        if (CONSUL_REGISTRY_TYPE.equals(registry.getType())) {
+            String datacenter = registry.getConsul().getDatacenter();
+            if (datacenter != null && !datacenter.isBlank()) {
+                throw invalid(CONSUL_DATACENTER,
+                        "remove this legacy setting; Consul V2 uses exactly one local Agent "
+                                + "selected by otryx.rpc.registry.endpoints");
+            }
+        }
+        if (EUREKA_REGISTRY_TYPE.equals(registry.getType())) {
+            String backend = registry.getEureka().getMetadataBackend();
+            if (backend == null || !EUREKA_METADATA_BACKENDS.contains(backend)) {
+                throw invalid(EUREKA_METADATA_BACKEND,
+                        "must select etcd, nacos or consul and install its matching OTRYX RPC adapter");
+            }
+            requireText(EUREKA_METADATA_ENDPOINTS, registry.getEureka().getMetadataEndpoints());
         }
     }
 

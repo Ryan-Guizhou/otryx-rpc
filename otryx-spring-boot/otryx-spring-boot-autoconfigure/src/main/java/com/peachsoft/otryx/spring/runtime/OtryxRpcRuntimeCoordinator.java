@@ -12,6 +12,8 @@ import com.peachsoft.otryx.core.RpcDirectoryFreshnessOptions;
 import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.core.RpcAuthorizer;
 import com.peachsoft.otryx.core.RpcShutdownOptions;
+import com.peachsoft.otryx.core.RpcClientShutdownReport;
+import com.peachsoft.otryx.core.RpcShutdownReport;
 import com.peachsoft.otryx.core.RpcProviderAdmissionOptions;
 import com.peachsoft.otryx.core.RpcClientResilienceOptions;
 import com.peachsoft.otryx.core.RpcProviderExecutionOptions;
@@ -25,9 +27,15 @@ import com.peachsoft.otryx.registry.ApplicationServiceResolver;
 import com.peachsoft.otryx.spring.autoconfigure.OtryxRpcProperties;
 import com.peachsoft.otryx.transport.RpcTransportFactory;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -41,7 +49,6 @@ import org.springframework.beans.factory.ObjectProvider;
  */
 public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(OtryxRpcRuntimeCoordinator.class);
-    private static final long CLOSE_BUDGET_MILLIS = 30_000L;
 
     private final ApplicationRegistry registry;
     private final ApplicationMembershipCoordinator membership;
@@ -64,6 +71,10 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     private volatile OtryxRpcClient client;
     private volatile OtryxRpcServer server;
     private volatile boolean providerAutoStart;
+    private boolean closed;
+    private final CompletableFuture<Void> closeCompletion = new CompletableFuture<>();
+    private Thread closeOwner;
+    private long closeDeadlineNanos;
 
     /**
      * 创建运行时协调器。
@@ -179,44 +190,46 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     /**
      * 获取或创建 Consumer 运行时。
      *
-     * @return Consumer 运行时
+     * <p>首次创建在 Spring 初始化或业务控制线程内等待应用成员注册确认，
+     * 等待上限由 registry.control-plane-timeout 控制；不得从 EventLoop 调用。
+     * 目录发现仍为异步过程，成员入册不意味着已有可调用的 Provider。
+     *
+     * @return 已确认应用成员注册的 Consumer 运行时
+     * @throws IllegalStateException 已关闭、Consumer 被禁用或成员注册失败时抛出
      */
-    public OtryxRpcClient client() {
+    public synchronized OtryxRpcClient client() {
+        requireOpen();
         if (!properties.getClient().isEnabled()) {
             throw new IllegalStateException(
                     "OTRYX RPC Consumer capability is disabled by otryx.rpc.client.enabled=false");
         }
-        OtryxRpcClient current = client;
-        if (current != null) {
-            return current;
+        if (client == null) {
+            client = createClient();
         }
-        synchronized (this) {
-            if (client == null) {
-                client = createClient();
-            }
-            return client;
-        }
+        return client;
     }
 
     /**
      * 获取或创建 Provider 运行时。
      *
      * @return Provider 运行时
+     * @throws IllegalStateException 已关闭或 Provider 被禁用时抛出
      */
-    public OtryxRpcServer server() {
+    public synchronized OtryxRpcServer server() {
+        requireOpen();
         if (!properties.getServer().isEnabled()) {
             throw new IllegalStateException(
                     "OTRYX RPC Provider capability is disabled by otryx.rpc.server.enabled=false");
         }
-        OtryxRpcServer current = server;
-        if (current != null) {
-            return current;
+        if (server == null) {
+            server = createServer();
         }
-        synchronized (this) {
-            if (server == null) {
-                server = createServer();
-            }
-            return server;
+        return server;
+    }
+
+    private void requireOpen() {
+        if (closed) {
+            throw new IllegalStateException("Spring RPC runtime is closed");
         }
     }
 
@@ -261,7 +274,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
 
     private OtryxRpcClient createClient() {
         OtryxRpcProperties.Client clientProperties = properties.getClient();
-        return OtryxRpcClient.builder()
+        OtryxRpcClient created = OtryxRpcClient.builder()
                 .applicationControlPlane(resolver, membership, identity.application().namespace())
                 .codecRegistry(codecRegistry)
                 .transportClient(transportFactory.createClient(
@@ -277,6 +290,34 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .metadataPropagator(metadataPropagator())
                 .tracingBridge(tracingBridge())
                 .build();
+        Duration controlTimeout = properties.getRegistry().getControlPlaneTimeout();
+        boolean interrupted = false;
+        try {
+            created.membershipReady().toCompletableFuture()
+                    .get(controlTimeout.toNanos(), TimeUnit.NANOSECONDS);
+            return created;
+        } catch (InterruptedException failure) {
+            interrupted = true;
+        } catch (ExecutionException | TimeoutException failure) {
+            LOGGER.warn("Spring RPC Consumer membership failed. errorType={}",
+                    failure.getClass().getSimpleName());
+        }
+        // 尚未发布的 Client 同样拥有 Transport/Executor，不能依赖 Bean 销毁回调回收。
+        try {
+            created.shutdown(new RpcShutdownOptions(controlTimeout)).toCompletableFuture()
+                    .get(controlTimeout.toNanos(), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException failure) {
+            interrupted = true;
+        } catch (ExecutionException | TimeoutException failure) {
+            LOGGER.warn("Spring RPC Consumer startup rollback incomplete. errorType={}",
+                    failure.getClass().getSimpleName());
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        throw new IllegalStateException("RPC Consumer application membership was not acknowledged within "
+                + "otryx.rpc.registry.control-plane-timeout; verify registry access and application identity");
     }
 
     private OtryxRpcServer createServer() {
@@ -371,22 +412,79 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     }
 
     /**
-     * Spring Bean 销毁必须先完成 Provider 排空，再注销共享 Consumer/BOTH 成员。
+     * Spring Bean 销毁等待 Client 资源释放与 Provider 排空，再注销共享成员。
      *
      * <p>本方法只应在应用生命周期销毁线程运行，不允许在 RPC EventLoop 调用。
-     * 阻塞等待受统一有限预算保护；异常以安全摘要记录，禁止泄漏凭据。
+     * 与运行时懒创建互斥，关闭后不再创建 Client 或 Server。各清理阶段共用
+     * Provider 配置的总关闭预算；未创建 Provider 时使用 Core 默认预算。
+     * 超时后仍发起剩余清理，异常以安全摘要记录，不宣称外部资源已全部释放。
+     *
+     * <p>并发与重复关闭共享第一次关闭的完成信号和绝对截止时间，不能仅因
+     * 已停止创建运行时便提前返回。发起关闭的线程同步重入时不等待自己，
+     * 由最外层调用负责清理和完成通知。等待中断会保留中断标记并报告未完成。
      */
     @Override
     public void close() {
-        OtryxRpcClient currentClient = client;
-        if (currentClient != null) {
-            currentClient.close();
+        RpcShutdownOptions options = null;
+        long deadlineNanos;
+        synchronized (this) {
+            if (closed) {
+                if (closeOwner == Thread.currentThread()) {
+                    return;
+                }
+            } else {
+                options = server == null ? RpcShutdownOptions.DEFAULT : serverShutdownOptions();
+                closeDeadlineNanos = System.nanoTime() + options.totalTimeout().toNanos();
+                closeOwner = Thread.currentThread();
+                closed = true;
+            }
+            deadlineNanos = closeDeadlineNanos;
         }
-        OtryxRpcServer currentServer = server;
+        if (options == null) {
+            awaitConcurrentClose(deadlineNanos);
+            return;
+        }
         try {
-            if (currentServer != null) {
-                currentServer.shutdown(serverShutdownOptions()).toCompletableFuture()
-                        .get(CLOSE_BUDGET_MILLIS, TimeUnit.MILLISECONDS);
+            // closed 与运行时发布共用监视器；从此两端引用不再变化。
+            closeCreatedRuntimes(client, server, options, deadlineNanos);
+        } finally {
+            synchronized (this) {
+                closeOwner = null;
+            }
+            closeCompletion.complete(null);
+        }
+    }
+
+    private void closeCreatedRuntimes(
+            OtryxRpcClient currentClient, OtryxRpcServer currentServer,
+            RpcShutdownOptions options, long deadlineNanos) {
+        CompletionStage<RpcClientShutdownReport> clientShutdown = currentClient == null
+                ? null : beginShutdown(() -> currentClient.shutdown(options));
+        // 两端先停收，不能因等待 Consumer 的 Transport.close() 而延后 Provider 排空。
+        CompletionStage<RpcShutdownReport> serverShutdown = currentServer == null
+                ? null : beginShutdown(() -> currentServer.shutdown(options));
+        try {
+            if (clientShutdown != null) {
+                RpcClientShutdownReport report = awaitClose(clientShutdown, deadlineNanos);
+                if (report.deadlineExceeded() || report.cleanupFailures() > 0) {
+                    LOGGER.warn("Spring RPC Consumer shutdown incomplete. timedOut={}, failures={}",
+                            report.deadlineExceeded(), report.cleanupFailures());
+                }
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            LOGGER.warn("Spring RPC Consumer shutdown interrupted");
+        } catch (Exception failure) {
+            LOGGER.warn("Spring RPC Consumer shutdown incomplete. errorType={}",
+                    failure.getClass().getSimpleName());
+        }
+        try {
+            if (serverShutdown != null) {
+                RpcShutdownReport report = awaitClose(serverShutdown, deadlineNanos);
+                if (report.deadlineExceeded() || report.cleanupFailures() > 0) {
+                    LOGGER.warn("Spring RPC Provider shutdown incomplete. timedOut={}, failures={}",
+                            report.deadlineExceeded(), report.cleanupFailures());
+                }
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -396,8 +494,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                     failure.getClass().getSimpleName());
         } finally {
             try {
-                membership.shutdown().toCompletableFuture()
-                        .get(CLOSE_BUDGET_MILLIS, TimeUnit.MILLISECONDS);
+                awaitClose(beginShutdown(membership::shutdown), deadlineNanos);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 LOGGER.warn("Spring RPC membership shutdown interrupted");
@@ -406,5 +503,32 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                         failure.getClass().getSimpleName());
             }
         }
+    }
+
+    private void awaitConcurrentClose(long deadlineNanos) {
+        try {
+            awaitClose(closeCompletion, deadlineNanos);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            LOGGER.warn("Spring RPC concurrent shutdown wait interrupted");
+        } catch (ExecutionException | TimeoutException failure) {
+            LOGGER.warn("Spring RPC concurrent shutdown wait incomplete. errorType={}",
+                    failure.getClass().getSimpleName());
+        }
+    }
+
+    /** 将同步启动异常转为失败 Stage，仍继续尝试其他运行时及共享成员的清理。 */
+    private static <T> CompletionStage<T> beginShutdown(Supplier<CompletionStage<T>> action) {
+        try {
+            return Objects.requireNonNull(action.get(), "shutdown stage");
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    private static <T> T awaitClose(CompletionStage<T> stage, long deadlineNanos)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        return stage.toCompletableFuture().get(
+                Math.max(1L, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
     }
 }

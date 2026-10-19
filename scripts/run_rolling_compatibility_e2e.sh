@@ -3,8 +3,17 @@ set -euo pipefail
 
 OLD_ROOT="${1:?old checkout root is required}"
 NEW_ROOT="${2:?new checkout root is required}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NACOS_ENDPOINT="${NACOS_TEST_ENDPOINT:-127.0.0.1:8848}"
+NACOS_NAMESPACE=public
 PORT="${OTRYX_RPC_COMPAT_PORT:-19090}"
+# Consume only this script-owned setting; preserve legitimate application env.
+unset OTRYX_RPC_COMPAT_PORT
+REGISTRY_GENERATION="$(python3 "$SCRIPT_DIR/check_registry_generation_boundary.py" "$OLD_ROOT" "$NEW_ROOT")"
+case "$REGISTRY_GENERATION" in
+  same-generation|registry-migration) ;;
+  *) echo "Unrecognized registry generation result." >&2; exit 1 ;;
+esac
 
 find_exec() {
   local root="$1"
@@ -28,6 +37,7 @@ PROVIDER_PID=""
 CONSUMER_PID=""
 PROVIDER_LOG="$(mktemp)"
 CONSUMER_LOG="$(mktemp)"
+NACOS_GROUP="OTRYX_RPC_E2E_$(basename "$PROVIDER_LOG")"
 
 cleanup() {
   if [[ -n "$CONSUMER_PID" ]]; then
@@ -47,7 +57,13 @@ start_provider() {
   local label="$2"
   : >"$PROVIDER_LOG"
 
-  java -jar "$jar"     --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT"     --otryx.rpc.server.port="$PORT"     --otryx.rpc.server.advertised-port="$PORT"     >"$PROVIDER_LOG" 2>&1 &
+  java -jar "$jar" \
+    --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
+    --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
+    --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+    --otryx.rpc.server.port="$PORT" \
+    --otryx.rpc.server.advertised-port="$PORT" \
+    >"$PROVIDER_LOG" 2>&1 &
   PROVIDER_PID=$!
 
   for _ in {1..200}; do
@@ -93,7 +109,11 @@ run_consumer() {
 
   for _ in {1..4}; do
     : >"$CONSUMER_LOG"
-    java -jar "$jar"       --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT"       >"$CONSUMER_LOG" 2>&1 &
+    java -jar "$jar" \
+      --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
+      --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
+      --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+      >"$CONSUMER_LOG" 2>&1 &
     CONSUMER_PID=$!
 
     for _ in {1..300}; do
@@ -122,22 +142,45 @@ run_consumer() {
   exit 1
 }
 
+# The current artifact supplies the explicit CLI; an interface-era baseline need
+# not have it. This new isolated scope has no application writers during bootstrap.
+bash "$SCRIPT_DIR/bootstrap_quickstart_nacos.sh" \
+  "$NEW_PROVIDER" "$NACOS_ENDPOINT" "$NACOS_NAMESPACE" "$NACOS_GROUP"
+
 # N Consumer -> N Provider.
 start_provider "$OLD_PROVIDER" "N"
 run_consumer "$OLD_CONSUMER" "N consumer -> N provider"
 
-# N+1 Consumer -> N Provider (legacy Provider without schema metadata).
-run_consumer "$NEW_CONSUMER" "N+1 consumer -> N provider"
+# Mixed snapshots only have a rolling gate when the Starter control plane agrees.
+if [[ "$REGISTRY_GENERATION" == "same-generation" ]]; then
+  run_consumer "$NEW_CONSUMER" "N+1 consumer -> N provider"
+fi
 
 # N Consumer -> N+1 Provider and N+1 Consumer -> N+1 Provider.
 stop_provider
 start_provider "$NEW_PROVIDER" "N+1"
-run_consumer "$OLD_CONSUMER" "N consumer -> N+1 provider"
+if [[ "$REGISTRY_GENERATION" == "same-generation" ]]; then
+  run_consumer "$OLD_CONSUMER" "N consumer -> N+1 provider"
+fi
 run_consumer "$NEW_CONSUMER" "N+1 consumer -> N+1 provider"
 
-# Roll back Provider to N while keeping N+1 Consumer.
-stop_provider
-start_provider "$OLD_PROVIDER" "N rollback"
-run_consumer "$NEW_CONSUMER" "N+1 consumer -> N rollback provider"
-
-echo "OTRYX RPC N/N+1 rolling compatibility matrix passed."
+if [[ "$REGISTRY_GENERATION" == "same-generation" ]]; then
+  # Roll back Provider to N while keeping N+1 Consumer.
+  stop_provider
+  start_provider "$OLD_PROVIDER" "N rollback"
+  run_consumer "$NEW_CONSUMER" "N+1 consumer -> N rollback provider"
+  echo "OTRYX RPC N/N+1 rolling compatibility matrix passed."
+else
+  echo "Registry migration verified: N/N and N+1/N+1 independent JVM RPC passed."
+  echo "Cross-generation rolling compatibility has not been established."
+  echo "Use isolated registry scopes and deploy or roll back matching Provider/Consumer generations."
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    {
+      echo "## Explicit interface/application registry generation boundary"
+      echo "Both N/N and N+1/N+1 independent Provider/Consumer JVM checks passed."
+      echo "Mixed-generation and mixed-generation rollback pairs were not run."
+      echo "Cross-generation rolling compatibility has **not** been established."
+      echo "Current-version transport, security, recovery and contract CI gates remain required."
+    } >> "$GITHUB_STEP_SUMMARY"
+  fi
+fi
