@@ -5,12 +5,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
+import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
-import com.peachsoft.otryx.registry.ServiceMappingRepository;
-import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingOwnerSnapshot;
+import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
+import com.peachsoft.otryx.registry.http.HttpRegistryClient;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -76,6 +80,12 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
         this.client = Objects.requireNonNull(client, "client");
         this.executor = Objects.requireNonNull(executor, "executor");
         this.identity = Objects.requireNonNull(identity, "identity");
+    }
+
+    /** 返回同一实际 Consul HTTP 客户端的保护来源。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return client.securityDescriptor();
     }
 
     /** 在 KV 原子获取严格递增的 Generation，并阻断其他进程复用同代的 Fencing。 */
@@ -214,7 +224,7 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
             OwnerState state = decode(entry.value(), null, null);
             String expectedKey = identity.ownerKey(state.owner().application(), state.owner().instanceId());
             if (!entry.key().equals(expectedKey)) {
-                throw new IllegalArgumentException("Consul Owner KV identity mismatch");
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
             }
             maximumIndex = Math.max(maximumIndex, entry.modifyIndex());
             if (state.services().contains(key.serviceKey())) {
@@ -223,7 +233,7 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
             }
         }
         if (claimed.size() > ServiceMappingSnapshot.MAX_APPLICATIONS) {
-            throw new IllegalStateException("Consul mapping candidate fanout exceeded");
+            throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
         }
         long watermark = maximumIndex;
         long revision = localRevision.updateAndGet(previous -> Math.max(previous + 1, watermark));
@@ -238,7 +248,7 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
         }
         if (result.body() == null || !result.body().isArray()
                 || result.body().size() > ConsulV2Client.MAX_KV_ITEMS) {
-            throw new IllegalStateException("Invalid Consul application health directory");
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
         }
         List<ApplicationInstance> members = new ArrayList<>();
         for (JsonNode record : result.body()) {
@@ -296,7 +306,7 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
         if (payload.length == 0 || payload.length > MAX_OWNER_BYTES) {
             throw new IllegalArgumentException("Consul Owner record size invalid");
         }
-        JsonNode root = mapper.readTree(payload);
+        JsonNode root = HttpRegistryClient.readJson(payload);
         if (!root.isObject() || !FORMAT.equals(root.path(FIELD_FORMAT).asText())) {
             throw new IllegalArgumentException("Consul Owner record format invalid");
         }
@@ -309,7 +319,7 @@ public final class ConsulServiceMappingRepository implements ServiceMappingRepos
         if (token.isBlank() || token.length() > MAX_INSTANCE_BYTES
                 || expectedApplication != null && !expectedApplication.equals(application)
                 || expectedInstance != null && !expectedInstance.equals(instanceId)) {
-            throw new IllegalArgumentException("Consul Owner identity mismatch");
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
         }
         ServiceMappingOwner owner = new ServiceMappingOwner(application, instanceId, generation);
         JsonNode list = root.path(FIELD_SERVICES);

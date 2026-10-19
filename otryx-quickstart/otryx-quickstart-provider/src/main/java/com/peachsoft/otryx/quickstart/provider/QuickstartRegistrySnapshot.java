@@ -8,6 +8,7 @@ import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcSchemaFingerprint;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.quickstart.api.GreetingDetailsService;
 import com.peachsoft.otryx.quickstart.api.GreetingService;
@@ -101,7 +102,8 @@ public final class QuickstartRegistrySnapshot {
      */
     public static void main(String[] arguments) {
         try {
-            Command command = parseArguments(arguments);
+            Command command = parseArguments(arguments,
+                    System.getenv(QuickstartRegistrySecurity.SECURITY_FILE_ENVIRONMENT));
             Snapshot snapshot;
             ApplicationRegistryFactory factory = ExtensionLoader.getLoader(ApplicationRegistryFactory.class)
                     .getExtension(command.backend());
@@ -110,7 +112,7 @@ public final class QuickstartRegistrySnapshot {
                     throw new IllegalStateException("Application metadata backend is unavailable");
                 }
                 snapshot = capture(registry, metadata, command.namespace(),
-                        command.applicationNames(), DEFAULT_TIMEOUT);
+                        command.applicationNames(), DEFAULT_TIMEOUT, command.options().securityProfile());
             }
             writeSnapshot(command.output(), snapshot);
             LOGGER.info("Quickstart registry snapshot completed: applications={}, services={}",
@@ -123,7 +125,9 @@ public final class QuickstartRegistrySnapshot {
     }
 
     /**
-     * 在一个绝对时间预算内读取完整诊断视图。
+     * 在一个绝对时间预算内，以明确的开发意图读取完整诊断视图。
+     *
+     * <p>该公开入口保留进程内测试和开发调用；命令行的受保护读取另行验证实际来源描述。
      *
      * @param discovery 调用方拥有的异步应用目录，不得从 EventLoop 调用本方法
      * @param metadata 调用方拥有的元数据后端，本方法不关闭它
@@ -136,6 +140,12 @@ public final class QuickstartRegistrySnapshot {
      */
     public static Snapshot capture(ApplicationDiscovery discovery, ApplicationMetadataBackend metadata,
             String namespace, List<String> applicationNames, Duration timeout) {
+        return capture(discovery, metadata, namespace, applicationNames, timeout,
+                RpcSecurityProfile.TRUSTED_DEVELOPMENT);
+    }
+
+    static Snapshot capture(ApplicationDiscovery discovery, ApplicationMetadataBackend metadata,
+            String namespace, List<String> applicationNames, Duration timeout, RpcSecurityProfile securityProfile) {
         Objects.requireNonNull(discovery, "discovery");
         Objects.requireNonNull(metadata, "metadata");
         Objects.requireNonNull(timeout, "timeout");
@@ -149,6 +159,8 @@ public final class QuickstartRegistrySnapshot {
                 ManifestSnapshotCache manifests = new ManifestSnapshotCache(metadata.manifestRepository());
                 ApplicationServiceResolver resolver = new ApplicationServiceResolver(
                         mappings, discovery, manifests, DEFAULT_TIMEOUT)) {
+            QuickstartRegistrySecurity.verify(securityProfile, resolver::securityDescriptor,
+                    applications.getFirst().namespace());
             List<ApplicationView> views = new ArrayList<>();
             int memberCount = 0;
             int manifestCount = 0;
@@ -227,6 +239,10 @@ public final class QuickstartRegistrySnapshot {
     }
 
     static Command parseArguments(String[] arguments) throws IOException {
+        return parseArguments(arguments, null);
+    }
+
+    static Command parseArguments(String[] arguments, String securityFile) throws IOException {
         Objects.requireNonNull(arguments, "arguments");
         if (arguments.length <= FIXED_ARGUMENTS || arguments.length > FIXED_ARGUMENTS + MAX_APPLICATIONS) {
             throw new IllegalArgumentException("Expected six target arguments and one to sixteen applications");
@@ -260,8 +276,9 @@ public final class QuickstartRegistrySnapshot {
             default -> throw new IllegalArgumentException("Unsupported application snapshot backend");
         };
         requireEndpoints(arguments[ENDPOINTS_ARGUMENT], arguments[NAMESPACE_ARGUMENT]);
-        RegistryOptions options = RegistryOptions.fromCsv(arguments[ENDPOINTS_ARGUMENT],
-                arguments[NAMESPACE_ARGUMENT], providerOptions);
+        RegistryOptions options = QuickstartRegistrySecurity.options(backend,
+                RegistryOptions.fromCsv(arguments[ENDPOINTS_ARGUMENT], arguments[NAMESPACE_ARGUMENT], providerOptions),
+                securityFile);
         List<ApplicationKey> applications = applicationKeys(arguments[NAMESPACE_ARGUMENT],
                 Arrays.asList(arguments).subList(FIXED_ARGUMENTS, arguments.length));
         Path output = Path.of(arguments[OUTPUT_ARGUMENT]).toAbsolutePath().normalize();

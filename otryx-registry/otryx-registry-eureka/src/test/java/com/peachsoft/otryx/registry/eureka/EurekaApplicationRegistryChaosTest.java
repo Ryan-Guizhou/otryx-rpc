@@ -170,7 +170,7 @@ class EurekaApplicationRegistryChaosTest {
 
     private static EurekaApplicationRegistry registry(String namespace) {
         return (EurekaApplicationRegistry) new EurekaApplicationRegistryFactory().create(
-                new RegistryOptions(List.of(EUREKA), namespace, Map.of(
+                RegistryOptions.trustedDevelopment(List.of(EUREKA), namespace, Map.of(
                         "eurekaMetadataBackend", "consul",
                         "eurekaMetadataEndpoints", CONSUL,
                         "eurekaMemberHost", "127.0.0.1",

@@ -9,8 +9,14 @@ import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationRegistrar;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
+import com.peachsoft.otryx.registry.ChannelProtection;
 import com.peachsoft.otryx.registry.RegistryCapabilities;
 import com.peachsoft.otryx.registry.RegistryCapability;
+import com.peachsoft.otryx.registry.RegistryChannel;
+import com.peachsoft.otryx.registry.RegistryFailureSanitizer;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
@@ -71,6 +77,7 @@ public final class EurekaApplicationRegistry implements ApplicationRegistry, App
     private static final int CLOSE_SECONDS = 3;
     private static final String STATUS_UNAVAILABLE = "Eureka V2 is closed";
 
+    private final RegistrySecurityDescriptor memberProtection;
     private final HttpRegistryClient client;
     private final EurekaV2Executor executor;
     private final EurekaV2Identity identity;
@@ -96,6 +103,17 @@ public final class EurekaApplicationRegistry implements ApplicationRegistry, App
             ApplicationRegistry metadataBackend, ApplicationManifestRepository manifests,
             ServiceMappingRepository mappings, ServiceMappingCandidateSource candidates,
             String memberHost, Duration lease, Duration renewal, Duration polling) {
+        this(client, executor, identity, metadataBackend, manifests, mappings, candidates,
+                memberHost, lease, renewal, polling, RegistrySecurityDescriptor.unknown());
+    }
+
+    EurekaApplicationRegistry(
+            HttpRegistryClient client, EurekaV2Executor executor, EurekaV2Identity identity,
+            ApplicationRegistry metadataBackend, ApplicationManifestRepository manifests,
+            ServiceMappingRepository mappings, ServiceMappingCandidateSource candidates,
+            String memberHost, Duration lease, Duration renewal, Duration polling,
+            RegistrySecurityDescriptor memberProtection) {
+        this.memberProtection = Objects.requireNonNull(memberProtection, "memberProtection");
         this.client = Objects.requireNonNull(client, "client");
         this.executor = Objects.requireNonNull(executor, "executor");
         this.identity = Objects.requireNonNull(identity, "identity");
@@ -129,6 +147,12 @@ public final class EurekaApplicationRegistry implements ApplicationRegistry, App
     public ServiceMappingRepository serviceMappingRepository() {
         requireOpen();
         return verifiedMappings;
+    }
+
+    /** 描述实际 Eureka Member HTTP 链，不继承外置 Metadata 的认证事实。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return memberProtection;
     }
 
     /** Eureka 没有全局原生 KV Revision，不能声明 Revision 能力。 */
@@ -216,12 +240,12 @@ public final class EurekaApplicationRegistry implements ApplicationRegistry, App
             requireSuccessful(response);
             JsonNode node = response.json().path(EurekaProtocol.FIELD_APPLICATION);
             if (!node.isObject()) {
-                throw new IllegalStateException("Eureka application response has an invalid shape");
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
             }
             JsonNode raw = node.path(EurekaProtocol.FIELD_INSTANCE);
             if (raw.isArray()) {
                 if (raw.size() > MAX_DIRECTORY) {
-                    throw new IllegalStateException("Eureka member directory exceeds capacity");
+                    throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
                 }
                 for (JsonNode child : raw) {
                     addMember(application, child, members);
@@ -229,7 +253,7 @@ public final class EurekaApplicationRegistry implements ApplicationRegistry, App
             } else if (raw.isObject()) {
                 addMember(application, raw, members);
             } else {
-                throw new IllegalStateException("Eureka instance list response is malformed");
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
             }
         }
         members.sort(Comparator.comparing(ApplicationInstance::instanceId));
@@ -241,7 +265,7 @@ public final class EurekaApplicationRegistry implements ApplicationRegistry, App
         if (member != null) {
             target.add(member);
             if (target.size() > MAX_DIRECTORY) {
-                throw new IllegalStateException("Eureka decoded membership capacity exceeded");
+                throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
             }
         }
     }
@@ -363,6 +387,16 @@ public final class EurekaApplicationRegistry implements ApplicationRegistry, App
 
     private final class EurekaMappingView implements ServiceMappingRepository {
 
+        /** Mapping 查询实际消费 Metadata 和 Eureka 健康两条链，保留每个来源。 */
+        @Override
+        public RegistrySecurityDescriptor securityDescriptor() {
+            List<ChannelProtection> sources = new ArrayList<>(RegistrySecurityDescriptor
+                    .from(mappings, RegistryChannel.MAPPING).channels().get(RegistryChannel.MAPPING));
+            sources.addAll(RegistrySecurityDescriptor.from(EurekaApplicationRegistry.this, RegistryChannel.MEMBERSHIP)
+                    .channels().get(RegistryChannel.MEMBERSHIP));
+            return new RegistrySecurityDescriptor(Map.of(RegistryChannel.MAPPING, sources));
+        }
+
         @Override
         public CompletionStage<ServiceMappingOwner> claim(ApplicationKey application, String instanceId) {
             identity.requireNamespace(application);
@@ -392,8 +426,11 @@ public final class EurekaApplicationRegistry implements ApplicationRegistry, App
             identity.requireNamespace(new ApplicationKey(key.namespace(), "mapping"));
             requireOpen();
             return candidates.lookupCandidateOwners(key).thenCompose(candidate -> {
+                if (candidate == null) {
+                    throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+                }
                 if (!candidate.key().equals(key)) {
-                    throw new IllegalArgumentException("Eureka Metadata Mapping key mismatch");
+                    throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
                 }
                 Set<ApplicationKey> healthy = new HashSet<>();
                 CompletionStage<Void> results = CompletableFuture.completedFuture(null);
@@ -451,7 +488,7 @@ public final class EurekaApplicationRegistry implements ApplicationRegistry, App
                 } catch (Throwable failure) {
                     if (!stopped.get()) {
                         try {
-                            listener.onSynchronizationFailed(failure);
+                            listener.onSynchronizationFailed(RegistryFailureSanitizer.sanitize(failure));
                         } catch (RuntimeException callbackFailure) {
                             LOGGER.warn("Eureka registry listener failed. errorType={}",
                                     callbackFailure.getClass().getSimpleName());

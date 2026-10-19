@@ -4,11 +4,14 @@ import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
+import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
-import com.peachsoft.otryx.registry.ServiceMappingRepository;
-import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingOwnerSnapshot;
+import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
 import io.etcd.jetcd.ByteSequence;
 import io.etcd.jetcd.Client;
@@ -51,13 +54,25 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
     private static final int MAX_TOTAL_OWNER_BYTES = 8 * 1024 * 1024;
     private static final int MAX_LOCAL_OWNERS = 512;
 
+    private final RegistrySecurityDescriptor descriptor;
     private final Client client;
     private final EtcdV2Paths paths;
     private final ConcurrentMap<String, Claim> localClaims = new ConcurrentHashMap<>();
 
     EtcdServiceMappingRepository(Client client, EtcdV2Paths paths) {
+        this(client, paths, RegistrySecurityDescriptor.unknown());
+    }
+
+    EtcdServiceMappingRepository(Client client, EtcdV2Paths paths, RegistrySecurityDescriptor descriptor) {
+        this.descriptor = Objects.requireNonNull(descriptor, "descriptor");
         this.client = Objects.requireNonNull(client, "client");
         this.paths = Objects.requireNonNull(paths, "paths");
+    }
+
+    /** 返回当前实际 Etcd 客户端的通道来源。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return descriptor;
     }
 
     /**
@@ -74,7 +89,7 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
                 && !localClaims.containsKey(paths.ownerKey(application, validated.instanceId()))) {
             return CompletableFuture.failedFuture(new IllegalStateException("Etcd mapping local owner budget reached"));
         }
-        return claimAttempt(application, validated.instanceId(), 0);
+        return EtcdFailures.safe(claimAttempt(application, validated.instanceId(), 0));
     }
 
     private CompletionStage<ServiceMappingOwner> claimAttempt(
@@ -129,7 +144,7 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
         if (services.size() > EtcdV2Codec.MAX_SERVICES) {
             return CompletableFuture.failedFuture(new IllegalArgumentException("Too many Etcd exported services"));
         }
-        return changeOwner(owner, Set.copyOf(services), false, 0);
+        return EtcdFailures.safe(changeOwner(owner, Set.copyOf(services), false, 0));
     }
 
     /**
@@ -146,7 +161,7 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
         if (local == null || !local.owner().equals(owner)) {
             return CompletableFuture.completedFuture(null);
         }
-        return changeOwner(owner, Set.of(), true, 0);
+        return EtcdFailures.safe(changeOwner(owner, Set.of(), true, 0));
     }
 
     private CompletionStage<Void> changeOwner(
@@ -208,8 +223,8 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
         Objects.requireNonNull(key, "key");
         paths.requireNamespace(key.namespace());
         GetOption options = GetOption.builder().isPrefix(true).withLimit(MAX_OWNER_SCAN + 1).build();
-        return client.getKVClient().get(utf8(paths.ownerPrefix()), options)
-                .thenCompose(response -> lookupAtRevision(key, response, true));
+        return EtcdFailures.safe(client.getKVClient().get(utf8(paths.ownerPrefix()), options)
+                .thenCompose(response -> lookupAtRevision(key, response, true)));
     }
 
     /**
@@ -223,8 +238,8 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
         Objects.requireNonNull(key, "key");
         paths.requireNamespace(key.namespace());
         GetOption options = GetOption.builder().isPrefix(true).withLimit(MAX_OWNER_SCAN + 1).build();
-        return client.getKVClient().get(utf8(paths.ownerPrefix()), options)
-                .thenApply(response -> decodeCandidateOwners(key, response));
+        return EtcdFailures.safe(client.getKVClient().get(utf8(paths.ownerPrefix()), options)
+                .thenApply(response -> decodeCandidateOwners(key, response)));
     }
 
     private CompletionStage<ServiceMappingSnapshot> lookupAtRevision(
@@ -250,7 +265,7 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
 
     private ServiceMappingOwnerSnapshot decodeCandidateOwners(ServiceMappingKey key, GetResponse owners) {
         if (owners.getCount() > MAX_OWNER_SCAN || owners.getKvs().size() > MAX_OWNER_SCAN) {
-            throw new IllegalStateException("Etcd mapping owner scan budget exceeded");
+            throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
         }
         Map<ApplicationKey, Set<String>> providers = new HashMap<>();
         int bytes = 0;
@@ -258,19 +273,19 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
             byte[] payload = kv.getValue().getBytes();
             bytes += payload.length;
             if (bytes > MAX_TOTAL_OWNER_BYTES) {
-                throw new IllegalStateException("Etcd mapping byte scan budget exceeded");
+                throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
             }
             EtcdV2Codec.OwnerRecord record = EtcdV2Codec.decodeOwner(payload);
             String expectedKey = paths.ownerKey(
                     record.owner().application(), record.owner().instanceId());
             if (!utf8(expectedKey).equals(kv.getKey())) {
-                throw new IllegalArgumentException("Etcd mapping owner KV identity mismatch");
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
             }
             if (record.services().contains(key.serviceKey())) {
                 providers.computeIfAbsent(record.owner().application(), ignored -> new HashSet<>())
                         .add(record.owner().instanceId());
                 if (providers.size() > ServiceMappingSnapshot.MAX_APPLICATIONS) {
-                    throw new IllegalStateException("Etcd mapping fanout budget exceeded");
+                    throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
                 }
             }
         }
@@ -286,30 +301,31 @@ public final class EtcdServiceMappingRepository implements ServiceMappingReposit
                 .build();
         return client.getKVClient().get(utf8(paths.memberPrefix(application)), options).thenApply(response -> {
             if (response.getCount() > MAX_MEMBER_SCAN) {
-                throw new IllegalStateException("Etcd member scan budget exceeded");
+                throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
             }
+            boolean found = false;
             for (KeyValue kv : response.getKvs()) {
                 EtcdV2Codec.MemberRecord record = EtcdV2Codec.decodeMember(kv.getValue().getBytes());
                 ApplicationInstance member = record.instance();
                 if (!application.equals(member.application())
                         || !utf8(paths.memberKey(application, member.instanceId())).equals(kv.getKey())) {
-                    throw new IllegalArgumentException("Etcd member KV identity mismatch");
+                    throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
                 }
                 if (ownerInstances.contains(member.instanceId()) && member.routableProvider()
                         && member.rpcEndpoint().port() > 0
                         && !member.rpcEndpoint().host().equals(RpcEndpoint.UNSPECIFIED_IPV4_HOST)
                         && !member.rpcEndpoint().host().equals(RpcEndpoint.UNSPECIFIED_IPV6_HOST)
                         && !member.rpcEndpoint().host().equals(RpcEndpoint.UNSPECIFIED_IPV6_BRACKETED_HOST)) {
-                    return true;
+                    found = true;
                 }
             }
-            return false;
+            return found;
         });
     }
 
     private void requireOwnerKey(String key, EtcdV2Codec.OwnerRecord owner) {
         if (!key.equals(paths.ownerKey(owner.owner().application(), owner.owner().instanceId()))) {
-            throw new IllegalArgumentException("Etcd mapping owner key mismatch");
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
         }
     }
 

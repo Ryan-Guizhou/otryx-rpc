@@ -16,7 +16,7 @@
 | 3 | `otryx-quickstart-provider` + `otryx-quickstart-consumer` | 两个 JVM | Nacos | 应用成员、Manifest、Mapping 与已验证路由 |
 | 4 | 同上 + Relay Provider | **三个 JVM** | Nacos | Consumer / BOTH / Provider，A → B → C Deadline |
 | 5 | 同一 Provider JAR 的两个导出集合 | 多 JVM | Nacos | 两个真实 Manifest revision 共存、升级、回滚 |
-| 6 | 现有 Provider / Consumer 的 `mtls` Profile | 多 JVM | Nacos、OpenSSL | 证书认证、客户端指纹与方法授权 |
+| 6 | 现有 Provider / Consumer 的 `mtls` Profile | 多 JVM | Etcd 3.5.21 可执行文件、OpenSSL | 应用身份绑定、有限方法授权与注册中心权限 |
 
 ```mermaid
 flowchart LR
@@ -39,8 +39,8 @@ flowchart LR
 - JDK **21**，确认 `java -version`；
 - 仓库自带 Maven Wrapper（固定 Maven 3.9.11），Linux/macOS 使用 `./mvnw`，Windows 使用 `mvnw.cmd`；
 - 首次下载 Maven/依赖需要 Maven Central 网络访问；
-- 脚本需要 Bash、Python 3 和 GNU coreutils 的 `timeout`；mTLS 场景还需要 OpenSSL。macOS 需把 GNU `timeout` 配置到 `PATH`；
-- 跨进程路径需要已运行的共享 Nacos；可使用下文 Docker Compose，也可使用自行部署的本地 Nacos。Memory 路径不需要 Docker。
+- 脚本需要 Bash、Python 3 和 GNU coreutils 的 `timeout`；mTLS 自动验收还需要 Linux、OpenSSL 和 Etcd 3.5.21 可执行文件，以管理独立进程组与临时 TLS/RBAC 后端。macOS 可运行开发场景，需把 GNU `timeout` 配置到 `PATH`；
+- 双进程恢复、三进程 Deadline 和双 revision 开发路径默认使用已运行的共享 Nacos；可使用下文 Docker Compose，也可使用自行部署的本地 Nacos。mTLS 脚本自行启动临时 Etcd；Memory 路径不需要 Docker。
 
 ```bash
 git clone https://github.com/Ryan-Guizhou/otryx-rpc.git
@@ -54,15 +54,16 @@ java -version
 
 ### 已构建 JAR 后，一条命令运行全部场景
 
-先按第 2.1 节准备 Nacos，再执行：
+先按第 2.1 节准备 Nacos，并提供本机 Etcd 3.5.21 可执行文件，再执行：
 
 ```bash
-NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
+NACOS_TEST_ENDPOINT=127.0.0.1:8848 ETCD_BINARY=/absolute/path/to/etcd \
+  bash scripts/run_quickstart_e2e.sh
 ```
 
-入口依次运行 Memory、双进程恢复、三进程 Deadline、双 revision、mTLS 授权，任一阶段失败即停止。它使用现有四个模块的已构建 JAR，不代替 Maven 构建或启动 Nacos。每个跨进程场景创建独立 Nacos group，先初始化分片，再把同一 scope 传给所有参与 JVM。
+入口依次运行 Memory、双进程恢复、三进程 Deadline、双 revision、mTLS 授权，任一阶段失败即停止。它使用现有四个模块的已构建 JAR，不代替 Maven 构建或启动 Nacos。前三个跨进程开发场景分别创建独立 Nacos group，先初始化分片，再把同一 scope 传给所有参与 JVM；mTLS 场景则使用自身管理的 Etcd TLS/RBAC 实例。
 
-四个 Nacos 场景的证据保存在 `target/quickstart-e2e/<scenario>.<随机后缀>/`，包含受限字段的 JSON 快照和 `summary.log`；Memory 成功标记保留在控制台输出。可用 `OTRYX_QUICKSTART_EVIDENCE_DIR` 改变证据根目录。JSON 的中间尝试可能尚未收敛，以 `summary.log` 中 `Registry snapshot verified` 指向的文件作为该阶段断言通过的证据。mTLS 临时 PKI 在证据目录之外生成并清理，私钥不进入证据。详细步骤和每个阶段应满足的行为见下文；列出命令不表示当前工作树已经通过该次执行。
+三个开发场景与 mTLS 场景的证据保存在 `target/quickstart-e2e/<scenario>.<随机后缀>/`，包含受限字段的 JSON 快照和 `summary.log`；Memory 成功标记保留在控制台输出。可用 `OTRYX_QUICKSTART_EVIDENCE_DIR` 改变证据根目录。JSON 的中间尝试可能尚未收敛，以 `summary.log` 中 `Registry snapshot verified` 指向的文件作为该阶段断言通过的证据。mTLS 临时 PKI、后端数据库与凭据在证据目录之外生成并清理，私钥不进入证据。详细步骤和每个阶段应满足的行为见下文；列出命令不表示当前工作树已经通过该次执行。
 
 <!-- doc-section:memory -->
 ## 1. 第一条调用：无 Nacos 的 Memory Quickstart
@@ -269,22 +270,47 @@ Details 探针应用名为 `otryx-quickstart-revision-details-probe`，完成调
 本场景验证当前应用级控制面内的导出变化、成员共存与收敛。它不证明历史接口级 Registry 与应用级 Registry 混合部署互通；跨注册代际规则仍见 [迁移指南](../docs/migration.md)。
 
 <!-- doc-section:security -->
-## 5. mTLS：已认证证书仍须通过方法授权
+## 5. mTLS：应用身份、有限授权与受保护的注册中心
+
+先准备 Etcd **3.5.21** 可执行文件，再运行现有 Provider / Consumer JAR：
 
 ```bash
-bash scripts/run_quickstart_mtls_e2e.sh
+ETCD_BINARY=/absolute/path/to/etcd bash scripts/run_quickstart_mtls_e2e.sh
 ```
 
-脚本生成临时 CA、带正确服务端身份的证书，以及由**同一 CA 签发的两张不同客户端证书**。应用名为 `otryx-quickstart-mtls-provider`（19143）和 `otryx-quickstart-mtls-consumer`。Provider 只允许其中一张客户端叶子证书的 SHA-256 指纹调用 Greeting 的 `hello`，按以下顺序验收：
+脚本自行创建并关闭一个只监听 loopback 的 Etcd TLS/RBAC 实例；无需启动 Nacos。RPC 和注册中心使用两套独立临时 CA。四个后端身份分别负责管理夹具、Provider、Consumer 和只读观察：管理凭据只供测试设置与权限撤销使用，应用和观察器只接收各自范围的凭据文件。临时数据库、证书、私钥和凭据会在全部受管进程停止后清理。
 
-| 阶段 | 客户端与目标 | 预期结果 |
-|---|---|---|
-| `allowed-initial` | 允许证书调用 Greeting hello | 真实 RPC 成功 |
-| `identity-denied` | 同 CA 的另一张证书调用 Greeting hello | 精确远程授权拒绝 |
-| `allowed-repeat` | 切回允许证书调用 Greeting hello | 再次成功；Provider 仍为同一 JVM |
-| `service-denied` | 允许证书调用已导出的 Details | 精确远程授权拒绝，证明证书受信不等于任意方法获准 |
+RPC 应用为 `otryx-quickstart-mtls-provider`（`127.0.0.1:19143`）和 `otryx-quickstart-mtls-consumer`，共同 namespace 为 `otryx-quickstart-security`。Transport 将每张受信叶子证书的完整 DER SHA-256 绑定到明确的 `ApplicationKey(namespace, applicationName)` 与有限失效时间。Consumer 的原证书和轮换证书绑定到同一个应用；业务授权器允许这个应用调用 `GreetingService / 1.0.0 / default` 的 `hello`，并返回有限 `validUntil`。CN/SAN 用于证书与主机校验，不代替应用绑定或方法授权。
 
-每阶段单独启动并结束 Consumer，Provider 保持运行。全部通过后脚本输出 `mTLS verified identity and service authorization: PASS`。
+### 15 类场景与精确结果
+
+E12、E14 各有两个独立分支，共形成 **17 个具名阶段快照**。每个阶段均由独立观察器读取真实后端；Provider 必须保留 Greeting 与 Details 的实际导出，纯 Consumer 不能带 RPC Endpoint 或进入 Provider 池。
+
+| 阶段 | 操作 | 必须观察到的结果 | Consumer 成员 |
+|---|---|---|---|
+| `E01-allowed-initial` | 原证书调用 Greeting | 真实 RPC 成功 | 存在 |
+| `E02-rotated-consumer` | 同应用的轮换证书调用 Greeting | 真实 RPC 成功 | 存在 |
+| `E03-unbound-provider` | Consumer 不绑定实际 Provider 证书 | `IDENTITY_UNBOUND` | 存在 |
+| `E04-local-application-mismatch` | 本端证书绑定其他应用 | 启动前 `APPLICATION_MISMATCH` | 不存在 |
+| `E05-remote-application-mismatch` | 远端证书绑定其他应用 | `APPLICATION_MISMATCH` | 存在 |
+| `E06-remote-namespace-mismatch` | 远端证书绑定其他 namespace | `NAMESPACE_MISMATCH` | 存在 |
+| `E07-wrong-rpc-ca` | RPC 信任错误 CA | `CERTIFICATE_REJECTED` | 存在 |
+| `E08-expired-local-binding` | 本端应用绑定过期 | 启动前 `IDENTITY_EXPIRED` | 不存在 |
+| `E09-expired-certificate` | 本端叶子证书已过期 | 启动前拒绝 TLS 材料 | 不存在 |
+| `E10-expired-policy` | Provider 的有限授权策略过期 | 精确远程方法授权拒绝 | 存在 |
+| `E11-details-denied` | 有效应用调用未获授权的 Details | 精确远程方法授权拒绝 | 存在 |
+| `E12-missing-authorizer-provider` / `E12-missing-authorizer-both` | 新 Provider / BOTH 缺少授权器 | 启动前拒绝；不能创建额外成员或监听器 | 不存在 |
+| `E13-allowed-repeat` | 负例之后重新正常调用 | 真实 RPC 再次成功 | 存在 |
+| `E14-wrong-registry-ca` / `E14-wrong-registry-credentials` | 注册中心 CA 或密码错误 | 精确 `TLS_REJECTED` / `AUTHENTICATION_REJECTED` | 不存在 |
+| `E15-observer-read-only` | 观察器尝试覆盖 Provider 成员 | 权限拒绝，原成员和路由仍完整 | 不存在 |
+
+每个 Consumer 阶段独立启动并关闭。E10 前和 E11 前会重启 Provider，以分别装载过期策略和恢复后的策略；其他负例必须保留正在运行的健康 Provider。全部阶段通过才输出：
+
+```text
+Quickstart NETWORK_MTLS security scenarios: PASS
+```
+
+本地认证负例必须收到准确的 `RpcAuthenticationException.Reason`，由 Consumer 输出 `RPC authentication failure verified: reason=<REASON>`。方法授权负例只接受 `RpcRemoteException` 的 `BAD_REQUEST` 与固定消息 `RPC authorization denied`，输出 `RPC authorization denial verified.`。连接失败、通用 TLS 异常、错误原因或意外成功都会使验收失败。
 
 ```mermaid
 sequenceDiagram
@@ -293,48 +319,70 @@ sequenceDiagram
     participant P as Core Provider
     participant A as RpcAuthorizer
     participant S as Greeting Service
-    C->>T: mTLS 握手与证书验证
-    T-->>C: 已验证连接
-    C->>T: RPC serviceId / methodId
-    T->>P: 已验证 Peer 与请求 Header
-    P->>A: 叶子指纹、预绑定 ServiceKey / MethodId
-    alt 指纹与方法均允许
-        A-->>P: Allow
-        P->>S: 解码并调用 hello
-        S-->>C: GreetingReply
-    else 身份或方法未授权
-        A-->>P: Deny
-        P-->>C: BAD_REQUEST / RPC authorization denied
+    C->>T: 校验链、主机、证书应用绑定
+    T->>P: 携带会话身份与原始时间锚的请求
+    P->>A: 应用、ServiceKey、MethodId、最晚有效时间
+    alt 应用和方法获准且未过期
+        A-->>P: allowUntil(有限时间)
+        P->>S: 重验身份与授权后解码并调用
+        S-->>P: 返回业务结果
+        P-->>T: 编码响应
+        T-->>C: 携带连接身份的响应
+        C->>C: 解码前和交付前重验目标应用
+    else 拒绝或授权过期
+        A-->>P: deny 或无效授权
+        P-->>T: BAD_REQUEST / RPC authorization denied
+        T-->>C: 携带连接身份的拒绝响应
     end
 ```
 
-这里的拒绝必须是精确的 `BAD_REQUEST` / `RPC authorization denied`。CA、Hostname 或握手失败属于**认证失败**，不会被当成授权拒绝通过。Consumer 的 `otryx.rpc.quickstart.expect-authorization-denied=true` 只接受这一精确结果，成功标记是：
+### 手工配置现有 Profile
 
-```text
-RPC authorization denial verified.
-```
+`tls` Profile 是显式 `TRUSTED_DEVELOPMENT` 下的单向 TLS 演示。它使用 Provider 的 `OTRYX_QUICKSTART_TLS_CERT` / `OTRYX_QUICKSTART_TLS_KEY`，以及 Consumer 的 `OTRYX_QUICKSTART_TLS_CA`。`mtls` Profile 则要求受保护的 Etcd 和下列环境设置：
 
-### 手工使用 TLS / mTLS Profile
+| 设置 | 含义 |
+|---|---|
+| `OTRYX_QUICKSTART_TLS_CERT`、`OTRYX_QUICKSTART_TLS_KEY`、`OTRYX_QUICKSTART_TLS_CA` | 当前进程的 RPC 证书、私钥与对端信任 CA |
+| `OTRYX_QUICKSTART_REGISTRY_ENDPOINT`、`OTRYX_QUICKSTART_REGISTRY_CA` | Etcd HTTPS 地址与独立注册中心信任 CA；地址必须匹配证书 SAN |
+| `OTRYX_QUICKSTART_REGISTRY_CREDENTIALS_DIR` | 当前角色的 Spring configtree 目录；只放本角色用户名、密码文件 |
+| `OTRYX_QUICKSTART_NAMESPACE` | 实际成员与证书绑定共同的 namespace |
+| `OTRYX_QUICKSTART_PROVIDER_BINDING_NAMESPACE` | 默认采用上述 namespace；仅供负例独立改变 Provider 证书绑定的 namespace |
+| `OTRYX_QUICKSTART_PROVIDER_APPLICATION`、`OTRYX_QUICKSTART_CONSUMER_APPLICATION` | 默认采用上述两个应用名；必须与各进程实际成员身份相符 |
+| `OTRYX_QUICKSTART_PROVIDER_SHA256`、`OTRYX_QUICKSTART_CONSUMER_SHA256` | 两个应用叶子证书完整 DER 的 SHA-256 |
+| `OTRYX_QUICKSTART_CONSUMER_ROTATED_SHA256` | 同一 Consumer 的轮换证书摘要；省略时复用当前证书摘要 |
+| `OTRYX_QUICKSTART_BINDING_VALID_UNTIL` | 所有示例证书绑定的有限 ISO-8601 失效时间 |
+| `OTRYX_QUICKSTART_POLICY_VALID_UNTIL` | Provider 示例业务策略的有限失效时间 |
 
-证书环境变量由对应 Profile 按角色读取，路径均指向本地 PEM 文件：
+configtree 中的文件名为 `otryx.rpc.registry.security.credentials.username` 和 `otryx.rpc.registry.security.credentials.password`。使用权限受限的目录和文件，从你的凭据管理渠道写入；不要把凭据放进命令行、源码、公共日志或验收附件。Profile 显式选择 `USER_PASSWORD`，不从通用 `providerOptions` 推断凭据。
 
-| Profile / 进程 | 必需环境变量 | 用途 |
-|---|---|---|
-| `tls` / Provider | `OTRYX_QUICKSTART_TLS_CERT`、`OTRYX_QUICKSTART_TLS_KEY` | 服务端证书和私钥 |
-| `tls` / Consumer | `OTRYX_QUICKSTART_TLS_CA` | 校验服务端证书的信任 CA |
-| `mtls` / Provider、Consumer | `OTRYX_QUICKSTART_TLS_CERT`、`OTRYX_QUICKSTART_TLS_KEY`、`OTRYX_QUICKSTART_TLS_CA` | 各进程自己的证书、私钥及校验对端的信任 CA |
-
-旧 `OTRYX_RPC_TLS_CERT`、`OTRYX_RPC_TLS_KEY`、`OTRYX_RPC_TLS_CA` 必须改名并从环境中移除，否则 Starter 严格校验会拒绝未知配置。启动参数为 `--spring.profiles.active=tls` 或 `--spring.profiles.active=mtls`；Consumer 默认验证目标主机身份。
-
-`mtls` Profile 启用 `NETWORK_MTLS`、严格 Fory DTO allowlist，并加载 Quickstart 专用 `RpcAuthorizer`。**Provider 必须显式设置** `otryx.rpc.quickstart.mtls.allowed-client-sha256`，值必须恰好是 64 个小写十六进制字符，无冒号、无首尾空白。可从允许的客户端叶子证书 DER 计算：
+计算证书摘要：
 
 ```bash
-openssl x509 -in client.crt -outform DER | openssl dgst -sha256
+openssl x509 -in consumer.crt -outform DER | openssl dgst -sha256
 ```
 
-取输出末尾的 64 位摘要，通过 Provider 参数 `--otryx.rpc.quickstart.mtls.allowed-client-sha256=<摘要>` 传入；Consumer 不需要该属性。缺失或格式错误时 Provider 启动失败。授权依据是 Transport 已验证的叶子证书 DER SHA-256，**不是 CN/SAN 文本**；目标须同时匹配 `GreetingService` / `1.0.0` / `default` 与 `hello` 的 MethodId。即使证书受信且指纹允许，Details 也不获授权。
+Provider 示例授权器使用 `otryx.rpc.quickstart.mtls.allowed-consumer.namespace`、`allowed-consumer.application-name` 与 `policy-valid-until`；Profile 从上表环境变量绑定这些值。证书轮换不改变业务策略里的应用名。一次授权还受证书、绑定、请求预算和 `server.authorization.max-grant-lifetime`（示例 `30s`）共同约束。缺少显式 `RpcAuthorizer` 的 `NETWORK_MTLS` Provider / BOTH 在 Registry 或 Transport 激活之前失败。
 
-`otryx.rpc.quickstart.use-details=true` 选择 Details 调用，与 `use-relay=true` 互斥；拒绝预期模式不能与重复调用模式一起使用。[演示授权器](otryx-quickstart-provider/src/main/java/com/peachsoft/otryx/quickstart/provider/QuickstartMtlsAuthorizationConfiguration.java) 属于 Quickstart Provider，通用 Starter 不会自动生成业务授权策略。`NETWORK_MTLS` Provider 未提供授权器时仍默认拒绝。完整证书部署、Reload 和授权边界见 [安全与授权](../docs/security.md)。
+`otryx.rpc.quickstart.use-details=true` 与 `use-relay=true` 互斥。`expect-authentication-failure=<REASON>` 与 `expect-authorization-denied=true` 互斥，任何负例模式都不能与重复调用一起使用。旧 `allowed-client-sha256` 业务配置已经移除；证书摘要现在属于 Transport 的应用绑定。旧 `OTRYX_RPC_TLS_*` 变量也应从环境中移除，统一使用上表的 Quickstart 路径变量。
+
+### 独立、只读的安全观察器
+
+在既有 `observe_quickstart_registry.sh` 命令前设置 `QUICKSTART_REGISTRY_SECURITY_FILE=/absolute/path/observer.json`。配置文件和凭据文件必须是权限 `0600` 的普通文件；配置 JSON 只接受已知字段，限制为 64 KiB、8 层嵌套，凭据为最多 4096 字节的单行 UTF-8。相对引用以 JSON 所在目录解析。例如 Etcd 观察器：
+
+```json
+{
+  "security": {
+    "trustCertificateCollection": "registry-ca.crt",
+    "credentialKind": "USER_PASSWORD",
+    "usernameFile": "observer.username",
+    "passwordFile": "observer.password"
+  }
+}
+```
+
+Eureka 必须额外提供独立的 `metadataSecurity` 对象；其他后端拒绝该额外对象。观察器在读取前核验实际 Membership、Manifest、Mapping 来源的 TLS、凭据和 namespace。未设置安全文件时显式选择开发模式；设置了错误文件不会回退到开发模式。观察器不创建成员，不发布 Manifest，也不创建 Mapping Owner。
+
+完整实现及其边界见[安全指南](../docs/security.md)、[脚本](../scripts/run_quickstart_mtls_e2e.py)和[只读观察器配置](otryx-quickstart-provider/src/main/java/com/peachsoft/otryx/quickstart/provider/QuickstartRegistrySecurity.java)。
 
 <!-- doc-section:integration -->
 ## 6. 理解需要复制到自己项目里的最小代码
@@ -414,7 +462,7 @@ java -jar otryx-quickstart/otryx-quickstart-consumer/target/otryx-quickstart-con
   --otryx.rpc.registry.eureka.metadata-endpoints=http://127.0.0.1:8500
 ```
 
-Consul Profile 的认证通过 `CONSUL_HTTP_TOKEN` 传递，Eureka 成员面的认证通过 `EUREKA_USERNAME`/`EUREKA_PASSWORD` 传递。Eureka 的外置元数据凭据须另外通过 `metadata-options` 配置，见 [Starter 后端装配](../docs/reference/starter.md)。不要提交真实密钥。后端约束见 [Consul V2](../docs/reference/registry-consul-v2.md) 和 [Eureka V2](../docs/reference/registry-eureka-v2.md)。
+这些手工 Profile 显式使用 `TRUSTED_DEVELOPMENT`，默认不配置后端凭据。受保护的后端须使用有类型的 `otryx.rpc.registry.security` 配置 TLS 与凭据种类；Eureka 外置元数据链另用 `otryx.rpc.registry.metadata-security`，不能在通用 `metadata-options` 中夹带凭据。安全材料通过受限配置文件或凭据管理渠道提供，见 [Starter 后端装配](../docs/reference/starter.md)。后端约束见 [Consul V2](../docs/reference/registry-consul-v2.md) 和 [Eureka V2](../docs/reference/registry-eureka-v2.md)。
 
 <!-- doc-section:operations -->
 ## 8. 观测、背压和生命周期
@@ -435,7 +483,7 @@ Consul Profile 的认证通过 `CONSUL_HTTP_TOKEN` 传递，Eureka 成员面的�
 | Memory 模式双进程互相看不到 | Memory Registry **不跨 JVM**；使用 Nacos / Etcd / Consul / Eureka 等共享注册中心 |
 | Consumer 成员存在却无法调用 | 成员入册不等于 Provider 路由就绪；检查 Mapping、该实例 Manifest、角色与 `verifiedProviders` |
 | 观察器拒绝写文件 | 输出必须是新文件；每轮观察改用新文件名，检查 namespace/group/applicationName 是否一致 |
-| `NETWORK_MTLS` 拒绝调用 | 分清握手失败和 `RPC authorization denied`；再查指纹、ServiceKey、MethodId 与严格 Fory 白名单 |
+| `NETWORK_MTLS` 拒绝启动或调用 | 先按精确原因区分配置、Registry、证书与方法授权；检查实际 ApplicationKey/namespace、证书链与主机、绑定/策略失效时间、ServiceKey/MethodId 和实际 Codec 能力。缺少授权器在 Provider/BOTH 启动前拒绝 |
 | RPC 偶发超时 | 检查 Provider 是否启动、服务目录是否完成同步、请求 Deadline、连接与背压指标 |
 | 端口被占用 | Provider 默认 19090；多跳和双 revision 使用 19090/19091，mTLS 使用 19143；先停止手工进程，顺序运行脚本 |
 
@@ -445,19 +493,19 @@ Consul Profile 的认证通过 `CONSUL_HTTP_TOKEN` 传递，Eureka 成员面的�
 ```bash
 python3 scripts/test_quickstart_layout.py
 ./mvnw -B -ntp clean verify -Pquality
-# 已构建全部 JAR，且本地 Nacos 正在运行
-bash scripts/run_quickstart_e2e.sh
+# 已构建全部 JAR，本地 Nacos 正在运行，已准备 Etcd 3.5.21
+ETCD_BINARY=/absolute/path/to/etcd bash scripts/run_quickstart_e2e.sh
 # 仅当本教程的 Compose 由你启动且已不再使用时执行
 docker compose -f otryx-quickstart/docker-compose.yml down
 ```
 
 初次验收完成后可阅读：[用户指南](../docs/user-guide.md) · [Starter 参考](../docs/reference/starter.md) · [架构设计](../docs/architecture.md) · [协议兼容](../docs/wire-compatibility.md)。固定硬件性能结论仍需要受控证据，短时 Quickstart 成功**不是**正式生产性能或 GA 发布认证。
 
-统一入口仅在五个脚本全部成功后输出 `Complete application-level Quickstart suite: PASS`。原始 JVM 日志在临时目录中，失败时向控制台输出诊断末尾，清理后不作为持久证据；脚本只管理自己启动的应用进程，不停止用户提供的 Nacos。
+统一入口仅在五个脚本全部成功后输出 `Complete application-level Quickstart suite: PASS`。开发场景失败时输出临时 JVM 日志末尾；安全场景只公开固定结果，可通过其 `--diagnostics` 参数将失败日志保留到独立、权限受限的本地目录。原始日志不作为公开验收附件。脚本管理自己启动的应用与观察进程，mTLS 还关闭自建 Etcd；用户提供的 Nacos 保持运行。
 
 <!-- doc-section:migration-status -->
 ## V2 应用级注册迁移状态
 
 Core `ApplicationMembershipCoordinator`、`ApplicationServiceResolver`、Client `applicationControlPlane(...)` 和 Server `applicationMembership(...)` 是当前唯一应用级链路。Provider、Consumer、BOTH 均真实入册，纯 Consumer 无 RPC Endpoint；ServiceInstance 只保留为本地 LB DTO。
 
-#139 将源码/配置/当前用法清理、共享契约、四真实后端独立 JVM 与完整五组 rolling 作为一个纵向验收包。旧注册模式不能作为 rolling baseline。当前准确 Head 的后端与 CI 状态见[断点](../docs/engineering/agent-governance-checkpoint.md)；教程、静态扫描或脚本夹具不能替代真实通过结果，也不构成生产容量或正式发行证明。设计与约束见 [V2 设计](../docs/design/application-registry-v2.md)。
+#139 已通过 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合并到 `main@783bf8115c9523e5667023678dafe659315b2b66`，其源码/配置清理、共享契约、四真实后端独立 JVM 和五组 rolling 均有独立核验记录。旧注册模式不能作为 rolling baseline。#140 的安全实现须另行完成当前 Head 的实际测试与合并后核验；#139 的结果不能充当本次安全验收。准确证据见[断点](../docs/engineering/agent-governance-checkpoint.md)，设计与约束见 [V2 设计](../docs/design/application-registry-v2.md)。教程、静态扫描或脚本夹具不能替代真实通过结果，也不构成生产容量或正式发行证明。

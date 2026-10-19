@@ -2,6 +2,7 @@ package com.peachsoft.otryx.core;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,6 +17,9 @@ import com.peachsoft.otryx.api.RpcUnavailableException;
 import com.peachsoft.otryx.api.ServiceInstance;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
+import com.peachsoft.otryx.registry.VerifiedProviderSnapshot;
 import com.peachsoft.otryx.registry.ManifestSnapshotCache;
 import com.peachsoft.otryx.registry.ServiceMappingCache;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
@@ -24,6 +28,8 @@ import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
 import com.peachsoft.otryx.registry.memory.MemoryApplicationRegistry;
 import java.time.Duration;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -178,6 +184,9 @@ class ServiceDirectoryTest {
                 new RpcDirectoryFreshnessOptions(Duration.ofNanos(10L)), clock::get)) {
             ApplicationInstance fresh = fixture.provider("fresh", 19091, SCHEMA);
             ApplicationInstance old = fixture.provider("old", 19092, SCHEMA);
+            fixture.publish(2L, old);
+            fixture.refresh();
+            VerifiedProviderSnapshot delayed = directory.selection().candidate();
             fixture.publish(3L, fresh);
             fixture.refresh();
             fixture.mappings.failed = true;
@@ -185,8 +194,7 @@ class ServiceDirectoryTest {
             clock.addAndGet(10L);
             assertEquals(ServiceDirectory.Status.STALE, directory.status());
             fixture.mappings.failed = false;
-            fixture.publish(2L, old);
-            fixture.refresh();
+            publishDelayed(directory, delayed);
             assertEquals(ServiceDirectory.Status.STALE, directory.status());
             assertArrayEquals(new ServiceInstance[0], directory.snapshot());
         }
@@ -197,10 +205,12 @@ class ServiceDirectoryTest {
         try (Fixture fixture = new Fixture(); ServiceDirectory directory = fixture.directory()) {
             ApplicationInstance newer = fixture.provider("newer", 19091, SCHEMA);
             ApplicationInstance older = fixture.provider("older", 19092, SCHEMA);
-            fixture.publish(20L, newer);
-            fixture.refresh();
             fixture.publish(19L, older);
             fixture.refresh();
+            VerifiedProviderSnapshot delayed = directory.selection().candidate();
+            fixture.publish(20L, newer);
+            fixture.refresh();
+            publishDelayed(directory, delayed);
             assertArrayEquals(new ServiceInstance[] {project(newer)}, directory.snapshot());
         }
     }
@@ -235,10 +245,96 @@ class ServiceDirectoryTest {
         }
     }
 
+    @Test
+    void backendMappingRevisionRollbackMustInvalidateDirectoryTrust() {
+        try (Fixture fixture = new Fixture(); ServiceDirectory directory = fixture.directory()) {
+            ApplicationInstance provider = fixture.provider("live", 19091, SCHEMA);
+            fixture.publish(3L, provider);
+            fixture.refresh();
+            fixture.publish(2L, provider);
+            fixture.refresh();
+            assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                    assertThrows(RegistrySecurityException.class, directory::snapshot).reason());
+            assertThrows(RegistrySecurityException.class, directory::status);
+        }
+    }
+
+    @Test
+    void anotherRouteRejectionImmediatelyInvalidatesThisUnrefreshedDirectory() {
+        try (Fixture fixture = new Fixture(); ServiceDirectory directory = fixture.directory()) {
+            ApplicationInstance provider = fixture.provider("live", 19091, SCHEMA);
+            fixture.publish(1L, provider);
+            fixture.refresh();
+            ServiceDirectory.Selection selected = directory.selection();
+            fixture.mappings.securityFailure = RegistrySecurityFailure.AUTHORIZATION_REJECTED;
+            ServiceMappingKey other = new ServiceMappingKey(NAMESPACE, new ServiceKey("example.Other", "1", "default"));
+            assertThrows(java.util.concurrent.CompletionException.class,
+                    () -> fixture.resolver.refresh(other, SCHEMA).toCompletableFuture().join());
+            assertEquals(RegistrySecurityFailure.AUTHORIZATION_REJECTED,
+                    assertThrows(RegistrySecurityException.class, directory::snapshot).reason());
+            assertThrows(RegistrySecurityException.class, directory::status);
+            assertThrows(RegistrySecurityException.class, () -> directory.isUsable(selected));
+        }
+    }
+
+    @Test
+    void recoveredCurrentCandidateCannotReauthorizeOldSelectionOrDelayedPublication() {
+        try (Fixture fixture = new Fixture(); ServiceDirectory directory = fixture.directory()) {
+            ApplicationInstance provider = fixture.provider("live", 19091, SCHEMA);
+            fixture.publish(1L, provider);
+            fixture.refresh();
+            ServiceDirectory.Selection old = directory.selection();
+            fixture.mappings.securityFailure = RegistrySecurityFailure.AUTHORIZATION_REJECTED;
+            fixture.refresh();
+            assertThrows(RegistrySecurityException.class, directory::snapshot);
+            fixture.mappings.securityFailure = null;
+            fixture.refresh();
+            assertTrue(directory.isUsable(directory.selection()));
+            assertThrows(RegistrySecurityException.class, () -> directory.isUsable(old));
+            assertThrows(RegistrySecurityException.class, () -> publishDelayed(directory, old.candidate()));
+            assertArrayEquals(new ServiceInstance[] {project(provider)}, directory.snapshot());
+        }
+    }
+
+    @Test
+    void equalPublicSnapshotCannotBlessAnEndpointProjection() {
+        try (Fixture fixture = new Fixture(); ServiceDirectory directory = fixture.directory()) {
+            ApplicationInstance provider = fixture.provider("live", 19091, SCHEMA);
+            fixture.publish(1L, provider);
+            fixture.refresh();
+            ServiceDirectory.Selection trusted = directory.selection();
+            VerifiedProviderSnapshot original = trusted.candidate();
+            VerifiedProviderSnapshot copied = new VerifiedProviderSnapshot(original.key(), original.schemaFingerprint(),
+                    original.providers(), original.mappingRevision());
+            assertEquals(original, copied);
+            assertThrows(RegistrySecurityException.class, () -> directory.isUsable(new ServiceDirectory.Selection(
+                    copied, trusted.instances(), trusted.status())));
+            fixture.refresh();
+            assertFalse(directory.isUsable(trusted), "Ordinary replacement must retire the old candidate");
+        }
+    }
+
+    private static void publishDelayed(ServiceDirectory directory, VerifiedProviderSnapshot candidate) {
+        try {
+            Method method = ServiceDirectory.class.getDeclaredMethod("publishVerified",
+                    ServiceMappingKey.class, VerifiedProviderSnapshot.class);
+            method.setAccessible(true);
+            method.invoke(directory, MAPPING_KEY, candidate);
+        } catch (InvocationTargetException failure) {
+            if (failure.getCause() instanceof RuntimeException cause) {
+                throw cause;
+            }
+            throw new AssertionError(failure.getCause());
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
     private static ServiceInstance project(ApplicationInstance instance) {
         String id = instance.application().namespace() + "/" + instance.application().applicationName()
                 + "/" + instance.instanceId();
-        return new ServiceInstance(id, KEY, instance.rpcEndpoint(), instance.weight(), Map.of());
+        return new ServiceInstance(
+                id, instance.application(), KEY, instance.rpcEndpoint(), instance.weight(), Map.of());
     }
 
     interface DirectoryService {
@@ -300,6 +396,7 @@ class ServiceDirectoryTest {
         private CompletionStage<ServiceMappingSnapshot> response = CompletableFuture.completedFuture(
                 new ServiceMappingSnapshot(MAPPING_KEY, Set.of(), 0L));
         private boolean failed;
+        private RegistrySecurityFailure securityFailure;
 
         private ControlledMappings(ServiceMappingRepository delegate) {
             this.delegate = delegate;
@@ -322,6 +419,9 @@ class ServiceDirectoryTest {
 
         @Override
         public CompletionStage<ServiceMappingSnapshot> lookup(ServiceMappingKey key) {
+            if (securityFailure != null) {
+                return CompletableFuture.failedFuture(new RegistrySecurityException(securityFailure));
+            }
             return failed
                     ? CompletableFuture.failedFuture(new RpcUnavailableException("Application mapping disconnected"))
                     : response;

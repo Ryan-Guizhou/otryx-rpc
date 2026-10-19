@@ -16,6 +16,7 @@ import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
 import com.peachsoft.otryx.registry.RegistryCapabilities;
 import com.peachsoft.otryx.registry.RegistryCapability;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import java.time.Duration;
@@ -70,6 +71,7 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
             RegistryCapability.LEASE,
             RegistryCapability.REVISION);
 
+    private final RegistrySecurityDescriptor descriptor;
     private final NamingService naming;
     private final ConfigService config;
     private final NacosControlExecutor executor = new NacosControlExecutor();
@@ -91,6 +93,13 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
     NacosApplicationRegistry(
             NamingService naming, ConfigService config, String namespace, String group,
             String cluster, String consumerHost, RpcObserver observer) {
+        this(naming, config, namespace, group, cluster, consumerHost, observer, RegistrySecurityDescriptor.unknown());
+    }
+
+    NacosApplicationRegistry(
+            NamingService naming, ConfigService config, String namespace, String group,
+            String cluster, String consumerHost, RpcObserver observer, RegistrySecurityDescriptor descriptor) {
+        this.descriptor = Objects.requireNonNull(descriptor, "descriptor");
         this.naming = Objects.requireNonNull(naming, "naming");
         this.config = Objects.requireNonNull(config, "config");
         this.namespace = new ApplicationKey(namespace, "registry").namespace();
@@ -101,7 +110,7 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
             throw new IllegalArgumentException("Invalid Nacos Consumer membership host");
         }
         this.observer = observer == null ? RpcObserver.noop() : observer;
-        NacosV2ConfigStore store = new NacosV2ConfigStore(config, group);
+        NacosV2ConfigStore store = new NacosV2ConfigStore(config, group, descriptor);
         manifests = new NacosApplicationManifestRepository(store, executor, this.namespace);
         mappings = new NacosServiceMappingRepository(store, executor, this.namespace);
         reconcileTask = executor.scheduleWithFixedDelay(
@@ -127,6 +136,12 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
     public ServiceMappingRepository serviceMappingRepository() {
         requireOpen();
         return mappings;
+    }
+
+    /** 返回实际创建的 Naming/Config 客户端保护，不为注入的原始 SDK 背书。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return descriptor;
     }
 
     /** 返回当前 Nacos Naming 能力声明。 */
@@ -375,7 +390,7 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
                     } catch (Exception error) {
                         if (unhealthy.compareAndSet(false, true) && !stopped.get()) {
                             try {
-                                listener.onSynchronizationFailed(error);
+                                listener.onSynchronizationFailed(NacosFailures.normalize(error));
                             } catch (RuntimeException callbackFailure) {
                                 LOGGER.debug("Nacos V2 subscription listener rejected failure");
                             }
@@ -388,7 +403,7 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
                 refreshing.set(false);
                 if (error != null && !stopped.get() && unhealthy.compareAndSet(false, true)) {
                     try {
-                        listener.onSynchronizationFailed(error);
+                        listener.onSynchronizationFailed(NacosFailures.normalize(error));
                     } catch (RuntimeException ignoredError) {
                         LOGGER.debug("Nacos V2 subscription callback rejected executor failure");
                     }

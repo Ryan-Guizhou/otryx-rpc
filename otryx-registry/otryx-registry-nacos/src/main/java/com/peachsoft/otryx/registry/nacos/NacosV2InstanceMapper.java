@@ -6,6 +6,8 @@ import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationManifest;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.HashMap;
@@ -92,25 +94,35 @@ final class NacosV2InstanceMapper {
      */
     static ApplicationInstance decode(
             ApplicationKey application, String logicalCluster, Instance source) {
-        if (source == null || !source.isEnabled() || !source.isHealthy()) {
+        if (source == null) {
             return null;
         }
         Map<String, String> values = source.getMetadata();
-        if (values == null || !values.containsKey(TOKEN)) {
+        if (values == null || values.isEmpty()) {
             return null;
+        }
+        requireMetadataBudget(values);
+        if (!values.containsKey(TOKEN)) {
+            if (values.keySet().stream().anyMatch(key -> key.startsWith(NacosV2Names.METADATA_PREFIX))) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+            }
+            return null;
+        }
+        if (values.get(CLUSTER) == null || values.get(CLUSTER).isBlank()) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
         }
         if (!logicalCluster.equals(values.get(CLUSTER))) {
             return null;
         }
         if (!application.namespace().equals(values.get(NAMESPACE))
                 || !application.applicationName().equals(values.get(APPLICATION))) {
-            throw new IllegalArgumentException("Nacos application member identity mismatch");
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
         }
         String token = requireText(values.get(TOKEN), "token");
         String instanceId = requireText(values.get(INSTANCE_ID), "instanceId");
         if (!NacosV2Names.physicalCluster(logicalCluster, instanceId, token)
                 .equals(source.getClusterName())) {
-            throw new IllegalArgumentException("Nacos physical member cluster does not match identity");
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
         }
         ApplicationRole role = ApplicationRole.valueOf(requireText(values.get(ROLE), "role"));
         if (!validHost(source.getIp())) {
@@ -144,9 +156,32 @@ final class NacosV2InstanceMapper {
                 }
             }
         }
-        return new ApplicationInstance(instanceId, application, role, endpoint,
+        ApplicationInstance decoded = new ApplicationInstance(instanceId, application, role, endpoint,
                 role.providesRpc() ? Math.max(1, (int) Math.round(scaledWeight)) : 0,
                 revision, attributes);
+        return source.isEnabled() && source.isHealthy() ? decoded : null;
+    }
+
+    private static void requireMetadataBudget(Map<String, String> values) {
+        if (values.size() > MAX_METADATA_BYTES) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
+        }
+        long bytes = 0;
+        for (Map.Entry<String, String> entry : values.entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue();
+            if (key == null || value == null) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+            }
+            if (key.length() > MAX_METADATA_BYTES || value.length() > MAX_METADATA_BYTES) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
+            }
+            bytes += key.getBytes(StandardCharsets.UTF_8).length;
+            bytes += value.getBytes(StandardCharsets.UTF_8).length;
+            if (bytes > MAX_METADATA_BYTES) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
+            }
+        }
     }
 
     /** 验证 Consumer 注册的真实主机 IP 不为全网通配或空地址。 */
@@ -170,6 +205,13 @@ final class NacosV2InstanceMapper {
     }
 
     private static String decodeKey(String value) {
-        return new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8);
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(Base64.getUrlDecoder().decode(value))).toString();
+        } catch (java.nio.charset.CharacterCodingException | IllegalArgumentException malformed) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+        }
     }
 }

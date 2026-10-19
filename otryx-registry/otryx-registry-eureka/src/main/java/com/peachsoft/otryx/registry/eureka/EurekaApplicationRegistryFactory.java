@@ -3,7 +3,14 @@ package com.peachsoft.otryx.registry.eureka;
 import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
+import com.peachsoft.otryx.registry.CredentialKind;
+import com.peachsoft.otryx.registry.RegistryChannel;
+import com.peachsoft.otryx.registry.RegistryFailureSanitizer;
 import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
+import com.peachsoft.otryx.registry.RegistrySecurityOptions;
+import com.peachsoft.otryx.registry.RegistrySecuritySupport;
 import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import com.peachsoft.otryx.registry.http.HttpRegistryClient;
@@ -13,11 +20,14 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -34,13 +44,29 @@ import java.util.Set;
 @Extension(EurekaApplicationRegistryFactory.EXTENSION_NAME)
 public final class EurekaApplicationRegistryFactory implements ApplicationRegistryFactory {
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(
+            EurekaApplicationRegistryFactory.class);
+
     /** 应用级注册的 SPI 名称。 */
     public static final String EXTENSION_NAME = "eureka";
-    private static final Set<String> BACKENDS = Set.of("etcd", "nacos", "consul");
+    private static final String BACKEND_ETCD = "etcd";
+    private static final String BACKEND_NACOS = "nacos";
+    private static final String BACKEND_CONSUL = "consul";
+    private static final Set<String> BACKENDS = Set.of(BACKEND_ETCD, BACKEND_NACOS, BACKEND_CONSUL);
     private static final String OPTION_METADATA_BACKEND = "eurekaMetadataBackend";
     private static final String OPTION_METADATA_ENDPOINTS = "eurekaMetadataEndpoints";
     private static final String OPTION_METADATA_PREFIX = "eurekaMetadata.";
     private static final String OPTION_MEMBER_HOST = "eurekaMemberHost";
+    private static final Set<String> MEMBER_OPTIONS = Set.of(
+            OPTION_METADATA_BACKEND, OPTION_METADATA_ENDPOINTS, OPTION_MEMBER_HOST,
+            EurekaProtocol.OPTION_LEASE_SECONDS, EurekaProtocol.OPTION_HEARTBEAT_SECONDS,
+            EurekaProtocol.OPTION_POLL_INTERVAL_MILLIS, EurekaProtocol.OPTION_REQUEST_TIMEOUT_MILLIS);
+    private static final Map<String, Set<String>> METADATA_OPTIONS = Map.of(
+            BACKEND_ETCD, Set.of("leaseTtlSeconds"),
+            BACKEND_NACOS, Set.of("nacosGroup", "nacosCluster", "nacosMemberHost"),
+            BACKEND_CONSUL, Set.of("consulTtlSeconds", "consulHeartbeatSeconds",
+                    "consulPollIntervalMillis", "consulRequestTimeoutMillis", "consulEnterpriseNamespace"));
+    private static final Set<CredentialKind> CREDENTIALS = Set.of(CredentialKind.NONE, CredentialKind.USER_PASSWORD);
     private static final int DEFAULT_LEASE_SECONDS = 30;
     private static final int MIN_LEASE_SECONDS = 9;
     private static final int MAX_LEASE_SECONDS = 3600;
@@ -66,17 +92,24 @@ public final class EurekaApplicationRegistryFactory implements ApplicationRegist
     @Override
     public ApplicationRegistry create(RegistryOptions options) {
         Objects.requireNonNull(options, "options");
+        if (options.securityProfile() == com.peachsoft.otryx.api.RpcSecurityProfile.UNSPECIFIED) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.UNSUPPORTED_PROTECTION);
+        }
         String metadataType = options.providerOption(OPTION_METADATA_BACKEND, "");
         if (!BACKENDS.contains(metadataType)) {
             throw new IllegalArgumentException(
                     "Eureka requires eurekaMetadataBackend=etcd|nacos|consul");
         }
+        Set<String> allowed = new HashSet<>(MEMBER_OPTIONS);
+        METADATA_OPTIONS.get(metadataType).forEach(key -> allowed.add(OPTION_METADATA_PREFIX + key));
+        RegistrySecuritySupport.requireOptions(options, allowed, true);
         String metadataEndpoints = options.providerOption(OPTION_METADATA_ENDPOINTS, "");
         if (metadataEndpoints.isBlank()) {
             throw new IllegalArgumentException("Eureka requires eurekaMetadataEndpoints");
         }
         List<String> endpoints = options.endpoints().isEmpty()
                 ? List.of(EurekaProtocol.DEFAULT_ENDPOINT) : options.endpoints();
+        RegistrySecuritySupport.requireTransport(options, endpoints, CREDENTIALS);
         int lease = number(options, EurekaProtocol.OPTION_LEASE_SECONDS,
                 DEFAULT_LEASE_SECONDS, MIN_LEASE_SECONDS, MAX_LEASE_SECONDS);
         int renew = number(options, EurekaProtocol.OPTION_HEARTBEAT_SECONDS,
@@ -85,14 +118,7 @@ public final class EurekaApplicationRegistryFactory implements ApplicationRegist
                 DEFAULT_POLL_MILLIS, MIN_POLL_MILLIS, MAX_POLL_MILLIS);
         int timeout = number(options, EurekaProtocol.OPTION_REQUEST_TIMEOUT_MILLIS,
                 DEFAULT_TIMEOUT_MILLIS, MIN_TIMEOUT_MILLIS, MAX_TIMEOUT_MILLIS);
-        String user = options.providerOption(EurekaProtocol.OPTION_USERNAME, "");
-        String password = options.providerOption(EurekaProtocol.OPTION_PASSWORD, "");
-        if (user.isBlank() != password.isBlank()) {
-            throw new IllegalArgumentException("Eureka Basic Auth requires both username and password");
-        }
-        String credential = user.isBlank() ? "" : EurekaProtocol.BASIC_AUTH_PREFIX
-                + Base64.getEncoder().encodeToString(
-                        (user + ":" + password).getBytes(StandardCharsets.UTF_8));
+        String credential = credential(options);
         String namespace = options.namespace().isBlank() ? "default" : options.namespace();
         String host = options.providerOption(OPTION_MEMBER_HOST, "");
         if (host.isBlank()) {
@@ -111,44 +137,75 @@ public final class EurekaApplicationRegistryFactory implements ApplicationRegist
                 metadataOptions.put(unprefixed, value);
             }
         });
-        RegistryOptions backendOptions = RegistryOptions.fromCsv(
-                metadataEndpoints, namespace, metadataOptions, options.observer());
-        ApplicationRegistry metadataRegistry;
+        RegistryOptions parsed = RegistryOptions.fromCsv(metadataEndpoints, namespace, metadataOptions);
+        RegistryOptions backendOptions = new RegistryOptions(
+                parsed.endpoints(), namespace, metadataOptions, options.observer(), options.securityProfile(),
+                options.metadataSecurity().orElseGet(RegistrySecurityOptions::none), Optional.empty());
+        HttpRegistryClient client = new HttpRegistryClient(endpoints,
+                credential.isEmpty() ? "" : EurekaProtocol.AUTHORIZATION_HEADER, credential,
+                Duration.ofMillis(timeout), HttpRegistryClient.DEFAULT_MAX_RESPONSE_BYTES, options.security().tls());
+        ApplicationRegistry metadataRegistry = null;
+        EurekaV2Executor executor = null;
         try {
             metadataRegistry = ExtensionLoader.getLoader(ApplicationRegistryFactory.class)
                     .getExtension(metadataType).create(backendOptions);
-        } catch (RuntimeException failure) {
-            throw new IllegalStateException("Eureka metadata backend could not be created: "
-                    + metadataType, failure);
-        }
-        HttpRegistryClient client = null;
-        EurekaV2Executor executor = null;
-        try {
             if (!(metadataRegistry instanceof ApplicationMetadataBackend provider)) {
-                throw new IllegalStateException(
-                        "Eureka metadata backend does not expose Manifest and Mapping repositories");
+                throw new RegistrySecurityException(RegistrySecurityFailure.UNSUPPORTED_PROTECTION);
             }
             ServiceMappingRepository repository = provider.serviceMappingRepository();
             if (!(repository instanceof ServiceMappingCandidateSource source)) {
-                throw new IllegalStateException(
-                        "Eureka metadata backend cannot read service Mapping candidates");
+                throw new RegistrySecurityException(RegistrySecurityFailure.UNSUPPORTED_PROTECTION);
             }
-            client = new HttpRegistryClient(endpoints,
-                    EurekaProtocol.AUTHORIZATION_HEADER, credential, Duration.ofMillis(timeout));
             executor = new EurekaV2Executor();
             return new EurekaApplicationRegistry(client, executor,
                     new EurekaV2Identity(namespace), metadataRegistry,
                     provider.manifestRepository(), repository, source, host,
-                    Duration.ofSeconds(lease), Duration.ofSeconds(renew), Duration.ofMillis(poll));
+                    Duration.ofSeconds(lease), Duration.ofSeconds(renew), Duration.ofMillis(poll),
+                    RegistrySecuritySupport.installed(options.security(), namespace, Optional.empty(),
+                            RegistryChannel.MEMBERSHIP));
         } catch (RuntimeException failure) {
-            if (executor != null) {
-                executor.close();
+            closeFailed(executor);
+            closeFailed(metadataRegistry);
+            closeFailed(client);
+            Throwable safe = RegistryFailureSanitizer.sanitize(failure);
+            if (safe instanceof RuntimeException runtime) {
+                throw runtime;
             }
-            if (client != null) {
-                client.close();
+            throw new IllegalStateException("Eureka metadata backend could not be created");
+        }
+    }
+
+    private static void closeFailed(AutoCloseable resource) {
+        if (resource != null) {
+            try {
+                resource.close();
+            } catch (Exception cleanupFailure) {
+                if (cleanupFailure instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                LOG.debug("Registry construction cleanup failed: {}", cleanupFailure.getClass().getSimpleName());
             }
-            metadataRegistry.close();
-            throw failure;
+        }
+    }
+
+    private static String credential(RegistryOptions options) {
+        if (options.security().credentials().kind() == CredentialKind.NONE) {
+            return "";
+        }
+        String username = options.security().credentials().username();
+        if (username.indexOf(':') >= 0) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.UNSUPPORTED_PROTECTION);
+        }
+        char[] password = options.security().credentials().password();
+        byte[] encoded = null;
+        try {
+            encoded = (username + ":" + new String(password)).getBytes(StandardCharsets.UTF_8);
+            return EurekaProtocol.BASIC_AUTH_PREFIX + Base64.getEncoder().encodeToString(encoded);
+        } finally {
+            Arrays.fill(password, '\0');
+            if (encoded != null) {
+                Arrays.fill(encoded, (byte) 0);
+            }
         }
     }
 
@@ -160,7 +217,7 @@ public final class EurekaApplicationRegistryFactory implements ApplicationRegist
             }
             return detected;
         } catch (UnknownHostException failure) {
-            throw new IllegalStateException("Configure eurekaMemberHost with an actual local address", failure);
+            throw new IllegalStateException("Configure eurekaMemberHost with an actual local address");
         }
     }
 
@@ -169,7 +226,7 @@ public final class EurekaApplicationRegistryFactory implements ApplicationRegist
         try {
             result = Integer.parseInt(options.providerOption(key, Integer.toString(fallback)));
         } catch (NumberFormatException failure) {
-            throw new IllegalArgumentException("Invalid Eureka numeric option: " + key, failure);
+            throw new IllegalArgumentException("Invalid Eureka numeric option: " + key);
         }
         if (result < minimum || result > maximum) {
             throw new IllegalArgumentException("Eureka option out of range: " + key);

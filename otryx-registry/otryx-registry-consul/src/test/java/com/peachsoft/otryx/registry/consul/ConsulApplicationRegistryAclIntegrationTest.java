@@ -11,12 +11,17 @@ import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcIds;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.observability.RpcObserver;
+import com.peachsoft.otryx.registry.RegistryCredentials;
 import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.RegistrySecurityOptions;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletionException;
@@ -78,7 +83,7 @@ class ConsulApplicationRegistryAclIntegrationTest {
                     () -> denied.register(new ApplicationInstance("unauthorized", application,
                             ApplicationRole.CONSUMER, null, 0, null, Map.of()))
                             .toCompletableFuture().join());
-            assertTrue(!new RegistryOptions(List.of(ENDPOINT), namespace,
+            assertTrue(!RegistryOptions.trustedDevelopment(List.of(ENDPOINT), namespace,
                     Map.of("consulToken", System.getenv(ACL_TOKEN_ENV))).toString()
                     .contains(System.getenv(ACL_TOKEN_ENV)));
         }
@@ -86,10 +91,12 @@ class ConsulApplicationRegistryAclIntegrationTest {
 
     private static ConsulApplicationRegistry registry(String namespace, String token) {
         return (ConsulApplicationRegistry) new ConsulApplicationRegistryFactory().create(
-                new RegistryOptions(List.of(ENDPOINT), namespace, Map.of(
-                        "consulToken", token,
-                        "consulTtlSeconds", "10",
-                        "consulHeartbeatSeconds", "1",
-                        "consulRequestTimeoutMillis", "3000")));
+                new RegistryOptions(List.of(ENDPOINT), namespace,
+                        Map.of("consulTtlSeconds", "10", "consulHeartbeatSeconds", "1",
+                                "consulRequestTimeoutMillis", "3000"),
+                        RpcObserver.noop(), RpcSecurityProfile.TRUSTED_DEVELOPMENT,
+                        new RegistrySecurityOptions(Optional.empty(), token.isBlank()
+                                ? RegistryCredentials.none() : RegistryCredentials.aclToken(token.toCharArray())),
+                        Optional.empty()));
     }
 }

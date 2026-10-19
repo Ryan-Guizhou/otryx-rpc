@@ -14,6 +14,7 @@ import com.peachsoft.otryx.api.ApplicationManifest;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.quickstart.api.GreetingDetailsService;
 import com.peachsoft.otryx.quickstart.api.GreetingService;
@@ -207,6 +208,18 @@ class QuickstartRegistrySnapshotTest {
         assertThrows(IllegalArgumentException.class, () -> QuickstartRegistrySnapshot.parseArguments(new String[] {
                 "nacos", endpoints, NAMESPACE, "OTRYX_SNAPSHOT", "-",
                 directory.resolve("new.json").toString(), CONSUMERS}));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"nacos", "etcd", "consul", "eureka"})
+    void everyBackendUsesExplicitDevelopmentProfileWhenNoSecurityFileIsSelected(String backend) throws Exception {
+        var command = QuickstartRegistrySnapshot.parseArguments(new String[] {
+                backend, "http://127.0.0.1:2379", NAMESPACE, "nacos".equals(backend) ? "OTRYX_SNAPSHOT" : "-",
+                "eureka".equals(backend) ? "http://127.0.0.1:8500" : "-",
+                directory.resolve("new.json").toString(), CONSUMERS});
+        assertEquals(RpcSecurityProfile.TRUSTED_DEVELOPMENT, command.options().securityProfile());
+        assertTrue(command.options().security().tls().isEmpty());
+        assertTrue(command.options().metadataSecurity().isEmpty());
     }
 
     @ParameterizedTest

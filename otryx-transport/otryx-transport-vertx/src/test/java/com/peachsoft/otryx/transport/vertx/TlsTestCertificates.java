@@ -1,5 +1,8 @@
 package com.peachsoft.otryx.transport.vertx;
 
+import com.peachsoft.otryx.api.ApplicationKey;
+import com.peachsoft.otryx.api.RpcCertificateBinding;
+import com.peachsoft.otryx.transport.RpcTransportIdentityOptions;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.file.Files;
@@ -7,13 +10,17 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
 import java.security.KeyPair;
+import java.security.MessageDigest;
 import java.security.KeyPairGenerator;
 import java.security.SecureRandom;
 import java.security.Security;
+import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
+import java.util.HexFormat;
+import java.util.Set;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.BasicConstraints;
 import org.bouncycastle.asn1.x509.ExtendedKeyUsage;
@@ -90,6 +97,32 @@ final class TlsTestCertificates implements AutoCloseable {
                 expiredServerCertificate;
         this.expiredServerPrivateKey =
                 expiredServerPrivateKey;
+    }
+
+    static final ApplicationKey PROVIDER = new ApplicationKey("tls-tests", "provider");
+    static final ApplicationKey CONSUMER = new ApplicationKey("tls-tests", "consumer");
+
+    static X509Certificate readCertificate(Path path) throws Exception {
+        try (var input = Files.newInputStream(path)) {
+            return (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(input);
+        }
+    }
+
+    static RpcCertificateBinding binding(Path path, ApplicationKey application, Instant validUntil) throws Exception {
+        String fingerprint = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                .digest(readCertificate(path).getEncoded()));
+        return new RpcCertificateBinding(fingerprint, application, validUntil);
+    }
+
+    RpcTransportIdentityOptions identities(ApplicationKey localApplication) throws Exception {
+        return identities(localApplication, Instant.now().plus(1, ChronoUnit.DAYS));
+    }
+
+    RpcTransportIdentityOptions identities(ApplicationKey localApplication, Instant validUntil) throws Exception {
+        return new RpcTransportIdentityOptions(localApplication, Set.of(
+                binding(serverCertificate, PROVIDER, validUntil),
+                binding(rotatedServerCertificate, PROVIDER, validUntil),
+                binding(clientCertificate, CONSUMER, validUntil)));
     }
 
     static TlsTestCertificates create() throws Exception {

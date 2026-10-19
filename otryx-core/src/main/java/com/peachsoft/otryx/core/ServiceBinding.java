@@ -6,6 +6,7 @@ import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.RpcContractMethods;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
 import com.peachsoft.otryx.generated.RpcGeneratedServerDispatcher;
@@ -33,7 +34,8 @@ final class ServiceBinding {
             ServiceKey serviceKey,
             Class<?> api,
             Object target,
-            RpcCodecRegistry codecs) {
+            RpcCodecRegistry codecs,
+            RpcSecurityProfile securityProfile) {
         this.serviceKey = serviceKey;
         this.generatedDispatcher = RpcGeneratedServers
                 .create(api, target)
@@ -52,7 +54,7 @@ final class ServiceBinding {
                 for (byte codecId : codecs.supportedCodecIds()) {
                     methodCodecs.put(
                             codecId,
-                            codecs.bind(descriptor, codecId));
+                            RpcSecurityChecks.method(securityProfile, codecs.bind(descriptor, codecId), codecId));
                 }
                 Invoker previous = resolved.putIfAbsent(
                         methodId,

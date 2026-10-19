@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.benchmarks;
 
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
@@ -154,6 +155,7 @@ public final class PerformanceSoakRunner {
                 16_384,
                 config.concurrency() * 2);
         return OtryxRpcServer.builder()
+                .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.provider())
                 .transportServer(
                         transportFactory.createServer(

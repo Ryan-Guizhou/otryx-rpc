@@ -13,25 +13,39 @@ import java.util.Set;
  * <p>此对象不包含纯 Consumer、无效 Endpoint 或未声明目标业务服务的实例。
  * 正常空集合表示本轮完整控制面同步成功但暂时没有兼容 Provider。
  *
- * @param key 带命名空间的业务服务键
- * @param schemaFingerprint 调用方期望的 RPC Schema 指纹
- * @param providers 经校验并可供 Router/LB 使用的实例快照
- * @param mappingRevision 生成本快照的 ServiceMapping Revision
- *
  * @Author OpenAI
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/15 18:30
  */
-public record VerifiedProviderSnapshot(
-        ServiceMappingKey key,
-        String schemaFingerprint,
-        List<ApplicationInstance> providers,
-        long mappingRevision) {
+public final class VerifiedProviderSnapshot {
 
     private static final int MAX_PROVIDERS = 1024;
 
-    /** 校验不可变路由集，拒绝不安全 Endpoint 及重复实例。 */
-    public VerifiedProviderSnapshot {
+    private final ServiceMappingKey key;
+    private final String schemaFingerprint;
+    private final List<ApplicationInstance> providers;
+    private final long mappingRevision;
+    private final Object authority;
+    private final long verifiedEpoch;
+    private final Object routeProof;
+
+    /**
+     * 创建不可变值对象；公开构造不会取得 Resolver 的本地路由授权凭据。
+     *
+     * @param key 服务映射键
+     * @param schemaFingerprint 调用方 Schema 指纹
+     * @param providers 需要校验的 Provider 值列表
+     * @param mappingRevision Mapping 修订号
+     */
+    public VerifiedProviderSnapshot(ServiceMappingKey key, String schemaFingerprint,
+                                    List<ApplicationInstance> providers, long mappingRevision) {
+        this(key, schemaFingerprint, providers, mappingRevision, null, 0, null);
+    }
+
+    /** 仅 Resolver 在完整验证并提交当前 epoch 时附加其私有固定大小凭据。 */
+    VerifiedProviderSnapshot(ServiceMappingKey key, String schemaFingerprint,
+                             List<ApplicationInstance> providers, long mappingRevision,
+                             Object authority, long verifiedEpoch, Object routeProof) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(schemaFingerprint, "schemaFingerprint");
         if (!schemaFingerprint.matches("[0-9a-f]{64}")) {
@@ -53,6 +67,80 @@ public record VerifiedProviderSnapshot(
                 throw new IllegalArgumentException("Duplicate Provider identity");
             }
         }
+        this.key = key;
+        this.schemaFingerprint = schemaFingerprint;
+        this.providers = providers;
+        this.mappingRevision = mappingRevision;
+        this.authority = authority;
+        this.verifiedEpoch = verifiedEpoch;
+        this.routeProof = routeProof;
+    }
+
+    /**
+     * 返回不可变业务键。
+     *
+     * @return 服务映射键
+     */
+    public ServiceMappingKey key() {
+        return key;
+    }
+
+    /**
+     * 返回已验证的期望 Schema。
+     *
+     * @return Schema 指纹
+     */
+    public String schemaFingerprint() {
+        return schemaFingerprint;
+    }
+
+    /**
+     * 返回不可变 Provider 值列表；使用前仍应通过 Resolver guard。
+     *
+     * @return Provider 快照
+     */
+    public List<ApplicationInstance> providers() {
+        return providers;
+    }
+
+    /**
+     * 返回实际 Mapping 修订号，不能用它代替安全 epoch。
+     *
+     * @return 非负修订号
+     */
+    public long mappingRevision() {
+        return mappingRevision;
+    }
+
+    boolean hasAuthority(Object expectedAuthority, Object expectedRouteProof) {
+        return authority != null && authority == expectedAuthority && routeProof == expectedRouteProof;
+    }
+
+    long verifiedEpoch() {
+        return verifiedEpoch;
+    }
+
+    /** 值等价只覆盖四个业务字段，不授予或比较本地信任。 */
+    @Override
+    public boolean equals(Object other) {
+        return this == other || other instanceof VerifiedProviderSnapshot snapshot
+                && mappingRevision == snapshot.mappingRevision
+                && key.equals(snapshot.key)
+                && schemaFingerprint.equals(snapshot.schemaFingerprint)
+                && providers.equals(snapshot.providers);
+    }
+
+    /** 四个业务字段决定值哈希，凭据不作为可见数据。 */
+    @Override
+    public int hashCode() {
+        return Objects.hash(key, schemaFingerprint, providers, mappingRevision);
+    }
+
+    /** 只描述业务快照，不输出私有授权凭据。 */
+    @Override
+    public String toString() {
+        return "VerifiedProviderSnapshot[key=" + key + ", schemaFingerprint=" + schemaFingerprint
+                + ", providers=" + providers + ", mappingRevision=" + mappingRevision + ']';
     }
 
     /**

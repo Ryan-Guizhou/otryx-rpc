@@ -2,12 +2,15 @@ package com.peachsoft.otryx.codec.fory;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.codec.RpcCodecIds;
+import com.peachsoft.otryx.codec.RpcCodecSecurityDescriptor;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
 import java.lang.reflect.Method;
 import java.util.Arrays;
@@ -22,6 +25,51 @@ import org.junit.jupiter.api.Test;
  * @CreateTime 2026/9/23 15:46
  */
 class ForyRpcCodecTest {
+
+    @Test
+    void strictDescriptorMustDescribeActualRootAndMethodPolicy() throws Exception {
+        ForyRpcSecurityOptions security = new ForyRpcSecurityOptions(
+                ForyRpcSecurityOptions.Mode.STRICT_ALLOWLIST,
+                Set.of(ForbiddenPayload.class.getName()), 7, 1024L * 1024L, 512);
+        ForyRpcCodec codec = new ForyRpcCodec(security);
+        RpcMethodCodec binding = codec.bind(RpcMethodDescriptor.from(
+                new ServiceKey(SampleService.class.getName(), "1.0.0", "default"),
+                SampleService.class.getMethod("ping")));
+
+        RpcCodecSecurityDescriptor descriptor = codec.securityDescriptor();
+        assertSame(descriptor, binding.securityDescriptor());
+        assertSame(descriptor, codec.securityDescriptor());
+        assertEquals(RpcCodecSecurityDescriptor.TypePolicy.EXPLICIT_ALLOWLIST, descriptor.typePolicy());
+        assertTrue(descriptor.validatesDeclaredContractTypes());
+        assertTrue(descriptor.validatesPayloadBeforeDecode());
+        assertEquals(512, descriptor.maxPayloadBytes());
+        assertEquals(7, descriptor.maxDepth());
+        assertEquals(1024L * 1024L, descriptor.maxEstimatedGraphMemoryBytes());
+        assertEquals(new ForbiddenPayload("allowed"), codec.decode(
+                new ForyRpcCodec().encode(new ForbiddenPayload("allowed")), ForbiddenPayload.class));
+        assertThrows(IllegalArgumentException.class,
+                () -> codec.decode(new byte[513], Object.class));
+        assertThrows(IllegalArgumentException.class,
+                () -> binding.decodeArguments(new byte[513]));
+        assertThrows(IllegalArgumentException.class,
+                () -> binding.decodeResult(new byte[515], 1, 513));
+    }
+
+    @Test
+    void compatibilityDescriptorMustNotClaimAnAllowlist() throws Exception {
+        ForyRpcCodec codec = new ForyRpcCodec();
+        RpcMethodCodec binding = codec.bind(RpcMethodDescriptor.from(
+                new ServiceKey(SampleService.class.getName(), "1.0.0", "default"),
+                SampleService.class.getMethod("ping")));
+        RpcCodecSecurityDescriptor descriptor = codec.securityDescriptor();
+
+        assertSame(descriptor, binding.securityDescriptor());
+        assertEquals(RpcCodecSecurityDescriptor.TypePolicy.TRUSTED_COMPATIBILITY, descriptor.typePolicy());
+        assertFalse(descriptor.validatesDeclaredContractTypes());
+        assertTrue(descriptor.validatesPayloadBeforeDecode());
+        assertEquals(codec.securityOptions().maxDepth(), descriptor.maxDepth());
+        assertEquals(codec.securityOptions().maxGraphMemoryBytes(), descriptor.maxEstimatedGraphMemoryBytes());
+    }
 
     @Test
     void shouldDecodeArgumentsAndResultFromFrameSlices()

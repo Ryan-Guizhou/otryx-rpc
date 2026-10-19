@@ -13,6 +13,10 @@ import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
 import com.peachsoft.otryx.registry.RegistryCapabilities;
 import com.peachsoft.otryx.registry.RegistryCapability;
+import com.peachsoft.otryx.registry.RegistryFailureSanitizer;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import java.net.URLEncoder;
@@ -129,6 +133,12 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
         this.mappings = new ConsulServiceMappingRepository(client, executor, identity);
         this.heartbeatTask = executor.scheduleWithFixedDelay(
                 this::scheduleHeartbeat, heartbeat, heartbeat);
+    }
+
+    /** 返回同一实际 Consul HTTP 客户端的保护来源。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return client.securityDescriptor();
     }
 
     /**
@@ -256,7 +266,7 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
         if (!response.missing()) {
             JsonNode rows = response.body();
             if (rows == null || !rows.isArray() || rows.size() > MAX_DIRECTORY_MEMBERS) {
-                throw new IllegalStateException("Consul application directory exceeds capacity");
+                throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
             }
             for (JsonNode row : rows) {
                 ApplicationInstance member = identity.fromHealth(application, row);
@@ -471,7 +481,7 @@ public final class ConsulApplicationRegistry implements ApplicationRegistry, App
                 } catch (Throwable failure) {
                     if (!stopped.get()) {
                         try {
-                            listener.onSynchronizationFailed(failure);
+                            listener.onSynchronizationFailed(RegistryFailureSanitizer.sanitize(failure));
                         } catch (RuntimeException callbackError) {
                             LOGGER.warn("Consul health callback rejected an error. errorType={}",
                                     callbackError.getClass().getSimpleName());

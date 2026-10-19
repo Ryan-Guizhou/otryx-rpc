@@ -13,7 +13,7 @@ import java.util.concurrent.CompletionStage;
  * @Version 1.0.0
  * @CreateTime 2026/10/15 17:48
  */
-public interface ApplicationDiscovery {
+public interface ApplicationDiscovery extends RegistrySecuritySource {
 
     /**
      * 查询指定应用的成员快照。

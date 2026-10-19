@@ -4,7 +4,16 @@
 
 ## 1. 准备环境并克隆
 
-必须具备 JDK 21；仓库 `mvnw` / `mvnw.cmd` 固定 Maven 3.9.11，首次安装需网络访问 Maven Central。脚本需要 Bash、Python 3、GNU `timeout`；mTLS 场景还需要 OpenSSL。跨进程实验需要共享 Nacos，可以使用下文 Docker Compose 或自行部署的本地服务；Memory 不需要 Docker。
+必须具备 JDK 21；仓库 `mvnw` / `mvnw.cmd` 固定 Maven 3.9.11，首次安装需网络访问 Maven Central。脚本需要 Bash、Python 3、GNU `timeout`。不同学习路径使用的基础设施如下：
+
+| 路径 | 环境与后端 |
+|---|---|
+| Memory | 一个 JVM，无需 Docker 或外部 Registry |
+| process / chain / revision | 默认使用共享 Nacos，也可选 Etcd、Consul、Eureka；这些是显式可信开发场景 |
+| mTLS 安全自动验收 | **Linux**、OpenSSL、Etcd **3.5.21** 可执行文件；脚本创建并清理自己的 loopback TLS/RBAC 实例，无需 Nacos |
+| 完整聚合入口 | 同时满足默认开发场景和 mTLS 的前置条件，包括 Linux 与 `ETCD_BINARY` |
+
+Nacos 可使用下文 Docker Compose 或自行部署的本地服务。准备 Etcd 可执行文件后，通过 `ETCD_BINARY=/absolute/path/to/etcd` 告诉安全脚本实际路径。开发脚本及 Maven 的平台条件保持各自原有约束，Linux 要求来自安全自动验收。
 
 ```bash
 git clone https://github.com/Ryan-Guizhou/otryx-rpc.git
@@ -15,6 +24,12 @@ java -version
 ```
 
 Windows CMD/PowerShell 使用 `mvnw.cmd` 替代 `./mvnw`。运行命令的工作目录始终为本仓库根目录。
+
+### 1.1 先选择安全 Profile
+
+Spring、Core Client/Server Builder 与 RegistryOptions 都要求显式 Profile，默认 `UNSPECIFIED` 会拒绝启动。本指南前面的 Memory/Nacos 示例已在配置中选择 `TRUSTED_DEVELOPMENT`，适用于可信隔离学习；第 5.2 节使用 `NETWORK_MTLS` 演示受保护网络路径。
+
+网络 Profile 要求实际 mTLS、完整 `ApplicationKey` 的有限证书绑定、安全 Codec 和受保护的 Registry 来源。`server.enabled=true` 时还必须由应用声明 `RpcAuthorizer` Bean，缺少策略会在 Registry 工厂和 RPC 运行时创建前失败；纯 Consumer 显式配置 `server.enabled=false`。Core Server Builder 执行相同的缺策略拒绝。默认 Fory 使用严格 DTO allowlist，自定义 Codec 则按实际契约检查和有限解码能力校验。详细字段见 [Starter](reference/starter.md)。
 
 ## 2. 第一阶段：不启动注册中心
 
@@ -39,6 +54,8 @@ Quickstart memory RPC succeeded: Hello, Quickstart!
 源码：[Memory Provider](../otryx-quickstart/otryx-quickstart-memory/src/main/java/com/peachsoft/otryx/quickstart/memory/MemoryGreetingServiceImpl.java) · [Memory Consumer](../otryx-quickstart/otryx-quickstart-memory/src/main/java/com/peachsoft/otryx/quickstart/memory/MemoryGreetingRunner.java)。
 
 ## 3. 第二阶段：Nacos 下两个独立 JVM
+
+这一阶段使用 `TRUSTED_DEVELOPMENT`。当前 Nacos Adapter 尚未完整实现 SDK 登录与数据链的独立 TLS 保护，会在创建 SDK 前拒绝 NETWORK/TLS 意图；安全自动验收采用第 5.2 节的 Etcd 路线。
 
 启动注册中心并确认 Nacos HTTP 8848 与客户端 gRPC 9848 端口可用：
 
@@ -115,24 +132,44 @@ bash scripts/run_three_process_deadline_e2e.sh
 
 该脚本运行 Consumer A → Relay Provider B（19091）→ Leaf Provider C（19090），验证 5 秒上游 Deadline、B 的 10 秒本地超时不能扩展上游预算、`tenant`/ `relay` 元数据随调用传递。快照须显示 A 为 Consumer-only、B 为一个 BOTH 成员、C 为 Provider。预期输出 `RPC deadline chain completed: CHAIN_OK remainingMillis=...`。
 
-## 5. 双 revision 与 mTLS 授权
+## 5. 双 revision 与独立 mTLS 安全路线
 
-继续使用已经构建的四模块 JAR 和本地 Nacos：
+### 5.1 同一应用的真实导出变更
+
+继续使用已构建的四模块 JAR 和本地 Nacos：
 
 ```bash
 bash scripts/run_quickstart_revision_e2e.sh
-bash scripts/run_quickstart_mtls_e2e.sh
 ```
 
-第一个场景用同一 Provider JAR、同一 ApplicationName 和不变的 ServiceKey version/group，运行 `{Greeting}` 与 `{Greeting, Details}` 两个真实导出集合，验证共存、升级和回滚；Provider 全停后 Consumer 仍是成员，但不可成为路由目标。第二个场景生成临时 PKI，验证同一 CA 下允许和未授权客户端、方法限制及恢复成功。只有精确的 `BAD_REQUEST` / `RPC authorization denied` 算授权拒绝，握手失败不算通过。
+脚本用同一 Provider JAR、同一 ApplicationName 和不变的 ServiceKey version/group，运行 `{Greeting}` 与 `{Greeting, Details}` 两个真实导出集合，验证共存、升级和回滚。Provider 全停后 Consumer 仍是成员，但不可成为路由目标。
 
-一条命令可按 Memory → 双进程 → 三进程 → revision → mTLS 顺序运行全部场景：
+### 5.2 受保护的 Etcd 与有限方法授权
+
+在 Linux 上准备 OpenSSL 和 Etcd **3.5.21** 可执行文件后运行：
 
 ```bash
-NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
+ETCD_BINARY=/absolute/path/to/etcd bash scripts/run_quickstart_mtls_e2e.sh
 ```
 
-各跨进程场景先初始化独立 Nacos group，失败即停止。证据位于 `target/quickstart-e2e/<scenario>.<随机后缀>/` 的 JSON 和 `summary.log`；临时私钥不进入证据目录。脚本不会启动 Nacos 或替代 Maven 构建。每个阶段的断言和字段含义见 [Quickstart 完整教程](../otryx-quickstart/README.md)。
+该脚本自行管理只监听 loopback 的 Etcd TLS/RBAC 实例。RPC 与 Registry 使用独立临时 CA；管理、Provider、Consumer、只读观察分别持有各自范围的凭据，应用不接收管理凭据。测试结束后清理受管进程、临时数据库、私钥与凭据。
+
+Transport 把真实叶证书 DER SHA-256 绑定到完整 `ApplicationKey(namespace, applicationName)` 和有限期限，原证书与轮换证书可绑定同一 Consumer 应用。示例授权器按允许的应用、完整 Greeting ServiceKey 和 `hello` MethodId 返回有限 `RpcAuthorizationDecision`；Details 独立拒绝。许可不能超过证书、绑定、请求预算与 `server.authorization.max-grant-lifetime`。
+
+脚本定义 E01–E15 安全场景，包括允许调用、证书轮换、应用/namespace 不匹配、未绑定或过期身份、错误 CA、过期策略、方法拒绝、缺少授权器、错误 Registry 凭据和只读观察权限。E12/E14 各含两个独立阶段。断言区分类型化认证 reason、启动失败和精确 `BAD_REQUEST` / `RPC authorization denied`；一般连接失败不能冒充预期拒绝。
+
+每个阶段还检查真实成员和路由：初始 Provider 应保持完整，Consumer 是否存在取决于失败发生在入册之前还是之后。完整步骤、环境变量和阶段表见 [Quickstart 安全教程](../otryx-quickstart/README.md) 与 [安全指南](security.md)。这里描述的是当前工作树的验收契约，#140 的端到端结果仍在验证。
+
+### 5.3 按顺序运行全部场景
+
+已构建 JAR，并满足 Linux、Nacos、Etcd 3.5.21 和 OpenSSL 等条件后：
+
+```bash
+ETCD_BINARY=/absolute/path/to/etcd \
+  NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
+```
+
+入口按 Memory → 双进程 → 三进程 → revision → mTLS 执行，失败即停止。前三个默认开发进程场景各自初始化隔离 Nacos group；mTLS 使用自己的受保护 Etcd。JSON 与 `summary.log` 保存在 `target/quickstart-e2e/<scenario>.<随机后缀>/`，临时私钥和凭据不进入证据目录。脚本不替代 Maven 构建，也不启动用户提供的 Nacos。
 
 ## 6. 引入单一 Spring Boot Starter
 
@@ -162,8 +199,8 @@ Nacos、Etcd、Consul/Eureka、代理与遥测 Adapter 是可选依赖，不能�
 
 ## 7. 可选路线与常见失败
 
-- **Consul/Eureka**：两个进程使用同一 Profile。Eureka 只保存应用成员，必须在双方显式设置 `registry.eureka.metadata-backend` 和 `metadata-endpoints`，并加入所选 Etcd/Nacos/Consul Adapter。仅启动 Eureka 不足以提供 Manifest/Mapping；选 Nacos 元数据时也要先初始化该 scope，见 [后端示例](../otryx-quickstart/README.md#7-进一步验证-registryetcd--consul--eureka)；
-- **TLS/mTLS**：证书路径使用 `OTRYX_QUICKSTART_TLS_CERT`、`OTRYX_QUICKSTART_TLS_KEY`、`OTRYX_QUICKSTART_TLS_CA`。网络部署使用 `NETWORK_MTLS`、严格 Fory 白名单与业务授权；Quickstart 的 `mtls` Provider 还必须设置 `otryx.rpc.quickstart.mtls.allowed-client-sha256`，通用 Starter 未提供授权器时默认拒绝；
+- **Consul/Eureka**：两个进程使用一致的显式 Profile。Eureka 还需双方设置 `registry.eureka.metadata-backend` 与 `metadata-endpoints`，并加入所选 Adapter。成员 TLS/凭据放在 `registry.security`，元数据链使用独立 `registry.metadata-security`，不能继承成员 CA 或凭据；网络 Profile 不能选择 Nacos 元数据后端。见 [后端示例](../otryx-quickstart/README.md) 和 [Starter](reference/starter.md)；
+- **TLS/mTLS**：RPC 路径使用 `OTRYX_QUICKSTART_TLS_CERT`、`OTRYX_QUICKSTART_TLS_KEY`、`OTRYX_QUICKSTART_TLS_CA`；Registry CA 和凭据目录独立配置。`mtls` Profile 使用 Transport 证书绑定和 `allowed-consumer.namespace` / `allowed-consumer.application-name` / `policy-valid-until` 的有限应用策略。网络 Provider 缺少显式授权器时启动失败；
 - **Observer**：Quickstart Consumer 的 `QuickstartCallObserver` 是已有可测试的 Spring 注入示例；Micrometer/OTel/JFR 按需加入；
 - **`-exec.jar` 缺失**：先在仓库根目录构建，普通 JAR 不是 Spring Boot 可执行 JAR；
 - **Memory 跨 JVM 无法发现**：改用共享 Registry，不要期待进程内注册表跨进程通信；
@@ -178,13 +215,13 @@ Nacos、Etcd、Consul/Eureka、代理与遥测 Adapter 是可选依赖，不能�
 python3 scripts/check_project.py
 python3 scripts/test_quickstart_layout.py
 ./mvnw -B -ntp clean verify -Pquality
-# 全部 JAR 已构建，Nacos 仍在运行，且已安装 OpenSSL：
-bash scripts/run_quickstart_e2e.sh
+# Linux；全部 JAR 已构建、Nacos 运行中、OpenSSL 和 Etcd 3.5.21 已准备：
+ETCD_BINARY=/absolute/path/to/etcd bash scripts/run_quickstart_e2e.sh
 # 仅清理本教程由你启动、已不再使用的 Compose 服务：
 docker compose -f otryx-quickstart/docker-compose.yml down
 ```
 
-命令和预期结果不等于某个提交已通过验证。当前唯一应用级链路与 #139 清理、共享契约、四后端 JVM 矩阵必须核验准确 Head 及合并后 main CI；参数和计数边界见[应用级注册验收](reference/application-registry-acceptance.md)。短时 Quickstart 不构成生产容量或正式发布证明。
+#139 的唯一应用级链路、全仓清理和相应验收已由 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合入 main `783bf8115c9523e5667023678dafe659315b2b66`，该 main 提交的门禁已核验。#140 安全加固仍在实现验证，不能沿用 #139 的通过结论。命令和预期结果不等于当前提交已经通过；新的完成结论须绑定实际日志、准确 Head 与合并后 main CI，参数和计数边界见[应用级注册验收](reference/application-registry-acceptance.md)。短时 Quickstart 不构成生产容量或正式发布证明。
 
 继续阅读：[Starter 与配置](reference/starter.md) · [模块结构](design/project-structure.md) · [安全指南](security.md) · [运行与排障](operations.md) · [迁移](migration.md) · [FAQ](faq.md)。
 

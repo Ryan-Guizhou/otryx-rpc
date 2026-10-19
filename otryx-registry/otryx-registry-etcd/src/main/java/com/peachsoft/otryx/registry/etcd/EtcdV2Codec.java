@@ -5,6 +5,8 @@ import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -193,8 +195,11 @@ final class EtcdV2Codec {
     }
 
     private static <T> T decode(byte[] payload, int maximum, Decoder<T> decoder) {
-        if (payload == null || payload.length == 0 || payload.length > maximum) {
-            throw new IllegalArgumentException("Invalid Etcd record size");
+        if (payload == null || payload.length == 0) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+        }
+        if (payload.length > maximum) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
         }
         try {
             DataInputStream input = new DataInputStream(new ByteArrayInputStream(payload));
@@ -203,8 +208,8 @@ final class EtcdV2Codec {
                 throw new IllegalArgumentException("Unexpected trailing Etcd record bytes");
             }
             return result;
-        } catch (IOException error) {
-            throw new IllegalArgumentException("Malformed Etcd record", error);
+        } catch (IOException | IllegalArgumentException invalid) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
         }
     }
 

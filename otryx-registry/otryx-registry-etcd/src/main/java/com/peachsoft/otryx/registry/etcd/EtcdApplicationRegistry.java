@@ -15,6 +15,9 @@ import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
 import com.peachsoft.otryx.registry.RegistryCapabilities;
 import com.peachsoft.otryx.registry.RegistryCapability;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import io.etcd.jetcd.ByteSequence;
@@ -89,6 +92,7 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
             RegistryCapability.METADATA,
             RegistryCapability.HEALTH);
 
+    private final RegistrySecurityDescriptor descriptor;
     private final Client client;
     private final EtcdV2Paths paths;
     private final long leaseTtlSeconds;
@@ -119,6 +123,13 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
     }
 
     EtcdApplicationRegistry(Client client, long leaseTtlSeconds, String namespace, RpcObserver observer) {
+        this(client, leaseTtlSeconds, namespace, observer, RegistrySecurityDescriptor.unknown());
+    }
+
+    EtcdApplicationRegistry(
+            Client client, long leaseTtlSeconds, String namespace, RpcObserver observer,
+            RegistrySecurityDescriptor descriptor) {
+        this.descriptor = Objects.requireNonNull(descriptor, "descriptor");
         this.client = Objects.requireNonNull(client, "client");
         if (leaseTtlSeconds < 1 || leaseTtlSeconds > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("Invalid Etcd lease TTL");
@@ -131,8 +142,8 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
             thread.setDaemon(true);
             return thread;
         });
-        this.manifests = new EtcdApplicationManifestRepository(client, paths);
-        this.mappings = new EtcdServiceMappingRepository(client, paths);
+        this.manifests = new EtcdApplicationManifestRepository(client, paths, descriptor);
+        this.mappings = new EtcdServiceMappingRepository(client, paths, descriptor);
     }
 
     /**
@@ -153,6 +164,12 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
     public ServiceMappingRepository serviceMappingRepository() {
         requireOpen();
         return mappings;
+    }
+
+    /** 仅 Factory 安装真实客户端后的来源被描述；原始 SDK 构造保持 UNKNOWN。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return descriptor;
     }
 
     /** 返回真实 Lease/Subscription/Revision 能力。 */
@@ -220,7 +237,7 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
     private ApplicationDirectorySnapshot toSnapshot(ApplicationKey application, GetResponse response) {
         if (response.getCount() > MAX_APPLICATION_MEMBERS
                 || response.getKvs().size() > MAX_APPLICATION_MEMBERS) {
-            throw new IllegalStateException("Etcd application member directory capacity exceeded");
+            throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
         }
         int bytes = 0;
         List<ApplicationInstance> members = new ArrayList<>();
@@ -228,13 +245,13 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
             byte[] payload = kv.getValue().getBytes();
             bytes += payload.length;
             if (bytes > MAX_MEMBER_BYTES_TOTAL) {
-                throw new IllegalStateException("Etcd application directory byte budget exceeded");
+                throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
             }
             EtcdV2Codec.MemberRecord record = EtcdV2Codec.decodeMember(payload);
             ApplicationInstance member = record.instance();
             if (!application.equals(member.application())
                     || !utf8(paths.memberKey(application, member.instanceId())).equals(kv.getKey())) {
-                throw new IllegalArgumentException("Etcd application directory identity mismatch");
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
             }
             requireRoutableAddress(member);
             members.add(member);
@@ -522,7 +539,8 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
      * 使用有界低基数事件观测 Etcd V2 控制面，不写入身份或元数据敏感内容。
      */
     private <T> CompletionStage<T> observe(
-            CompletionStage<T> stage, RpcRegistryOperation operation, long startedAtNanos) {
+            CompletionStage<T> source, RpcRegistryOperation operation, long startedAtNanos) {
+        CompletionStage<T> stage = EtcdFailures.safe(source);
         if (observer.enabled()) {
             stage.whenComplete((ignored, error) -> {
                 try {
@@ -720,7 +738,7 @@ public final class EtcdApplicationRegistry implements ApplicationRegistry, Appli
                 previous.close();
             }
             try {
-                listener.onSynchronizationFailed(cause);
+                listener.onSynchronizationFailed(EtcdFailures.normalize(cause));
             } catch (RuntimeException listenerError) {
                 LOGGER.warn("Etcd application listener rejected failure notification");
             }

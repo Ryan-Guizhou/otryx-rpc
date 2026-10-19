@@ -37,10 +37,15 @@ Provider、Consumer、BOTH 均按 `ApplicationKey(namespace, applicationName) + 
 
 ## Java 编程式接入
 
+`NETWORK_MTLS` 在 Etcd Registry 链上要求 HTTPS、显式 CA 和独立 USER_PASSWORD。以下 `etcdHttpsEndpoint` 是实际 HTTPS endpoint，`etcdCaFile` 是受控 CA 文件的 `Path`，`etcdUsername / etcdPassword` 为凭据来源提供的 `String / char[]`。安全 DTO 位于 `com.peachsoft.otryx.registry`，`RpcSecurityProfile` 位于 `com.peachsoft.otryx.api`，`RpcObserver` 位于 `com.peachsoft.otryx.observability`。
+
 ```java
+RegistrySecurityOptions security = new RegistrySecurityOptions(
+        Optional.of(new RegistryTlsOptions(etcdCaFile, Optional.empty())),
+        RegistryCredentials.userPassword(etcdUsername, etcdPassword));
 RegistryOptions options = new RegistryOptions(
-        List.of("http://127.0.0.1:2379"), "production",
-        Map.of("leaseTtlSeconds", "30"));
+        List.of(etcdHttpsEndpoint), "production", Map.of("leaseTtlSeconds", "30"),
+        RpcObserver.noop(), RpcSecurityProfile.NETWORK_MTLS, security, Optional.empty());
 EtcdApplicationRegistryFactory factory = new EtcdApplicationRegistryFactory();
 EtcdApplicationRegistry registry = (EtcdApplicationRegistry) factory.create(options);
 try {
@@ -60,7 +65,19 @@ try {
 }
 ```
 
-这是 **Core 编程式接入**，不是 Spring Boot Starter 自动装配说明；单 Starter 与独立 JVM Quickstart 的 V2 自动化在 #137–#138 实施。
+三个通道 `MEMBERSHIP / MANIFEST / MAPPING` 共用同一实际 Etcd 客户端、namespace 和 `security`；Etcd 不接受 `metadataSecurity`。Factory 读取有界 TLS 材料并将同一份 CA/可选客户端密钥安装到 Netty gRPC，验证服务端主机名，同时安装独立用户密码，再建立来源保护描述。可选 `RegistryTlsOptions.clientIdentity` 可以添加客户端证书/私钥，但不能替代 USER_PASSWORD，当前不接受仅 `CLIENT_CERTIFICATE` 凭据模式。密码数组在输入/读取时复制，DTO 描述隐藏材料值。
+
+旧三参/四参 `RegistryOptions` 和 `fromCsv` 默认 `UNSPECIFIED`，Factory 拒绝启动。明确隔离的明文开发夹具应使用：
+
+```java
+RegistryOptions development = RegistryOptions.trustedDevelopment(
+        List.of("http://127.0.0.1:2379"), "development",
+        Map.of("leaseTtlSeconds", "30"));
+```
+
+`providerOptions` 仅允许 `leaseTtlSeconds`；用户名、密码、CA、主机名绕过或其他安全字符串不能放入该 Map。显式开发 helper 不配置凭据或 TLS；如开发环境需要用户密码，应使用 typed 七参构造并显式选择 `TRUSTED_DEVELOPMENT`。
+
+以上为 **Core 编程式接入**。单独配置 Registry 并不完成 RPC 传输 mTLS、方法授权或 Core 的完整来源校验；Starter/Quickstart 使用同一应用控制面，完整要求见[安全边界](../security.md)。
 
 ## 一致性与故障语义
 
@@ -85,9 +102,13 @@ try {
 | 单个 Manifest | 256 KiB |
 | Lease TTL | 默认 30 秒，可设置 `leaseTtlSeconds` |
 
-超出预算、畸形 KV、权限错误、IO 故障均 fail-closed；不得返回空目录冒充正常状态。配置字段 `endpoints`、`namespace`、`providerOptions.leaseTtlSeconds` 使用已有 `RegistryOptions`。TLS、客户端证书与鉴权须按环境可信配置，不能对不可信生产 Etcd 暴露匿名写入。
+超出预算、畸形 KV、权限错误、IO 故障均不得返回空目录冒充正常状态。TLS、认证、授权、引用或完整性失败暴露稳定 `RegistrySecurityException.reason()`，不附原始 cause；Core 立即失效旧安全 epoch，普通 IO 故障仍遵守有界 LKG。配置使用上述 typed `RegistryOptions`，不能以匿名写入满足 NETWORK 保护。
+
+jetcd 会将 Authenticate 请求的任意失败包装为 `UNAUTHENTICATED`，这一外层状态本身不能证明凭据遭拒。Adapter 只剥离已知状态载体和标准 Future 包装，按实际内部状态分类；超时、连接不可用、未知初始化错误以及无法完整解析的有界原因链都保持普通不可用，不错误推进安全 epoch。真实认证拒绝仍返回固定认证原因，TLS 类型检查优先；不解析 SDK 异常描述或向调用者传递原始原因。
 
 ## 验证
+
+以下普通集成测试使用 Docker；其执行成功不替代真实 TLS/RBAC 验证。
 
 ```bash
 ./mvnw -B -ntp -pl otryx-registry/otryx-registry-etcd -am test
@@ -97,6 +118,14 @@ python3 scripts/check_project.py
 
 真实 Etcd JUnit：`EtcdApplicationRegistryIntegrationTest` 覆盖成员角色、30 个真实 Java 接口×10 个独立 Registry client 对象的原生成员数量、双 Provider 映射保留、旧代 fencing、滚动 Manifest、真实 Lease 恢复、Watch Compaction 和 Namespace 边界。`EtcdV2CodecTest` 覆盖受限编解码与非法值。独立三节点 Leader transfer/网络隔离的应用级 Chaos 与四后端 process/chain/revision 矩阵须分别实际执行；不要将通过 JUnit 或共享 Runner 的小规模检查视为 10k 并发生产性能证据。
 
+安全集成通过 `EtcdRegistrySecurityIT` 与 `EtcdRegistryClientCertificateIT` 显式选择执行，使用 [受保护 Etcd 夹具](../../scripts/etcd_security_fixture.py) 的独立实例。前者检查 TLS/用户名密码、CA/主机名拒绝、namespace/实例权限、观察者只读与撤销后的旧快照；后者需 `--require-client-cert`，检查客户端材料和独立用户密码，不能把 TLS 客户端 CN 当成已授予的 RBAC 权限。普通 `mvn test` 不自动选择这些 `*IT` 类；实际结果应按准确 SHA、原始 XML、各次 fixture 和清理记录核对。
+
+实现依据：[Factory](../../otryx-registry/otryx-registry-etcd/src/main/java/com/peachsoft/otryx/registry/etcd/EtcdApplicationRegistryFactory.java)、[安全 IT](../../otryx-registry/otryx-registry-etcd/src/test/java/com/peachsoft/otryx/registry/etcd/EtcdRegistrySecurityIT.java)、[客户端证书 IT](../../otryx-registry/otryx-registry-etcd/src/test/java/com/peachsoft/otryx/registry/etcd/EtcdRegistryClientCertificateIT.java)。
+
 ## English quick reference
+
+Registry setup must select an explicit profile. `NETWORK_MTLS` requires HTTPS, an explicit CA and typed USER_PASSWORD credentials; optional client certificates supplement those credentials. The old `RegistryOptions` constructors use `UNSPECIFIED` and are rejected. Use `RegistryOptions.trustedDevelopment` only for explicit isolated development, or the seven-argument constructor with typed security. All three channels share the actual authenticated TLS client; unknown Map security options and `metadataSecurity` are rejected. The protected `*IT` classes require explicit selection and independent TLS/RBAC fixtures; ordinary Docker integration tests are separate evidence.
+
+jetcd wraps any Authenticate failure as `UNAUTHENTICATED`, so that outer status alone does not establish credential rejection. The adapter follows known status carriers and standard Future wrappers to classify the actual inner status. Timeouts, unavailable connections, unknown setup failures and incomplete bounded cause chains remain ordinary unavailability without advancing the security epoch. Actual authentication rejection retains its fixed reason, and typed TLS failures take priority. SDK descriptions are never parsed for security meaning, and raw causes are never exposed.
 
 Etcd V2 registers **application membership** for Providers and Consumers. Consumer-only members have no RPC endpoint. Immutable manifests are content-addressed; instance-scoped service mappings use Etcd CAS with monotonically increasing owner generations. All control-plane reads are asynchronous and must be bounded by the caller's deadlines. Application membership is the only runtime model; #139 acceptance also requires shared backend contracts and independent-JVM evidence. See the main English README for the current project maturity; do not claim production readiness without real Etcd E2E and CI evidence.

@@ -1,8 +1,11 @@
 package com.peachsoft.otryx.registry.memory;
 
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
 import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import com.peachsoft.otryx.spi.Extension;
 import java.util.Objects;
 
@@ -34,6 +37,12 @@ public final class MemoryApplicationRegistryFactory implements ApplicationRegist
     @Override
     public ApplicationRegistry create(RegistryOptions options) {
         Objects.requireNonNull(options, "options");
+        if (options.securityProfile() == RpcSecurityProfile.UNSPECIFIED
+                || options.security().tls().isPresent()
+                || options.security().credentials().kind() != com.peachsoft.otryx.registry.CredentialKind.NONE
+                || options.metadataSecurity().isPresent()) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.UNSUPPORTED_PROTECTION);
+        }
         return new MemoryApplicationRegistry();
     }
 }

@@ -10,8 +10,8 @@ import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.ServiceKey;
-import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
+import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
@@ -53,7 +53,7 @@ class NacosApplicationRegistryChaosTest {
         assumeTrue(endpoint != null && !endpoint.isBlank(), "NACOS_TEST_ENDPOINT is required");
         assumeTrue(container != null && !container.isBlank(), "NACOS_CHAOS_CONTAINER is required");
         String group = "OTRYX_V2_CHAOS_" + UUID.randomUUID().toString().replace("-", "");
-        NacosV2MetadataBootstrap.initialize(new RegistryOptions(
+        NacosV2MetadataBootstrap.initialize(RegistryOptions.trustedDevelopment(
                 List.of(endpoint), "public", Map.of("nacosGroup", group)));
         ApplicationKey application = new ApplicationKey("public", "chaos");
         ApplicationInstance provider = new ApplicationInstance("provider-a", application, ApplicationRole.PROVIDER,
@@ -117,7 +117,7 @@ class NacosApplicationRegistryChaosTest {
 
     private static NacosApplicationRegistry registry(String endpoint, String group) {
         return (NacosApplicationRegistry) new NacosApplicationRegistryFactory().create(
-                new RegistryOptions(List.of(endpoint), "public", Map.of(
+                RegistryOptions.trustedDevelopment(List.of(endpoint), "public", Map.of(
                         "nacosGroup", group, "nacosCluster", "DEFAULT",
                         "nacosMemberHost", "127.0.0.1")));
     }

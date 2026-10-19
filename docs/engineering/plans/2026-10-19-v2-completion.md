@@ -28,18 +28,21 @@
 - [x] 删除旧公开注册入口，将有价值的异常、取消、并发和关闭断言迁至应用级链路。
 - [x] Core test-jar 共享合同覆盖 Memory 与四个真实后端；各真实后端 10 个独立 Registry clients、30 个真实接口，分别报告原生成员、SPI 完成、订阅和收敛。
 - [x] 四后端 process/chain/revision、五组 rolling、comparison smoke 以及真实后端/Chaos/ACL 门禁保留并实际执行；旧接口模式基线明确拒绝。
-- [x] 完整 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 已提交；本批收尾补丁提交前核验 Head `3133c8fb1a39bb53b4618e0eb94c419a39f15775`，base `793e942287f16677d56091f0ce45c61ac461c137`。
-- [x] 当前 Head 的 benchmark 环境变量作用域、Resolver Future/状态完成竞态和真实三根依赖审查已闭环；Dependency Review 的 34 个 POM/侧扫描有效，无新增漏洞差异，不代表零既有漏洞。
-- [x] 完成 Consumer 重复 Greeting 故障恢复、Eureka standalone self-peer/缓存期限/重启断言、Nacos 发布可见性确认和重启日志竞态的整批修复及本地真实后端验证。
-- [ ] 新准确 Head 所有相关门禁通过后合并，核验准确 main CI，再更新 #139/#127。
+- [x] 完整 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 的最终 Head 为 `bbf07eace5c3409876be9da8f9bb73dbdccac721`；14 条工作流、18 项检查均通过后合并。
+- [x] 合并后准确 main `783bf8115c9523e5667023678dafe659315b2b66` 的 12 条工作流、16 项检查独立核验成功；[main CI](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39242224065) 原始报告为 638 tests、0 failures/errors、18 条件 skips。
+- [x] 更新 #139 为 completed，并更新 #127 当前工作包为 #140。
 
-**当前状态：#139 尚未完成。** 本批补丁提交前核验的 Head 有 14 条 workflow 已结束，12 success、2 failure。普通 [CI 39228392049](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39228392049) 的 reactor 已通过 605 tests/0 failures/errors/18 条件 skips，但后续 Nacos Provider 停止时 Consumer 因本地超时退出；[Eureka 39228392137](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39228392137) 的 fixture self-replication 导致成员删除无法收敛。其他成功专项不能覆盖这两个失败路径。
-
-本轮修复均已完成定向回归与独立审查：Nacos 仅发布一次，在 ACK 后用 3 秒总预算确认可见性；三个进程启动点先由父进程清空本轮日志，避免旧 ready 被误用。真实 quality 基线在隔离源码、依赖目录通过：638 tests/0 failures/errors/4 条件 skips、93 XML；最后追加测试变更后再次清缓存执行全量 style，严格聚合 29 reports/334 Java files/0 findings，元数据 340 类型和生产语义字面量 239 文件均无发现。Nacos process 及独立 revision 完整升级/回滚通过，Consumer 未重启，原预算未放宽。Eureka 初始失败后追加四个运行输入：fixture 读写缓存过期 1s、参数回归、workflow 和分阶段重启断言；受控真实缓存机制四案通过，最后 6 integration + 1 真实 JVM restart 均通过、进程确实更换、成员恢复且服务已清理。其余 489 个运行输入不变。原初始失败没有足够诊断来唯一归因缓存竞态，原始失败记录保留；fixture 参数不是生产默认缓存的收敛保证。准确新 Head/main CI 尚未发生。详细日志、历史失败、已执行/跳过边界及下一命令见[工程断点](../agent-governance-checkpoint.md)；不同工作树阶段的测试数不能相加或互相替代。
+**当前状态：#139 已完成。** 原失败、修复和确切验收边界见 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 与[工程断点](../agent-governance-checkpoint.md)。依赖审查没有新增漏洞差异不代表零既有漏洞；共享 CI 短时性能数据不是 #146 正式验收。
 
 ## 2. #140：安全默认值与身份/元数据可信
 
-依赖 #139。当前仅完成 Core、Registry、Starter/Quickstart 的实施准备草案，未开始仓库实现。统一 Core Builder/Starter 显式安全意图，生产失败关闭；绑定真实 mTLS 身份与目标应用/命名空间，授权先于 DTO 反序列化。测试误配置、假冒、错误 CA、缺失 Authorizer、恶意 Manifest、Codec 不兼容、身份/权限过期及敏感日志；待 #139 合并且 main CI 核验完成后实施独立 PR。
+依赖 #139，已经进入仓库实现和最终验证，独立分支为 `feat/v2-13-security-hardening`，基于已验证 main `783bf8115c9523e5667023678dafe659315b2b66`。Core Builder/Starter 显式安全意图、实际组件能力校验、真实 mTLS 应用/命名空间与有限身份绑定、DTO 解码前有限授权、Registry typed TLS/凭据和来源校验、安全 epoch 失效均已实现；中英文文档与 Quickstart 17 阶段已同步。
+
+本地两组真实 Etcd 分别完成 19 项 fixture 自检及 9/2 项 Java IT。Etcd 分类修复后的 `build-34` 完整 reactor 已达 29 模块、821 tests、0 failures/errors、27 条件 skips，style 严格聚合 29 报告、400 Java、零发现；86 Markdown、54 Mermaid 和 5 SVG 已实际检查/渲染，当前图源不变。前一批真实 exec JAR 完成 17 个安全阶段，自有进程清理已复核。旧 TLS 正常连接用例的一次超时保留，两次有限诊断未复现，不放宽期限或臆造原因。
+
+独立审查补齐 Registry 安全原因传播、namespace 原因码和 E12 重复参数的 RED/GREEN；Consumer 快照核验后的存活检查已有 17 项 mock GREEN，默认身份在 Registry 副作用前的 10 个准确 RED 已经修复，完整身份配置 38 项均通过。最终同一冻结输入在 `build-35/36` 再次通过两组真实 Etcd 19 项自检与 9/2 项 IT，在 `build-37` 独立 quality 完成 29 模块、源 Javadoc 零警告。`build-38` 使用最终 JAR 完成全部 17 阶段，62 个采样进程全部退出；样式与 Javadoc 分开验证。准确 Head/main 的相关 CI 尚未形成；本地完整通过不等于 #140 completed。详见[工程断点](../agent-governance-checkpoint.md)。
+
+最后 E2E 一次运行在 15 个阶段通过后，错误 Registry 凭据负例出现成员确认超时，未观察到认证原因码，最后只读场景未运行。一次原预算、同批 JAR 的有限真实复现已观察到 AUTHENTICATION_REJECTED，未复现超时；随后 `build-32` 相同输入的完整 17 阶段通过，68 个采样到的进程均已退出。原失败保留，不修改预算或降低断言。追加 SDK 审查确认 AuthCredential 会将任意 Authenticate Future 失败包装成 UNAUTHENTICATED；`build-33` 四个准确 RED 后最小修复，`build-34` 全部八项分类测试 GREEN。历史最终 AUTH marker 本身不能反推服务端真实状态；修复后真实后端与完整 `build-38` 均已通过。
 
 ## 3. #141：连接、编码与取消资源上界
 

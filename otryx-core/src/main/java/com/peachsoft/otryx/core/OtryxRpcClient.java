@@ -2,6 +2,9 @@ package com.peachsoft.otryx.core;
 
 import com.peachsoft.otryx.api.OtryxRpcIdempotent;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcTarget;
+import com.peachsoft.otryx.api.RpcAuthenticationException;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.RpcSchemaFingerprint;
 import com.peachsoft.otryx.api.RpcException;
 import com.peachsoft.otryx.api.RpcContractMethods;
@@ -29,10 +32,13 @@ import com.peachsoft.otryx.protocol.RpcFrameView;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import com.peachsoft.otryx.proxy.ProxyFactory;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.peachsoft.otryx.transport.RpcTransportClient;
+import com.peachsoft.otryx.transport.RpcTransportResponse;
 import java.lang.reflect.Method;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -59,6 +65,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,6 +86,9 @@ import org.slf4j.LoggerFactory;
 public final class OtryxRpcClient implements AutoCloseable {
     private static final Logger LOGGER =
             LoggerFactory.getLogger(OtryxRpcClient.class);
+    private final RpcSecurityProfile securityProfile;
+    private final Clock identityClock;
+    private final LongSupplier identityNanoClock;
     private final ApplicationServiceResolver applicationResolver;
     private final String applicationNamespace;
     private final ApplicationMembershipCoordinator membership;
@@ -107,7 +117,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             shutdownResult = new AtomicReference<>();
     private final Set<CompletableFuture<Object>> pendingCalls =
             ConcurrentHashMap.newKeySet();
-    private final ConcurrentMap<RpcEndpoint, EndpointStats> stats =
+    private final ConcurrentMap<RpcTarget, EndpointStats> stats =
             new ConcurrentHashMap<>();
     private final LoadBalanceMetrics loadMetrics =
             new LoadBalanceMetrics() {
@@ -131,6 +141,9 @@ public final class OtryxRpcClient implements AutoCloseable {
             };
 
     private OtryxRpcClient(Builder builder) {
+        this.securityProfile = builder.securityProfile;
+        this.identityClock = builder.identityClock;
+        this.identityNanoClock = builder.identityNanoClock;
         this.applicationResolver = Objects.requireNonNull(builder.applicationResolver, "applicationResolver");
         this.applicationNamespace = Objects.requireNonNull(builder.applicationNamespace, "applicationNamespace");
         this.membership = Objects.requireNonNull(builder.membership, "applicationMembership");
@@ -236,7 +249,8 @@ public final class OtryxRpcClient implements AutoCloseable {
                 directory,
                 codecs,
                 defaultCodecId,
-                resilienceOptions);
+                resilienceOptions,
+                securityProfile);
 
         return RpcGeneratedClients.find(api)
                 .map(factory -> factory.create(
@@ -461,7 +475,9 @@ public final class OtryxRpcClient implements AutoCloseable {
                     finalStatus = failure == null
                             ? RpcStatus.OK
                             : statusOf(failure);
-                    if (failure == null
+                    if (securityFailure(failure)) {
+                        method.circuitBreaker().onCancelled(circuitGeneration[0]);
+                    } else if (failure == null
                             || (failure instanceof RpcRemoteException
                                     && !ClientRetryController.isRetryable(failure))) {
                         method.circuitBreaker().onSuccess(
@@ -578,6 +594,26 @@ public final class OtryxRpcClient implements AutoCloseable {
             long deadlineNanos,
             int attempt,
             CompletableFuture<Object> result) {
+        try {
+            attemptChecked(reference, method, encodedArguments, propagatedMetadata, callContext,
+                    deadlineNanos, attempt, result);
+        } catch (RpcAuthenticationException | RegistrySecurityException rejected) {
+            observeClientAttempt(reference, method, null, attempt, 0L, RpcStatus.BAD_REQUEST, rejected);
+            result.completeExceptionally(rejected);
+        } catch (RuntimeException failure) {
+            result.completeExceptionally(failure);
+        }
+    }
+
+    private void attemptChecked(
+            ClientReference reference,
+            ClientMethodBinding method,
+            byte[] encodedArguments,
+            Map<String, String> propagatedMetadata,
+            RpcCallContext callContext,
+            long deadlineNanos,
+            int attempt,
+            CompletableFuture<Object> result) {
         if (result.isDone()) {
             return;
         }
@@ -607,12 +643,13 @@ public final class OtryxRpcClient implements AutoCloseable {
             return;
         }
 
-        ServiceInstance[] instances = reference.directory().snapshot();
+        ServiceDirectory.Selection selection = reference.directory().selection();
+        ServiceInstance[] instances = selection.instances();
         ServiceInstance selected = instances.length == 0
                 ? null
                 : loadBalancer.select(instances, loadMetrics);
         if (selected == null) {
-            String reason = switch (reference.directory().status()) {
+            String reason = switch (selection.status()) {
                 case NOT_READY -> "Registry directory has no initial snapshot for ";
                 case STALE -> "Registry directory freshness budget exceeded for ";
                 case CLOSED -> "Registry directory has been closed for ";
@@ -643,8 +680,11 @@ public final class OtryxRpcClient implements AutoCloseable {
             return;
         }
 
+        if (java.util.Arrays.stream(instances).noneMatch(selected::equals)) {
+            throw new IllegalStateException("LoadBalancer selected an instance outside the verified directory");
+        }
         EndpointStats endpointStats = stats.compute(
-                selected.endpoint(),
+                selected.target(),
                 (endpoint, existing) -> {
                     EndpointStats current =
                             existing == null ? new EndpointStats() : existing;
@@ -653,71 +693,100 @@ public final class OtryxRpcClient implements AutoCloseable {
                 });
         long startedAtNanos = System.nanoTime();
 
-        // Wire v1 uses whole milliseconds: never round a sub-millisecond
-        // parent budget up to a new full millisecond.
-        long wireRemainingNanos = deadlineNanos - System.nanoTime();
-        long remainingMillis = TimeUnit.NANOSECONDS.toMillis(wireRemainingNanos);
-        if (remainingMillis <= 0L) {
-            endpointStats.endCancelled(System.nanoTime() - startedAtNanos);
-            result.completeExceptionally(
-                    new RpcTimeoutException("RPC budget exhausted before transport send"));
-            return;
-        }
-        long deadlineEpochMillis =
-                System.currentTimeMillis() + remainingMillis;
-        byte[] request = RpcProtocolCodec.encodeRequest(
-                method.codec().codecId(),
-                reference.serviceId(),
-                method.methodId(),
-                deadlineEpochMillis,
-                remainingMillis,
-                propagatedMetadata,
-                encodedArguments);
-
-        CompletableFuture<byte[]> transportFuture = transport.request(
-                        selected.endpoint(),
-                        request,
-                        Duration.ofNanos(remainingNanos))
-                .toCompletableFuture();
-        result.whenComplete((ignoredValue, completionError) -> {
-            if (closed.get()
-                    || result.isCancelled()
-                    || unwrap(completionError) instanceof RpcTimeoutException) {
-                transportFuture.cancel(true);
+        try {
+            // Wire v1 uses whole milliseconds: never round a sub-millisecond
+            // parent budget up to a new full millisecond.
+            long wireRemainingNanos = deadlineNanos - System.nanoTime();
+            long remainingMillis = TimeUnit.NANOSECONDS.toMillis(wireRemainingNanos);
+            if (remainingMillis <= 0L) {
+                endpointStats.endCancelled(System.nanoTime() - startedAtNanos);
+                result.completeExceptionally(
+                        new RpcTimeoutException("RPC budget exhausted before transport send"));
+                return;
             }
-        });
+            long deadlineEpochMillis =
+                    System.currentTimeMillis() + remainingMillis;
+            byte[] request = RpcProtocolCodec.encodeRequest(
+                    method.codec().codecId(),
+                    reference.serviceId(),
+                    method.methodId(),
+                    deadlineEpochMillis,
+                    remainingMillis,
+                    propagatedMetadata,
+                    encodedArguments);
 
-        transportFuture.whenComplete((rawResponse, transportError) -> {
             if (result.isDone()) {
                 endpointStats.endCancelled(System.nanoTime() - startedAtNanos);
                 return;
             }
-            try {
-                responseCompletionExecutor.execute(
-                        RpcCallContext.wrap(callContext, () ->
-                                completeTransportResponse(
-                                reference,
-                                method,
-                                encodedArguments,
-                                propagatedMetadata,
-                                callContext,
-                                deadlineNanos,
-                                attempt,
-                                result,
-                                selected,
-                                endpointStats,
-                                startedAtNanos,
-                                rawResponse,
-                                transportError)));
-            } catch (RejectedExecutionException rejected) {
-                // 容量在发起请求前预留。只有执行器关闭或竞争才可能触发这里。
-                endpointStats.endCancelled(
-                        System.nanoTime() - startedAtNanos);
-                result.completeExceptionally(
-                        new RpcOverloadedException(
-                                "RPC response completion executor unavailable"));
+            if (!reference.directory().isUsable(selection)) {
+                endpointStats.endSecurityRejected();
+                retryOrComplete(reference, method, encodedArguments, propagatedMetadata, callContext,
+                        deadlineNanos, attempt, result,
+                        new RpcUnavailableException("Verified directory changed before transport send"));
+                return;
             }
-        });
+            CompletableFuture<RpcTransportResponse> transportFuture = transport.request(
+                            selected.target(),
+                            request,
+                            Duration.ofNanos(remainingNanos))
+                    .toCompletableFuture();
+            result.whenComplete((ignoredValue, completionError) -> {
+                if (closed.get()
+                        || result.isCancelled()
+                        || unwrap(completionError) instanceof RpcTimeoutException) {
+                    transportFuture.cancel(true);
+                }
+            });
+
+            transportFuture.whenComplete((rawResponse, transportError) -> {
+                if (result.isDone()) {
+                    if (securityFailure(unwrap(transportError))) {
+                        endpointStats.endSecurityRejected();
+                    } else {
+                        endpointStats.endCancelled(System.nanoTime() - startedAtNanos);
+                    }
+                    return;
+                }
+                try {
+                    responseCompletionExecutor.execute(
+                            RpcCallContext.wrap(callContext, () ->
+                                    completeTransportResponse(
+                                    reference,
+                                    method,
+                                    encodedArguments,
+                                    propagatedMetadata,
+                                    callContext,
+                                    deadlineNanos,
+                                    attempt,
+                                    result,
+                                    selected,
+                                    endpointStats,
+                                    startedAtNanos,
+                                    rawResponse,
+                                    transportError)));
+                } catch (RejectedExecutionException rejected) {
+                    // 容量在发起请求前预留。只有执行器关闭或竞争才可能触发这里。
+                    endpointStats.endCancelled(
+                            System.nanoTime() - startedAtNanos);
+                    result.completeExceptionally(
+                            new RpcOverloadedException(
+                                    "RPC response completion executor unavailable"));
+                }
+            });
+        } catch (RuntimeException failure) {
+            Throwable rejected = unwrap(failure);
+            if (securityFailure(rejected)) {
+                endpointStats.endSecurityRejected();
+                observeClientAttempt(reference, method, selected.endpoint(), attempt,
+                        System.nanoTime() - startedAtNanos, RpcStatus.BAD_REQUEST, rejected);
+                result.completeExceptionally(rejected);
+                return;
+            }
+            recordEndpointFailure(reference, selected, endpointStats, System.nanoTime() - startedAtNanos);
+            retryOrComplete(reference, method, encodedArguments, propagatedMetadata, callContext,
+                    deadlineNanos, attempt, result, failure);
+        }
     }
 
     private void completeTransportResponse(
@@ -732,32 +801,96 @@ public final class OtryxRpcClient implements AutoCloseable {
             ServiceInstance selected,
             EndpointStats endpointStats,
             long startedAtNanos,
-            byte[] rawResponse,
+            RpcTransportResponse rawResponse,
             Throwable transportError) {
-            long elapsed = System.nanoTime() - startedAtNanos;
+        long elapsed = System.nanoTime() - startedAtNanos;
+        if (result.isDone()) {
+            if (securityFailure(unwrap(transportError))) {
+                endpointStats.endSecurityRejected();
+            } else {
+                endpointStats.endCancelled(elapsed);
+            }
+            return;
+        }
+        if (transportError != null) {
+            Throwable failure = unwrap(transportError);
+            if (securityFailure(failure)) {
+                endpointStats.endSecurityRejected();
+                observeClientAttempt(reference, method, selected.endpoint(), attempt,
+                        elapsed, RpcStatus.BAD_REQUEST, failure);
+                result.completeExceptionally(failure);
+                return;
+            }
+            if (failure instanceof CancellationException) {
+                endpointStats.endCancelled(elapsed);
+                return;
+            }
+            recordEndpointFailure(
+                    reference,
+                    selected,
+                    endpointStats,
+                    elapsed);
+            observeClientAttempt(
+                    reference,
+                    method,
+                    selected.endpoint(),
+                    attempt,
+                    elapsed,
+                    statusOf(failure),
+                    failure);
+            retryOrComplete(
+                    reference,
+                    method,
+                    encodedArguments,
+                    propagatedMetadata,
+                    callContext,
+                    deadlineNanos,
+                    attempt,
+                    result,
+                    failure);
+            return;
+        }
+
+        try {
+            RpcSecurityChecks.responsePeer(securityProfile, rawResponse.peer(), selected.target(),
+                    identityClock.instant(), identityNanoClock.getAsLong());
+            Object value = decodeResponse(method, rawResponse.frame());
+            RpcSecurityChecks.responsePeer(securityProfile, rawResponse.peer(), selected.target(),
+                    identityClock.instant(), identityNanoClock.getAsLong());
             if (result.isDone()) {
                 endpointStats.endCancelled(elapsed);
                 return;
             }
-            if (transportError != null) {
-                Throwable failure = unwrap(transportError);
-                if (failure instanceof CancellationException) {
-                    endpointStats.endCancelled(elapsed);
-                    return;
-                }
+            endpointStats.endSuccess(elapsed);
+            observeClientAttempt(
+                    reference,
+                    method,
+                    selected.endpoint(),
+                    attempt,
+                    elapsed,
+                    RpcStatus.OK,
+                    null);
+            result.complete(value);
+        } catch (RpcAuthenticationException | RegistrySecurityException rejected) {
+            endpointStats.endSecurityRejected();
+            observeClientAttempt(reference, method, selected.endpoint(), attempt,
+                    elapsed, RpcStatus.BAD_REQUEST, rejected);
+            result.completeExceptionally(rejected);
+        } catch (RpcRemoteException remoteError) {
+            if (ClientRetryController.isRetryable(remoteError)) {
                 recordEndpointFailure(
-                        reference,
-                        selected,
-                        endpointStats,
-                        elapsed);
+                    reference,
+                    selected,
+                    endpointStats,
+                    elapsed);
                 observeClientAttempt(
                         reference,
                         method,
                         selected.endpoint(),
                         attempt,
                         elapsed,
-                        statusOf(failure),
-                        failure);
+                        remoteError.status(),
+                        remoteError);
                 retryOrComplete(
                         reference,
                         method,
@@ -767,12 +900,8 @@ public final class OtryxRpcClient implements AutoCloseable {
                         deadlineNanos,
                         attempt,
                         result,
-                        failure);
-                return;
-            }
-
-            try {
-                Object value = decodeResponse(method, rawResponse);
+                        remoteError);
+            } else {
                 endpointStats.endSuccess(elapsed);
                 observeClientAttempt(
                         reference,
@@ -780,72 +909,35 @@ public final class OtryxRpcClient implements AutoCloseable {
                         selected.endpoint(),
                         attempt,
                         elapsed,
-                        RpcStatus.OK,
-                        null);
-                result.complete(value);
-            } catch (RpcRemoteException remoteError) {
-                if (ClientRetryController.isRetryable(remoteError)) {
-                    recordEndpointFailure(
-                        reference,
-                        selected,
-                        endpointStats,
-                        elapsed);
-                    observeClientAttempt(
-                            reference,
-                            method,
-                            selected.endpoint(),
-                            attempt,
-                            elapsed,
-                            remoteError.status(),
-                            remoteError);
-                    retryOrComplete(
-                            reference,
-                            method,
-                            encodedArguments,
-                            propagatedMetadata,
-                            callContext,
-                            deadlineNanos,
-                            attempt,
-                            result,
-                            remoteError);
-                } else {
-                    endpointStats.endSuccess(elapsed);
-                    observeClientAttempt(
-                            reference,
-                            method,
-                            selected.endpoint(),
-                            attempt,
-                            elapsed,
-                            remoteError.status(),
-                            remoteError);
-                    result.completeExceptionally(remoteError);
-                }
-            } catch (Throwable error) {
-                recordEndpointFailure(
-                        reference,
-                        selected,
-                        endpointStats,
-                        elapsed);
-                observeClientAttempt(
-                        reference,
-                        method,
-                        selected.endpoint(),
-                        attempt,
-                        elapsed,
-                        statusOf(error),
-                        error);
-                retryOrComplete(
-                        reference,
-                        method,
-                        encodedArguments,
-                        propagatedMetadata,
-                        callContext,
-                        deadlineNanos,
-                        attempt,
-                        result,
-                        error);
+                        remoteError.status(),
+                        remoteError);
+                result.completeExceptionally(remoteError);
             }
-
+        } catch (Throwable error) {
+            recordEndpointFailure(
+                    reference,
+                    selected,
+                    endpointStats,
+                    elapsed);
+            observeClientAttempt(
+                    reference,
+                    method,
+                    selected.endpoint(),
+                    attempt,
+                    elapsed,
+                    statusOf(error),
+                    error);
+            retryOrComplete(
+                    reference,
+                    method,
+                    encodedArguments,
+                    propagatedMetadata,
+                    callContext,
+                    deadlineNanos,
+                    attempt,
+                    result,
+                    error);
+        }
     }
 
     private void recordEndpointFailure(
@@ -969,6 +1061,9 @@ public final class OtryxRpcClient implements AutoCloseable {
     }
 
     private static RpcStatus statusOf(Throwable error) {
+        if (securityFailure(error)) {
+            return RpcStatus.BAD_REQUEST;
+        }
         if (error instanceof RpcRemoteException remote) {
             return remote.status();
         }
@@ -985,11 +1080,16 @@ public final class OtryxRpcClient implements AutoCloseable {
     }
 
     private static Throwable unwrap(Throwable error) {
-        if (error instanceof CompletionException
-                && error.getCause() != null) {
-            return error.getCause();
+        Throwable current = error;
+        while (current instanceof CompletionException && current.getCause() != null
+                && current.getCause() != current) {
+            current = current.getCause();
         }
-        return error;
+        return current;
+    }
+
+    private static boolean securityFailure(Throwable failure) {
+        return failure instanceof RpcAuthenticationException || failure instanceof RegistrySecurityException;
     }
 
     /**
@@ -998,11 +1098,16 @@ public final class OtryxRpcClient implements AutoCloseable {
      * <p>延迟清退发生在控制面线程，不进入请求热路径。
      */
     void evictUnusedEndpointStats() {
-        Set<RpcEndpoint> activeEndpoints = new HashSet<>();
-        for (ServiceDirectory directory : directories.values()) {
-            for (ServiceInstance instance : directory.snapshot()) {
-                activeEndpoints.add(instance.endpoint());
+        Set<RpcTarget> activeEndpoints = new HashSet<>();
+        try {
+            for (ServiceDirectory directory : directories.values()) {
+                for (ServiceInstance instance : directory.snapshot()) {
+                    activeEndpoints.add(instance.target());
+                }
             }
+        } catch (RegistrySecurityException rejected) {
+            // 拒绝不能杀死周期清扫，也不能把安全失效误当作健康端点消失后清空失败历史。
+            return;
         }
         stats.forEach((endpoint, ignored) -> {
             if (!activeEndpoints.contains(endpoint)) {
@@ -1022,7 +1127,7 @@ public final class OtryxRpcClient implements AutoCloseable {
     private EndpointStats endpointStats(
             ServiceInstance instance) {
         return stats.computeIfAbsent(
-                instance.endpoint(),
+                instance.target(),
                 ignored -> new EndpointStats());
     }
 
@@ -1237,7 +1342,8 @@ public final class OtryxRpcClient implements AutoCloseable {
                 ServiceDirectory directory,
                 RpcCodecRegistry codecs,
                 byte codecId,
-                RpcClientResilienceOptions resilienceOptions) {
+                RpcClientResilienceOptions resilienceOptions,
+                RpcSecurityProfile securityProfile) {
             Map<Method, ClientMethodBinding> methods = new HashMap<>();
             Map<Integer, ClientMethodBinding> methodsById = new HashMap<>();
             for (Method method : RpcContractMethods.resolve(api)) {
@@ -1245,7 +1351,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                 ClientMethodBinding binding = new ClientMethodBinding(
                         descriptor.methodId(),
                         method.toGenericString(),
-                        codecs.bind(descriptor, codecId),
+                        RpcSecurityChecks.method(securityProfile, codecs.bind(descriptor, codecId), codecId),
                         method.isAnnotationPresent(OtryxRpcIdempotent.class),
                         new RpcCircuitBreaker(
                                 resilienceOptions.circuitConsecutiveFailureThreshold(),
@@ -1376,6 +1482,9 @@ public final class OtryxRpcClient implements AutoCloseable {
 
     /** Consumer 运行时 Builder。 */
     public static final class Builder {
+        private RpcSecurityProfile securityProfile = RpcSecurityProfile.UNSPECIFIED;
+        private Clock identityClock = Clock.systemUTC();
+        private LongSupplier identityNanoClock = System::nanoTime;
         private ApplicationServiceResolver applicationResolver;
         private ApplicationMembershipCoordinator membership;
         private String applicationNamespace;
@@ -1400,6 +1509,23 @@ public final class OtryxRpcClient implements AutoCloseable {
 
         /** 创建 Consumer Builder。 */
         public Builder() {
+        }
+
+        /**
+         * 显式设置宿主安全要求，未指定不能创建运行资源。
+         *
+         * @param value 非 null 安全 Profile
+         * @return Consumer Builder
+         */
+        public Builder securityProfile(RpcSecurityProfile value) {
+            this.securityProfile = Objects.requireNonNull(value, "securityProfile");
+            return this;
+        }
+
+        Builder identityClock(Clock clock, LongSupplier nanoClock) {
+            this.identityClock = Objects.requireNonNull(clock, "identityClock");
+            this.identityNanoClock = Objects.requireNonNull(nanoClock, "identityNanoClock");
+            return this;
         }
 
         /**
@@ -1602,11 +1728,43 @@ public final class OtryxRpcClient implements AutoCloseable {
         }
 
         /**
+         * 只读校验当前实际对象，不创建运行时、线程、周期任务或成员注册。
+         */
+        public void validate() {
+            RpcSecurityChecks.profile(securityProfile);
+            Objects.requireNonNull(applicationResolver, "applicationResolver");
+            Objects.requireNonNull(membership, "applicationMembership");
+            Objects.requireNonNull(applicationNamespace, "applicationNamespace");
+            Objects.requireNonNull(transport, "transportClient");
+            Objects.requireNonNull(codecs, "codecRegistry");
+            Objects.requireNonNull(observer, "observer");
+            Objects.requireNonNull(metadataPropagator, "metadataPropagator");
+            Objects.requireNonNull(tracingBridge, "tracingBridge");
+            Objects.requireNonNull(directoryFreshnessOptions, "directoryFreshnessOptions");
+            Objects.requireNonNull(resilienceOptions, "resilienceOptions");
+            RpcSecurityChecks.transport(securityProfile, transport::securityDescriptor,
+                    membership.application(), codecs, true, identityClock.instant());
+            RpcSecurityChecks.codecs(securityProfile, codecs);
+            if (!membership.application().namespace().equals(applicationNamespace)) {
+                throw new IllegalStateException("Consumer and membership namespaces must match");
+            }
+            RpcSecurityChecks.registry(securityProfile, membership::securityDescriptor, applicationNamespace);
+            RpcSecurityChecks.registry(securityProfile, applicationResolver::securityDescriptor, applicationNamespace);
+            RpcSecurityChecks.positiveFinite(timeout, "timeout");
+            methodTimeouts.values().forEach(value -> RpcSecurityChecks.positiveFinite(value, "methodTimeout"));
+            if (responseCompletionThreads <= 0 || responseCompletionQueueCapacity <= 0
+                    || (long) responseCompletionThreads + responseCompletionQueueCapacity > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("Invalid response completion capacity");
+            }
+        }
+
+        /**
          * 创建 Consumer 运行时。
          *
          * @return Consumer 运行时
          */
         public OtryxRpcClient build() {
+            validate();
             return new OtryxRpcClient(this);
         }
     }

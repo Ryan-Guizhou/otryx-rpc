@@ -7,7 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcTarget;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcTimeoutException;
 import com.peachsoft.otryx.codec.RpcCodecIds;
@@ -20,6 +22,7 @@ import com.peachsoft.otryx.protocol.RpcMessageType;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import com.peachsoft.otryx.protocol.RpcProtocolException;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
+import com.peachsoft.otryx.transport.RpcTransportResponse;
 import java.io.ByteArrayOutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -74,11 +77,11 @@ class VertxRpcTransportTest {
                     .join();
 
             byte[] response = client.request(
-                            endpoint,
+                            target(endpoint),
                             request(),
                             Duration.ofSeconds(2))
                     .toCompletableFuture()
-                    .join();
+                    .join().frame();
 
             RpcFrame decoded = RpcProtocolCodec.decode(response);
             assertArrayEquals(
@@ -106,14 +109,14 @@ class VertxRpcTransportTest {
                 return CompletableFuture.completedFuture(
                         response(bytes, new byte[] {1}));
             }).toCompletableFuture().join();
-            client.request(endpoint, request(), Duration.ofSeconds(2))
-                    .toCompletableFuture().join();
+            client.request(target(endpoint), request(), Duration.ofSeconds(2))
+                    .toCompletableFuture().join().frame();
             assertEquals(1, executions.get());
 
             CompletionException failed = assertThrows(
                     CompletionException.class,
-                    () -> client.request(endpoint, request(), Duration.ofNanos(1L))
-                            .toCompletableFuture().join());
+                    () -> client.request(target(endpoint), request(), Duration.ofNanos(1L))
+                            .toCompletableFuture().join().frame());
             assertInstanceOf(RpcTimeoutException.class, failed.getCause());
             assertEquals(1, executions.get(),
                     "Submillisecond budgets cannot dispatch a request with refreshed 1ms");
@@ -151,11 +154,11 @@ class VertxRpcTransportTest {
             CompletionException failure = assertThrows(
                     CompletionException.class,
                     () -> client.request(
-                                    endpoint,
+                                    target(endpoint),
                                     request(),
                                     Duration.ofMillis(70))
                             .toCompletableFuture()
-                            .join());
+                            .join().frame());
 
             assertInstanceOf(RpcTimeoutException.class, failure.getCause());
             assertTrue(accepted.await(2, TimeUnit.SECONDS));
@@ -188,9 +191,9 @@ class VertxRpcTransportTest {
                                             response(bytes, new byte[] {1})))
                     .toCompletableFuture()
                     .join();
-            client.request(endpoint, request(), Duration.ofSeconds(2))
+            client.request(target(endpoint), request(), Duration.ofSeconds(2))
                     .toCompletableFuture()
-                    .join();
+                    .join().frame();
             assertEquals(1, client.connectionGroupCount());
 
             client.evictIdleGroups(
@@ -198,9 +201,9 @@ class VertxRpcTransportTest {
             assertEquals(0, client.connectionGroupCount());
 
             byte[] reply = client.request(
-                            endpoint, request(), Duration.ofSeconds(2))
+                            target(endpoint), request(), Duration.ofSeconds(2))
                     .toCompletableFuture()
-                    .join();
+                    .join().frame();
             assertEquals(RpcStatus.OK, RpcProtocolCodec.view(reply).status());
             assertEquals(1, client.connectionGroupCount());
         } finally {
@@ -243,11 +246,11 @@ class VertxRpcTransportTest {
             CompletionException error = assertThrows(
                     CompletionException.class,
                     () -> client.request(
-                                    endpoint,
+                                    target(endpoint),
                                     request(),
                                     Duration.ofSeconds(2))
                             .toCompletableFuture()
-                            .join());
+                            .join().frame());
 
             assertInstanceOf(
                     RpcProtocolException.class,
@@ -290,11 +293,11 @@ class VertxRpcTransportTest {
 
             for (int index = 0; index < 4; index++) {
                 client.request(
-                                endpoint,
+                                target(endpoint),
                                 request(),
                                 Duration.ofSeconds(2))
                         .toCompletableFuture()
-                        .join();
+                        .join().frame();
             }
 
             assertEquals(2, remotePorts.size());
@@ -334,8 +337,8 @@ class VertxRpcTransportTest {
                     .toCompletableFuture()
                     .join();
 
-            CompletableFuture<byte[]> call = client.request(
-                            endpoint,
+            CompletableFuture<RpcTransportResponse> call = client.request(
+                            target(endpoint),
                             request(),
                             Duration.ofSeconds(5))
                     .toCompletableFuture();
@@ -386,8 +389,8 @@ class VertxRpcTransportTest {
                     .join();
 
             for (int index = 0; index < 30; index++) {
-                CompletableFuture<byte[]> call = client.request(
-                                endpoint,
+                CompletableFuture<RpcTransportResponse> call = client.request(
+                                target(endpoint),
                                 request(),
                                 Duration.ofSeconds(1))
                         .toCompletableFuture();
@@ -396,7 +399,7 @@ class VertxRpcTransportTest {
                                 TimeUnit.MILLISECONDS)
                         .execute(() -> call.cancel(true));
                 try {
-                    call.join();
+                    call.join().frame();
                 } catch (RuntimeException ignored) {
                     // Either response or cancellation may win this race.
                 }
@@ -404,11 +407,11 @@ class VertxRpcTransportTest {
             }
 
             byte[] finalResponse = client.request(
-                            endpoint,
+                            target(endpoint),
                             request(),
                             Duration.ofSeconds(2))
                     .toCompletableFuture()
-                    .join();
+                    .join().frame();
             assertArrayEquals(
                     new byte[] {7},
                     RpcProtocolCodec.decode(
@@ -453,11 +456,11 @@ class VertxRpcTransportTest {
             for (int index = 0; index < 20; index++) {
                 try {
                     client.request(
-                                    endpoint,
+                                    target(endpoint),
                                     request(),
                                     Duration.ofMillis(5))
                             .toCompletableFuture()
-                            .join();
+                            .join().frame();
                 } catch (RuntimeException ignored) {
                     // Either response or timeout may win this race.
                 }
@@ -465,11 +468,11 @@ class VertxRpcTransportTest {
             }
 
             byte[] finalResponse = client.request(
-                            endpoint,
+                            target(endpoint),
                             request(),
                             Duration.ofSeconds(2))
                     .toCompletableFuture()
-                    .join();
+                    .join().frame();
             assertArrayEquals(
                     new byte[] {8},
                     RpcProtocolCodec.decode(
@@ -507,9 +510,9 @@ class VertxRpcTransportTest {
                     .toCompletableFuture()
                     .join();
 
-            CompletableFuture<byte[]> call =
+            CompletableFuture<RpcTransportResponse> call =
                     client.request(
-                                    endpoint,
+                                    target(endpoint),
                                     request(),
                                     Duration.ofSeconds(2))
                             .toCompletableFuture();
@@ -587,9 +590,9 @@ class VertxRpcTransportTest {
                     .toCompletableFuture()
                     .join();
 
-            CompletableFuture<byte[]> firstCall =
+            CompletableFuture<RpcTransportResponse> firstCall =
                     client.request(
-                                    endpoint,
+                                    target(endpoint),
                                     request(),
                                     Duration.ofSeconds(3))
                             .toCompletableFuture();
@@ -603,9 +606,9 @@ class VertxRpcTransportTest {
                                     Duration.ofSeconds(2))
                             .toCompletableFuture();
 
-            CompletableFuture<byte[]> secondCall =
+            CompletableFuture<RpcTransportResponse> secondCall =
                     client.request(
-                                    endpoint,
+                                    target(endpoint),
                                     request(),
                                     Duration.ofMillis(500))
                             .toCompletableFuture();
@@ -613,7 +616,7 @@ class VertxRpcTransportTest {
             boolean rejected;
             try {
                 byte[] secondResponse =
-                        secondCall.join();
+                        secondCall.join().frame();
                 rejected = RpcProtocolCodec.decode(
                                 secondResponse)
                         .status()
@@ -630,7 +633,7 @@ class VertxRpcTransportTest {
             assertArrayEquals(
                     new byte[] {4},
                     RpcProtocolCodec.decode(
-                                    firstCall.join())
+                                    firstCall.join().frame())
                             .payload());
             drain.join();
         } finally {
@@ -664,11 +667,11 @@ class VertxRpcTransportTest {
                     .join();
 
             client.request(
-                            endpoint,
+                            target(endpoint),
                             request(),
                             Duration.ofSeconds(2))
                     .toCompletableFuture()
-                    .join();
+                    .join().frame();
 
             Thread.sleep(75L);
 
@@ -904,8 +907,8 @@ class VertxRpcTransportTest {
                     .toCompletableFuture()
                     .join();
 
-            CompletableFuture<byte[]> call = client.request(
-                            endpoint,
+            CompletableFuture<RpcTransportResponse> call = client.request(
+                            target(endpoint),
                             request(),
                             Duration.ofSeconds(5))
                     .toCompletableFuture();
@@ -921,7 +924,7 @@ class VertxRpcTransportTest {
                     new byte[] {4, 5, 6}));
             assertArrayEquals(
                     new byte[] {4, 5, 6},
-                    RpcProtocolCodec.decode(call.join()).payload());
+                    RpcProtocolCodec.decode(call.join().frame()).payload());
             drain.join();
         } finally {
             client.close();
@@ -955,20 +958,20 @@ class VertxRpcTransportTest {
                     .join();
 
             client.request(
-                            endpoint,
+                            target(endpoint),
                             request(),
                             Duration.ofSeconds(2))
                     .toCompletableFuture()
-                    .join();
+                    .join().frame();
 
             Thread.sleep(350L);
 
             client.request(
-                            endpoint,
+                            target(endpoint),
                             request(),
                             Duration.ofSeconds(2))
                     .toCompletableFuture()
-                    .join();
+                    .join().frame();
 
             assertEquals(1, remotePorts.size());
         } finally {
@@ -1037,11 +1040,11 @@ class VertxRpcTransportTest {
                     .toCompletableFuture()
                     .join();
             client.request(
-                            endpoint,
+                            target(endpoint),
                             request(),
                             Duration.ofSeconds(2))
                     .toCompletableFuture()
-                    .join();
+                    .join().frame();
 
             first.close();
             Thread.sleep(200L);
@@ -1124,11 +1127,11 @@ class VertxRpcTransportTest {
             CompletionException error = assertThrows(
                     CompletionException.class,
                     () -> client.request(
-                                    endpoint,
+                                    target(endpoint),
                                     request(),
                                     Duration.ofSeconds(2))
                             .toCompletableFuture()
-                            .join());
+                            .join().frame());
 
             assertInstanceOf(
                     com.peachsoft.otryx.api.RpcTimeoutException.class,
@@ -1319,11 +1322,11 @@ class VertxRpcTransportTest {
         while (System.nanoTime() < deadline) {
             try {
                 return client.request(
-                                endpoint,
+                                target(endpoint),
                                 request(),
                                 Duration.ofMillis(500))
                         .toCompletableFuture()
-                        .join();
+                        .join().frame();
             } catch (RuntimeException error) {
                 lastFailure = error;
                 Thread.sleep(25L);
@@ -1344,6 +1347,10 @@ class VertxRpcTransportTest {
                 Duration.ofSeconds(2),
                 codecs,
                 connections);
+    }
+
+    private static RpcTarget target(RpcEndpoint endpoint) {
+        return new RpcTarget(new ApplicationKey("tls-tests", "provider"), endpoint);
     }
 
     private static byte[] request() {

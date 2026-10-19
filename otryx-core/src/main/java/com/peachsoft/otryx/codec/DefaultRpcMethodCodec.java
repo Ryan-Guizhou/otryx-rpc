@@ -17,6 +17,11 @@ final class DefaultRpcMethodCodec implements RpcMethodCodec {
     }
 
     @Override
+    public RpcCodecSecurityDescriptor securityDescriptor() {
+        return delegate.securityDescriptor();
+    }
+
+    @Override
     public byte codecId() {
         return delegate.code();
     }

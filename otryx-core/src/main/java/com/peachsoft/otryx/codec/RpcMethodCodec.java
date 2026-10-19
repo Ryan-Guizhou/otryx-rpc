@@ -10,6 +10,15 @@ package com.peachsoft.otryx.codec;
 public interface RpcMethodCodec {
 
     /**
+     * 返回实际编解码器的只读安全能力，不从协议编号推断。
+     *
+     * @return 未声明的实现返回 UNKNOWN
+     */
+    default RpcCodecSecurityDescriptor securityDescriptor() {
+        return RpcCodecSecurityDescriptor.unknown();
+    }
+
+    /**
      * 返回线协议 Codec 编号。
      *
      * @return Codec 编号

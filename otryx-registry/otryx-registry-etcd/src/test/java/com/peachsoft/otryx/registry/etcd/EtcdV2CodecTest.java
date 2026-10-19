@@ -10,6 +10,8 @@ import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import java.util.Arrays;
 import java.util.Map;
@@ -71,11 +73,15 @@ class EtcdV2CodecTest {
                 "node-a", APP, ApplicationRole.PROVIDER,
                 new RpcEndpoint("127.0.0.1", 18080), 100, "manifest", Map.of());
         byte[] good = EtcdV2Codec.encodeMember(instance, "token");
-        assertThrows(IllegalArgumentException.class,
-                () -> EtcdV2Codec.decodeMember(Arrays.copyOf(good, good.length - 1)));
+        assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                assertThrows(RegistrySecurityException.class,
+                        () -> EtcdV2Codec.decodeMember(Arrays.copyOf(good, good.length - 1))).reason());
         byte[] oversized = new byte[EtcdV2Codec.MAX_MEMBER_BYTES + 1];
-        assertThrows(IllegalArgumentException.class, () -> EtcdV2Codec.decodeMember(oversized));
-        assertThrows(IllegalArgumentException.class, () -> EtcdV2Codec.decodeOwner(new byte[] {1, 2}));
+        assertEquals(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED,
+                assertThrows(RegistrySecurityException.class, () -> EtcdV2Codec.decodeMember(oversized)).reason());
+        assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                assertThrows(RegistrySecurityException.class,
+                        () -> EtcdV2Codec.decodeOwner(new byte[] {1, 2})).reason());
     }
 
     @Test

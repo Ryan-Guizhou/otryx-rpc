@@ -35,7 +35,7 @@ class TlsReloadControllerTest {
         AtomicReference<String> material = new AtomicReference<>("v1");
         AtomicInteger publications = new AtomicInteger();
         CountDownLatch publishedChanged = new CountDownLatch(1);
-        TlsReloadController<String> controller =
+        TlsReloadController<String, SSLOptions> controller =
                 new TlsReloadController<>(
                         vertx.getOrCreateContext(),
                         "v1",
@@ -73,7 +73,7 @@ class TlsReloadControllerTest {
         CountDownLatch reading = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         LinkedBlockingQueue<String> outcomes = new LinkedBlockingQueue<>();
-        TlsReloadController<String> controller =
+        TlsReloadController<String, SSLOptions> controller =
                 new TlsReloadController<>(
                         context,
                         () -> {
@@ -121,7 +121,7 @@ class TlsReloadControllerTest {
         AtomicInteger concurrent = new AtomicInteger();
         AtomicInteger maximum = new AtomicInteger();
         AtomicInteger publications = new AtomicInteger();
-        TlsReloadController<String> controller =
+        TlsReloadController<String, SSLOptions> controller =
                 new TlsReloadController<>(
                         vertx.getOrCreateContext(),
                         () -> {
@@ -175,7 +175,7 @@ class TlsReloadControllerTest {
         AtomicBoolean invalid = new AtomicBoolean();
         AtomicInteger publications = new AtomicInteger();
         LinkedBlockingQueue<String> outcomes = new LinkedBlockingQueue<>();
-        TlsReloadController<String> controller =
+        TlsReloadController<String, SSLOptions> controller =
                 new TlsReloadController<>(
                         vertx.getOrCreateContext(),
                         files::get,
@@ -225,7 +225,7 @@ class TlsReloadControllerTest {
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger publications = new AtomicInteger();
-        TlsReloadController<String> controller =
+        TlsReloadController<String, SSLOptions> controller =
                 new TlsReloadController<>(
                         vertx.getOrCreateContext(),
                         () -> {
@@ -270,7 +270,7 @@ class TlsReloadControllerTest {
         AtomicInteger reads = new AtomicInteger();
         AtomicInteger publications = new AtomicInteger();
         LinkedBlockingQueue<Throwable> failures = new LinkedBlockingQueue<>();
-        TlsReloadController<String> controller =
+        TlsReloadController<String, SSLOptions> controller =
                 new TlsReloadController<>(
                         vertx.getOrCreateContext(),
                         () -> reads.incrementAndGet() == 1 ? "old" : "new",
@@ -298,7 +298,7 @@ class TlsReloadControllerTest {
         }
     }
 
-    private static void awaitIdle(TlsReloadController<?> controller) {
+    private static void awaitIdle(TlsReloadController<?, ?> controller) {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (controller.reloadInProgress() && System.nanoTime() < deadline) {
             LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));

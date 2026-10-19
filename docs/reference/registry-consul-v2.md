@@ -1,34 +1,45 @@
 # Consul V2：应用级注册与 KV 元数据
 
-> [Issue #135](https://github.com/Ryan-Guizhou/otryx-rpc/issues/135) · OTRYX RPC 1.0.0-SNAPSHOT · 当前应用级后端；#139 的集成验收以准确 Head 和 main CI 为准。
+[English](registry-consul-v2.en-US.md)
+
+> [Issue #135](https://github.com/Ryan-Guizhou/otryx-rpc/issues/135) · OTRYX RPC 1.0.0-SNAPSHOT · 当前应用级后端。本文描述当前实现；执行证据须绑定准确源码 SHA，见[验收边界](application-registry-acceptance.md)。
 
 ## 一、定位与行为
 
-Consul V2 通过 **Consul Session TTL + KV Acquire** 原子声明实例身份，避免同一 `instanceId` 被多个进程同时占用。成员 Session 失效后由 Consul 自动删除临时 Claim 键；Mapping Generation 墓碑保持不变。
+Consul V2 通过 **Consul Session TTL + KV Acquire** 原子声明实例身份，避免同一 `instanceId` 被多个进程同时占用。成员 Session 失效后，临时 Claim 键由 Consul 删除，持久 Mapping generation 墓碑保留。
 
-Consul V2 在独立的 `ConsulApplicationRegistry` 中实现 `ApplicationRegistry + ApplicationRegistrar`。
-Provider、Consumer 和 BOTH 都用 `ApplicationKey(namespace, applicationName)` 注册一个逻辑 Consul Service，每个真实进程实例拥有独立 ID。暴露 30 个接口不会额外创建 30 个成员，接口属于 Manifest/Mapping，不是 ServiceName。
+`ConsulApplicationRegistry` 实现 `ApplicationRegistry + ApplicationRegistrar`。Provider、Consumer 和 BOTH 都按 `ApplicationKey(namespace, applicationName)` 注册应用级 Service，每个进程拥有独立 Service ID；导出 30 个接口不会产生 30 份成员。
 
-- Provider / BOTH：Agent Service 注册真实、可路由的 RPC Address/Port，并在 TTL Check passing 后进入应用目录；后续 Provider Pool 仍需 Manifest、Schema、Wire 校验。
-- Consumer-only：Agent Service **不配置** RPC Address/Port；端口由 Consul 原生缺省为 0。保留实际应用成员和 TTL Check，永远不得变成 Provider。
-- 接口映射：完整 ServiceKey → 一组 ApplicationKey；KV 以实例 Owner 保存完整导出集合，CAS + generation + 进程 token 拒绝旧代写入。
-- Manifest：`<namespace>/<application>/<sha256:revision>` 内容寻址；原始 Canonical Bytes 用 `?cas=0` 仅创建。一个 revision 与一个内容严格对应，不能覆盖。
-- 分离控制/数据面：Agent/Health/KV 仅由有界控制面线程访问；调用热路径仅读本地验证后的 Provider 快照。
+- Provider / BOTH：注册真实 RPC Address/Port，TTL Check passing 后进入应用目录；进入调用池还需 Core 的 Manifest、Schema、Wire 和服务绑定校验。
+- Consumer-only：注册真实应用成员和 TTL Check，**不配置 RPC Address/Port**，原生端口缺省为 0，不能成为 Provider。
+- Mapping：按实例 Owner 保存完整导出集合；CAS ModifyIndex、递增 generation 和进程 token 拒绝旧代发布或撤销。
+- Manifest：按应用及 SHA256 revision 寻址；完整 canonical bytes 通过 `?cas=0` 仅创建，同一 revision 不能被不同内容覆盖。
+- Agent/Health/KV 由有界控制线程访问，RPC 调用热路径只读取本地验证后的 Provider 快照。
 
-## 二、依赖及选项
+## 二、显式安全配置
 
-通过 SPI `ApplicationRegistryFactory` 选择 `consul`。必须显式引入 `otryx-registry-consul`（Starter 默认不引入），配置如下：
+显式引入 `otryx-registry-consul`，通过 `ApplicationRegistryFactory` SPI 选择 `consul`；默认 Starter 不包含该依赖。旧的三参/四参 `RegistryOptions` 构造及 `fromCsv` 保留调用形状，但其 profile 为 `UNSPECIFIED`，Factory 会拒绝启动。
+
+`NETWORK_MTLS` 在本 Registry 链上要求 **HTTPS、显式 CA 与 ACL_TOKEN**。以下 `httpsAgentEndpoint` 是一个实际 HTTPS Agent URL，`caFile` 为受控 CA 文件的 `Path`，`aclToken` 为从凭据来源取得的 `char[]`。`RpcSecurityProfile` 位于 `com.peachsoft.otryx.api`，`RpcObserver` 位于 `com.peachsoft.otryx.observability`，其余安全 DTO 位于 `com.peachsoft.otryx.registry`。
 
 ```java
+RegistrySecurityOptions security = new RegistrySecurityOptions(
+    Optional.of(new RegistryTlsOptions(caFile, Optional.empty())),
+    RegistryCredentials.aclToken(aclToken));
+
 RegistryOptions options = new RegistryOptions(
-    List.of("http://127.0.0.1:8500"),
+    List.of(httpsAgentEndpoint),
     "production",
     Map.of(
-        "consulToken", System.getenv().getOrDefault("CONSUL_HTTP_TOKEN", ""),
         "consulTtlSeconds", "30",
         "consulHeartbeatSeconds", "10",
         "consulPollIntervalMillis", "1000",
-        "consulRequestTimeoutMillis", "3000"));
+        "consulRequestTimeoutMillis", "3000"),
+    RpcObserver.noop(),
+    RpcSecurityProfile.NETWORK_MTLS,
+    security,
+    Optional.empty());
+
 ConsulApplicationRegistry registry = (ConsulApplicationRegistry)
     ExtensionLoader.getLoader(ApplicationRegistryFactory.class)
         .getExtension("consul").create(options);
@@ -36,19 +47,62 @@ ApplicationManifestRepository manifests = registry.manifestRepository();
 ServiceMappingRepository mappings = registry.serviceMappingRepository();
 ```
 
-`providerOptions` 支持 `consulEnterpriseNamespace`（Enterprise 可选）；逻辑 namespace 仍由 `RegistryOptions.namespace` 提供。**Consul Agent 必须恰好一个 endpoint**，本地 Agent TTL Check 不能向其他 Agent 漫游续期。ACL Token 放在 `X-Consul-Token`，需最小 `service:write`、`service:read`、`key:read`、`key:write`、`session:write`，认证和授权不能由应用 Metadata 替代。
+三个 Registry 通道 `MEMBERSHIP / MANIFEST / MAPPING` 使用同一实际 HTTP 客户端和 `security`，Consul 不接受 `metadataSecurity`。ACL Token 安装为 `X-Consul-Token`；TLS 客户端验证 CA 和服务端主机名，不跟随重定向。Factory 在安装实际 TLS/凭据后建立保护描述，Core 再核对完整来源；单独设置 profile 不代表 RPC 传输的 mTLS 和方法授权已经完成，见[安全边界](../security.md)。
 
-## 三、一致性、容量与故障
+`RegistryTlsOptions.clientIdentity` 可额外提供 `RegistryClientKeyMaterial(certificateChain, privateKey, privateKeyPassword)`，但不能替代 ACL Token；当前 Factory 不接受仅 `CLIENT_CERTIFICATE` 的凭据模式。密码、Token 和私钥密码数组在输入/读取时复制，安全 DTO 的 `toString()` 隐藏材料值；这不承诺擦除第三方客户端已持有的字符串。
 
-- Consul KV 默认单 value 最大约 512 KiB，适配器采取更保守的 **256 KiB** 上限。原生 Service Meta 的字段名和值采用 **UTF-8 字节数** 限制（最多 128/512 字节），不以 Java 字符长度代替。Manifest、Owner 超限直接拒绝，不截断。
-- Owner Scan：最多 512 个 KV、累计 8 MiB；每 Owner 最多 512 个 ServiceKey；每次 Mapping 最多 128 个候选应用。
-- 进程成员与订阅最多 256 / 128；控制线程 2–4、队列 256；请求默认超时 3 秒。
-- 成员 Check 和实例 Session 默认 TTL 30 秒，每 10 秒续约；丢失 Agent Check 时重新注册，异常按健康失败上报而非悄悄发布空目录。
-- Session 结束时 Consul 自动删除会话拥有的临时成员 Claim；Owner `revoke` 清空导出，**保留 Generation 墓碑**。不自动删除 Manifest 或墓碑，以免滚动/回滚与迟到请求导致 ABA；生产清理必须具备权威引用验证、保护窗口和原子 Fencing。本限制意味着 KV 容量需要定期审计。
-- Consul Health/Service Meta 是控制面发现信息，**不等于服务身份认证**。ACL 与 mTLS、方法授权必须单独启用。没有证明的强一致、跨数据中心事务或全局 Revision 不应被声明为已实现。
-- `close()` 停止调度与最多三秒的实例注销；故障时由服务 TTL 最终使成员失效，不能删除其他进程的成员和共享 Mapping。
+对明确隔离的明文开发环境，使用：
 
-## 四、测试
+```java
+RegistryOptions development = RegistryOptions.trustedDevelopment(
+    List.of("http://127.0.0.1:8500"), "development", Map.of());
+```
+
+`trustedDevelopment` 不配置 TLS 或凭据。需要开发环境 ACL 时仍用七参构造、显式 `TRUSTED_DEVELOPMENT` 和 typed `security`。凭据/TLS 不放入 `providerOptions`；历史 `consulToken` 及其他未知键会被拒绝。
+
+## 三、非安全选项与实际路径
+
+| `providerOptions` | 默认值 | 范围/用途 |
+| --- | --- | --- |
+| `consulTtlSeconds` | 30 | 10–3600 秒 |
+| `consulHeartbeatSeconds` | 10 | 至少 1 秒，严格小于 TTL |
+| `consulPollIntervalMillis` | 1000 | 200–60000 毫秒 |
+| `consulRequestTimeoutMillis` | 3000 | 100–60000 毫秒 |
+| `consulEnterpriseNamespace` | 空 | 可选 Consul Enterprise Namespace |
+
+**必须恰好一个本地 Agent endpoint**；TTL Check 不能向其他 Agent 漫游续期。OTRYX 逻辑命名空间来自 `RegistryOptions.namespace`，与 `consulEnterpriseNamespace` 分开。
+
+ACL 应按客户端实际调用的 Service、Session、KV 路径授权。设 `b64(x)` 为 UTF-8 的 URL-safe Base64、无填充，`R = otryx/v2/ns/{b64(namespace)}/`，注意 R 没有前导斜线：
+
+| 对象 | 实际 KV 键 |
+| --- | --- |
+| Manifest | `R + apps/{b64(application)}/manifests/{b64(revision)}` |
+| Mapping Owner | `R + owners/{b64(application)}/{b64(instanceId)}` |
+| 临时成员 Claim | `R + claims/{b64(application)}/{b64(instanceId)}` |
+
+原生 ServiceName 为 `otryx-app-` 加 namespace、NUL 分隔符、application 的 SHA256 前 12 字节十六进制；Service ID 再追加 instanceId 的 SHA256 前 12 字节十六进制。Owner 查询扫描 `R + owners/`；部署策略需要覆盖实际读取范围，不能只按文档中的逻辑应用名猜测 KV 或 Service 名。只读观察不需要发布权限；参与 Consumer 成员注册的进程仍会写自身成员、Claim 和 Session。元数据中的 role/token 不是后端授权凭据。
+
+## 四、容量与故障
+
+| 边界 | 限制 |
+| --- | --- |
+| 单个 KV value | 256 KiB，不截断 |
+| 原生 Service Meta | 最多 64 项；key/value 按 UTF-8 字节限制为 128/512 |
+| Owner 扫描 | 最多 512 个 KV，累计 8 MiB |
+| 每 Owner 的 ServiceKey / 每次候选应用 | 512 / 128 |
+| 进程成员 / 订阅 | 256 / 128 |
+| 控制线程 / 队列 | 2–4 / 256 |
+| 单次原始 HTTP 响应 / HTTP 在途请求 | 12 MiB / 64 |
+
+HTTP 总预算包括连接、响应体和 JSON 解析；原始字节在聚合前计数，错误状态与 chunked 响应同样受限。严格 UTF-8、JSON 深度/标量限制以及重复字段检查在信任元数据前执行；写请求不会向另一个 endpoint 自动重放。
+
+合法的 non-passing 或不可路由成员可被健康过滤。声称为 V2 的错误归属、损坏角色/字段、畸形内容，以及 TLS、认证、授权或响应超限会形成稳定 `RegistrySecurityException.reason()`，不附原始 cause 或服务端正文，也不能成为健康空快照。普通网络失败沿用 Core 的有界 LKG；安全失败立即使当前 Resolver 的旧安全 epoch 失效，另一条路由不会因定时器尚未运行而继续使用旧快照。
+
+默认每 10 秒续约 TTL Check 与 Session，丢失 Agent Check 时重新注册。`close()` 停止调度并以最多三秒尝试注销；不可达时由 TTL 最终使成员失效，不删除其他进程成员。Session 结束删除临时 Claim，Owner revoke 保留 generation 墓碑，旧 Manifest 不自动 GC。持久数据清理必须另有权威引用、保护窗口和原子 fencing；不声明全局 revision、跨数据中心事务或无条件强一致。
+
+## 五、验证与证据范围
+
+以下为**明文开发夹具**，可验证 Registry 合同，不证明 HTTPS 或窄权限部署：
 
 ```bash
 docker run -d --name otryx-consul-v2 -p 8500:8500 \
@@ -57,6 +111,8 @@ mvn -B -ntp -pl otryx-registry/otryx-registry-consul -am \
   -Dconsul.test.endpoint=http://127.0.0.1:8500 test
 ```
 
-GitHub Actions `.github/workflows/consul-v2.yml` 的 `consul-v2` 任务使用真实 Consul，`acl-enforcement` 任务单独以 ACL default-deny 启动、仅在隔离容器内生成临时管理 Token，分别验证授权请求与未授权请求失败关闭；Token 不写入代码或 Maven 启动参数。真实后端任务执行角色注册、并发 KV CAS、Manifest 不可变、TTL Check 和 Session 失效重注册、跨进程成员互斥、30 个真实 Java 接口×10 个独立 Registry client 对象的共享契约矩阵；测试 JVM 内的 SDK 对象不是十个业务 JVM。原生成员 `0→10→0`、SPI 方法入口调用数、订阅创建调用数及快照/健康通知和收敛时间独立计量，不能作为全部后端 HTTP/keepalive 流量。
+[Consul workflow](../../.github/workflows/consul-v2.yml) 的 `consul-v2` job 使用真实 Consul，覆盖角色、不可变 Manifest、并发 CAS/fencing、TTL/Session 恢复与实例互斥；独立步骤执行 Agent pause/recovery。`acl-enforcement` job 以 ACL default-deny 启动隔离服务并生成临时管理 Token，验证授权成功与匿名写入拒绝；它不证明每角色、每实例的最小权限策略，也不证明 Registry TLS。凭据不写入源码或 Maven 参数。
 
-Agent pause/recovery 与 ACL default-deny 有独立真实服务端门禁；实际执行、失败或跳过必须分别记录。四后端独立业务 JVM 的 process/chain/revision 由 `.github/workflows/application-registry-e2e.yml` 执行，参见[验收与证据边界](application-registry-acceptance.md)。多节点 Agent 故障、窄权限部署与权威持久元数据 GC 仍是额外生产验收范围。
+共享合同包含 30 个真实 Java 接口 × 10 个独立 Registry client 对象，位于同一测试 JVM。原生成员 `0→10→0`、SPI 方法入口、订阅创建、快照/健康通知及收敛时间分别计量，不等于全部 HTTP/keepalive 流量。条件式真实服务测试的执行、失败和跳过必须逐项记录；四后端独立业务 JVM 的 process/chain/revision 由 [application-registry-e2e workflow](../../.github/workflows/application-registry-e2e.yml) 执行，见[验收边界](application-registry-acceptance.md)。
+
+实现依据：[Factory](../../otryx-registry/otryx-registry-consul/src/main/java/com/peachsoft/otryx/registry/consul/ConsulApplicationRegistryFactory.java)、[身份与键空间](../../otryx-registry/otryx-registry-consul/src/main/java/com/peachsoft/otryx/registry/consul/ConsulV2Identity.java)、[KV 客户端](../../otryx-registry/otryx-registry-consul/src/main/java/com/peachsoft/otryx/registry/consul/ConsulV2Client.java)、[HTTP 边界](../../otryx-registry/otryx-registry-http/src/main/java/com/peachsoft/otryx/registry/http/HttpRegistryClient.java)、[Resolver](../../otryx-core/src/main/java/com/peachsoft/otryx/registry/ApplicationServiceResolver.java)。

@@ -37,6 +37,15 @@ public interface RpcTransportServer extends AutoCloseable {
         return CompletableFuture.completedFuture(null);
     }
 
+    /**
+     * 只读返回本对象实际生效的安全能力，不激活监听或线程。
+     *
+     * @return 未声明的实现返回 UNKNOWN
+     */
+    default RpcTransportSecurityDescriptor securityDescriptor() {
+        return RpcTransportSecurityDescriptor.unknown();
+    }
+
     /** 关闭监听和传输层资源。 */
     @Override
     void close();

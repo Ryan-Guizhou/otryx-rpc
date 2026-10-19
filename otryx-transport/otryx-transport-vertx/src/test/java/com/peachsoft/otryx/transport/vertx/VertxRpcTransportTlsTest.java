@@ -2,10 +2,15 @@ package com.peachsoft.otryx.transport.vertx;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.peachsoft.otryx.api.ApplicationKey;
+import com.peachsoft.otryx.api.RpcAuthenticationException;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcTarget;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.codec.RpcCodecIds;
@@ -18,6 +23,7 @@ import com.peachsoft.otryx.protocol.RpcMessageType;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
+import com.peachsoft.otryx.transport.RpcTransportResponse;
 import com.peachsoft.otryx.transport.RpcTransportSecurityOptions;
 import java.net.ServerSocket;
 import java.time.Duration;
@@ -110,14 +116,14 @@ class VertxRpcTransportTlsTest {
                         assertThrows(
                                 CompletionException.class,
                                 () -> client.request(
-                                                new RpcEndpoint(
+                                                target(new RpcEndpoint(
                                                         "localhost",
-                                                        port),
+                                                        port)),
                                                 request(),
                                                 Duration.ofSeconds(2))
                                         .toCompletableFuture()
-                                        .join());
-                assertTrue(error.getCause() != null);
+                                        .join().frame());
+                assertCertificateRejected(error);
                 assertTrue(await(
                         Duration.ofSeconds(2),
                         () -> handshakeFailures.get() >= 1));
@@ -150,16 +156,17 @@ class VertxRpcTransportTlsTest {
                                             certs.caCertificate.toString(),
                                             true)));
             try {
-                assertThrows(
+                CompletionException error = assertThrows(
                         CompletionException.class,
                         () -> client.request(
-                                        new RpcEndpoint(
+                                        target(new RpcEndpoint(
                                                 "127.0.0.1",
-                                                port),
+                                                port)),
                                         request(),
                                         Duration.ofSeconds(2))
                                 .toCompletableFuture()
-                                .join());
+                                .join().frame());
+                assertCertificateRejected(error);
             } finally {
                 client.close();
                 server.close();
@@ -182,7 +189,7 @@ class VertxRpcTransportTlsTest {
                             true,
                             Duration.ofSeconds(2),
                             Duration.ofMillis(50),
-                            Duration.ofDays(7));
+                            Duration.ofDays(7), java.util.Optional.empty());
             RpcTransportSecurityOptions clientSecurity =
                     new RpcTransportSecurityOptions(
                             RpcSecurityMode.MTLS,
@@ -192,7 +199,7 @@ class VertxRpcTransportTlsTest {
                             true,
                             Duration.ofSeconds(2),
                             Duration.ofMillis(50),
-                            Duration.ofDays(7));
+                            Duration.ofDays(7), java.util.Optional.empty());
 
             assertRoundTrip(
                     port,
@@ -217,7 +224,7 @@ class VertxRpcTransportTlsTest {
                             true,
                             Duration.ofSeconds(2),
                             Duration.ofMillis(50),
-                            Duration.ofDays(7));
+                            Duration.ofDays(7), java.util.Optional.empty());
             VertxRpcTransportServer server =
                     server(
                             port,
@@ -235,13 +242,13 @@ class VertxRpcTransportTlsTest {
                 assertThrows(
                         CompletionException.class,
                         () -> client.request(
-                                        new RpcEndpoint(
+                                        target(new RpcEndpoint(
                                                 "localhost",
-                                                port),
+                                                port)),
                                         request(),
                                         Duration.ofSeconds(2))
                                 .toCompletableFuture()
-                                .join());
+                                .join().frame());
             } finally {
                 client.close();
                 server.close();
@@ -265,7 +272,7 @@ class VertxRpcTransportTlsTest {
                             true,
                             Duration.ofSeconds(2),
                             Duration.ofMillis(50),
-                            Duration.ofDays(7));
+                            Duration.ofDays(7), java.util.Optional.empty());
 
             assertThrows(
                     IllegalArgumentException.class,
@@ -304,11 +311,11 @@ class VertxRpcTransportTlsTest {
                     server(port, serverOptions);
             try {
                 byte[] initial = client.request(
-                                endpoint,
+                                target(endpoint),
                                 request(),
                                 Duration.ofSeconds(2))
                         .toCompletableFuture()
-                        .join();
+                        .join().frame();
                 assertArrayEquals(
                         new byte[] {7},
                         RpcProtocolCodec.decode(initial)
@@ -317,11 +324,11 @@ class VertxRpcTransportTlsTest {
                 Thread.sleep(250L);
 
                 byte[] afterHeartbeat = client.request(
-                                endpoint,
+                                target(endpoint),
                                 request(),
                                 Duration.ofSeconds(2))
                         .toCompletableFuture()
-                        .join();
+                        .join().frame();
                 assertArrayEquals(
                         new byte[] {7},
                         RpcProtocolCodec.decode(
@@ -411,13 +418,13 @@ class VertxRpcTransportTlsTest {
                                             true)));
             try {
                 byte[] initial = first.request(
-                                new RpcEndpoint(
+                                target(new RpcEndpoint(
                                         "localhost",
-                                        port),
+                                        port)),
                                 request(),
                                 Duration.ofSeconds(2))
                         .toCompletableFuture()
-                        .join();
+                        .join().frame();
                 assertArrayEquals(
                         new byte[] {7},
                         RpcProtocolCodec.decode(initial)
@@ -441,13 +448,13 @@ class VertxRpcTransportTlsTest {
                                                 true)));
                 try {
                     byte[] recovered = second.request(
-                                    new RpcEndpoint(
+                                    target(new RpcEndpoint(
                                             "localhost",
-                                            port),
+                                            port)),
                                     request(),
                                     Duration.ofSeconds(2))
                             .toCompletableFuture()
-                            .join();
+                            .join().frame();
                     assertArrayEquals(
                             new byte[] {7},
                             RpcProtocolCodec.decode(recovered)
@@ -467,13 +474,14 @@ class VertxRpcTransportTlsTest {
         try (TlsTestCertificates certs = TlsTestCertificates.create()) {
             int port = findFreePort();
             RpcTransportOptions serverOptions = baseOptions().withSecurity(
-                    serverSecurity(certs, RpcSecurityMode.MTLS));
+                    serverSecurity(certs, RpcSecurityMode.MTLS)
+                            .withIdentity(certs.identities(TlsTestCertificates.PROVIDER)));
             RpcTransportOptions clientOptions = baseOptions().withSecurity(
                     clientSecurity(
                             certs,
                             RpcSecurityMode.MTLS,
                             certs.caCertificate.toString(),
-                            true));
+                            true).withIdentity(certs.identities(TlsTestCertificates.CONSUMER)));
             AtomicReference<RpcPeerIdentity> observed = new AtomicReference<>();
             VertxRpcTransportServer server = new VertxRpcTransportServer(serverOptions);
             VertxRpcTransportClient client = new VertxRpcTransportClient(clientOptions);
@@ -493,16 +501,18 @@ class VertxRpcTransportTlsTest {
                                 response(frame, new byte[] {7}));
                     }
                 }).toCompletableFuture().join();
-                byte[] reply = client.request(
-                                new RpcEndpoint("localhost", port),
+                RpcTransportResponse reply = client.request(
+                                target(new RpcEndpoint("localhost", port)),
                                 request(),
                                 Duration.ofSeconds(2))
                         .toCompletableFuture().get(3, TimeUnit.SECONDS);
-                assertArrayEquals(new byte[] {7}, RpcProtocolCodec.decode(reply).payload());
+                assertArrayEquals(new byte[] {7}, RpcProtocolCodec.decode(reply.frame()).payload());
                 RpcPeerIdentity peer = observed.get();
                 assertTrue(peer != null && peer.authenticated());
-                assertTrue(peer.certificateSha256().matches("[0-9a-f]{64}"));
-                assertTrue(peer.principal().contains("CN="));
+                assertEquals(TlsTestCertificates.CONSUMER, peer.application().orElseThrow());
+                assertEquals(TlsTestCertificates.PROVIDER, reply.peer().application().orElseThrow());
+                assertEquals(TlsTestCertificates.binding(certs.clientCertificate, TlsTestCertificates.CONSUMER,
+                        peer.certificateBinding().orElseThrow().validUntil()), peer.certificateBinding().orElseThrow());
             } finally {
                 client.close();
                 server.close();
@@ -542,10 +552,10 @@ class VertxRpcTransportTlsTest {
                     }
                 }).toCompletableFuture().join();
                 client.request(
-                                new RpcEndpoint("localhost", port),
+                                target(new RpcEndpoint("localhost", port)),
                                 request(),
                                 Duration.ofSeconds(2))
-                        .toCompletableFuture().get(3, TimeUnit.SECONDS);
+                        .toCompletableFuture().get(3, TimeUnit.SECONDS).frame();
                 assertEquals(RpcPeerIdentity.anonymous(), observed.get());
             } finally {
                 client.close();
@@ -581,7 +591,7 @@ class VertxRpcTransportTlsTest {
                 true,
                 Duration.ofSeconds(2),
                 Duration.ofMillis(50),
-                Duration.ofDays(7));
+                Duration.ofDays(7), java.util.Optional.empty());
     }
 
     private static RpcTransportSecurityOptions clientSecurity(
@@ -601,7 +611,7 @@ class VertxRpcTransportTlsTest {
                 hostnameVerification,
                 Duration.ofSeconds(2),
                 Duration.ofMillis(50),
-                Duration.ofDays(7));
+                Duration.ofDays(7), java.util.Optional.empty());
     }
 
     private static RpcTransportOptions haOptions() {
@@ -629,11 +639,11 @@ class VertxRpcTransportTlsTest {
         while (System.nanoTime() < deadline) {
             try {
                 return client.request(
-                                endpoint,
+                                target(endpoint),
                                 request(),
                                 Duration.ofMillis(750))
                         .toCompletableFuture()
-                        .join();
+                        .join().frame();
             } catch (RuntimeException error) {
                 lastFailure = error;
                 Thread.sleep(25L);
@@ -691,13 +701,13 @@ class VertxRpcTransportTlsTest {
                         clientOptions);
         try {
             byte[] response = client.request(
-                            new RpcEndpoint(
+                            target(new RpcEndpoint(
                                     host,
-                                    port),
+                                    port)),
                             request(),
                             Duration.ofSeconds(2))
                     .toCompletableFuture()
-                    .join();
+                    .join().frame();
             assertArrayEquals(
                     new byte[] {7},
                     RpcProtocolCodec.decode(response)
@@ -706,6 +716,17 @@ class VertxRpcTransportTlsTest {
             client.close();
             server.close();
         }
+    }
+
+    private static void assertCertificateRejected(CompletionException failed) {
+        RpcAuthenticationException error = assertInstanceOf(RpcAuthenticationException.class, failed.getCause());
+        assertEquals(RpcAuthenticationException.Reason.CERTIFICATE_REJECTED, error.reason());
+        assertNull(error.getCause());
+        assertEquals(0, error.getSuppressed().length);
+    }
+
+    private static RpcTarget target(RpcEndpoint endpoint) {
+        return new RpcTarget(new ApplicationKey("tls-tests", "provider"), endpoint);
     }
 
     private static byte[] request() {

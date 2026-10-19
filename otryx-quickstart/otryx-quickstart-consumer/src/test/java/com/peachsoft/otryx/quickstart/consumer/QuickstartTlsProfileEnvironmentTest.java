@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
+import com.peachsoft.otryx.core.RpcAuthorizer;
 import com.peachsoft.otryx.observability.RpcSecurityMode;
 import com.peachsoft.otryx.quickstart.provider.ProviderApplication;
 import com.peachsoft.otryx.spring.autoconfigure.OtryxRpcAutoConfiguration;
@@ -20,10 +22,12 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
+import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
 import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
@@ -65,10 +69,13 @@ class QuickstartTlsProfileEnvironmentTest {
         assertEquals(hasTrust ? TRUST_CERTIFICATE_PATH : "", security.getTrustCertificatePath());
         assertTrue(security.isHostnameVerification());
         if (mutualTls) {
-            assertEquals(OtryxRpcProperties.SecurityProfile.NETWORK_MTLS, properties.getSecurityProfile());
+            assertEquals(RpcSecurityProfile.NETWORK_MTLS, properties.getSecurityProfile());
             assertEquals(ForyRpcSecurityOptions.Mode.STRICT_ALLOWLIST, properties.getCodec().getFory().getMode());
             assertEquals(Set.of("com.peachsoft.otryx.quickstart.api.*"),
                     properties.getCodec().getFory().getAllowedClassPatterns());
+            assertEquals("etcd", properties.getRegistry().getType());
+            assertEquals(3, security.getIdentity().getCertificateBindings().size());
+            assertEquals("security-profile-test", properties.getRegistry().getNamespace());
         }
     }
 
@@ -98,10 +105,20 @@ class QuickstartTlsProfileEnvironmentTest {
     }
 
     private static Map<String, Object> certificateEnvironment() {
-        return Map.of(
-                "OTRYX_QUICKSTART_TLS_CERT", CERTIFICATE_PATH,
-                "OTRYX_QUICKSTART_TLS_KEY", PRIVATE_KEY_PATH,
-                "OTRYX_QUICKSTART_TLS_CA", TRUST_CERTIFICATE_PATH);
+        Map<String, Object> values = new HashMap<>();
+        values.put("OTRYX_QUICKSTART_TLS_CERT", CERTIFICATE_PATH);
+        values.put("OTRYX_QUICKSTART_TLS_KEY", PRIVATE_KEY_PATH);
+        values.put("OTRYX_QUICKSTART_TLS_CA", TRUST_CERTIFICATE_PATH);
+        values.put("OTRYX_QUICKSTART_REGISTRY_CREDENTIALS_DIR", "/tmp/quickstart-fixture-credentials");
+        values.put("OTRYX_QUICKSTART_REGISTRY_ENDPOINT", "https://localhost:2379");
+        values.put("OTRYX_QUICKSTART_REGISTRY_CA", "/tmp/quickstart-fixture-registry-ca.pem");
+        values.put("OTRYX_QUICKSTART_NAMESPACE", "security-profile-test");
+        values.put("OTRYX_QUICKSTART_PROVIDER_SHA256", "a".repeat(64));
+        values.put("OTRYX_QUICKSTART_CONSUMER_SHA256", "b".repeat(64));
+        values.put("OTRYX_QUICKSTART_CONSUMER_ROTATED_SHA256", "c".repeat(64));
+        values.put("OTRYX_QUICKSTART_BINDING_VALID_UNTIL", "2100-01-01T00:00:00Z");
+        values.put("OTRYX_QUICKSTART_POLICY_VALID_UNTIL", "2100-01-01T00:00:00Z");
+        return values;
     }
 
     private static StandardEnvironment environment(Class<?> application, String profile,
@@ -121,12 +138,28 @@ class QuickstartTlsProfileEnvironmentTest {
                 application.getSimpleName() + "-" + profile, resource)) {
             environment.getPropertySources().addLast(source);
         }
+        Map<String, Object> fixture = new HashMap<>();
+        fixture.put("otryx.rpc.security-profile", "TRUSTED_DEVELOPMENT");
+        fixture.put("spring.application.name", "security-profile-test");
+        fixture.put("otryx.rpc.server.enabled", application == ProviderApplication.class);
+        if ("mtls".equals(profile)) {
+            // ConfigData import is tested by the process scenario; this test binds the actual YAML.
+            fixture.put("otryx.rpc.registry.security.credentials.username", "profile-fixture-user");
+            fixture.put("otryx.rpc.registry.security.credentials.password", "profile-fixture-password");
+        }
+        environment.getPropertySources().addLast(new MapPropertySource("baseAndConfigTreeFixture", fixture));
         ConfigurationPropertySources.attach(environment);
         return environment;
     }
 
     private static void validateConfiguration(StandardEnvironment environment) {
+        DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
+        if (environment.getProperty("otryx.rpc.server.enabled", Boolean.class, false)) {
+            RootBeanDefinition authorizer = new RootBeanDefinition(RpcAuthorizer.class);
+            authorizer.setInstanceSupplier(RpcAuthorizer::denyAll);
+            factory.registerBeanDefinition("explicitTestAuthorizer", authorizer);
+        }
         OtryxRpcAutoConfiguration.peachRpcApplicationConfigurationValidator(environment)
-                .postProcessBeanFactory(new DefaultListableBeanFactory());
+                .postProcessBeanFactory(factory);
     }
 }

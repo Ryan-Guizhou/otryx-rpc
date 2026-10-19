@@ -68,6 +68,13 @@ public record ApplicationInstance(
         return role.providesRpc();
     }
 
+    /** 返回角色与属性数量，不输出非可信属性内容或外部身份字符串。 */
+    @Override
+    public String toString() {
+        return "ApplicationInstance[role=" + role + ", routableProvider=" + routableProvider()
+                + ", attributeCount=" + attributes.size() + "]";
+    }
+
     private static Map<String, String> copyAttributes(Map<String, String> source) {
         if (source == null || source.isEmpty()) {
             return Map.of();

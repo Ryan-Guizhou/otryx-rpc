@@ -10,6 +10,9 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.peachsoft.otryx.api.OtryxRpcIdempotent;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcTarget;
+import com.peachsoft.otryx.api.RpcPeerIdentity;
+import com.peachsoft.otryx.transport.RpcTransportResponse;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcUnavailableException;
@@ -702,11 +705,26 @@ class OtryxRpcClientResilienceTest {
         }
 
         @Override
-        public CompletionStage<byte[]> request(
-                RpcEndpoint endpoint,
+        public CompletionStage<RpcTransportResponse> request(
+                RpcTarget target,
                 byte[] frame,
                 Duration timeout) {
-            return request.request(endpoint, frame, timeout);
+            CompletableFuture<byte[]> original =
+                    request.request(target.endpoint(), frame, timeout).toCompletableFuture();
+            CompletableFuture<RpcTransportResponse> result = new CompletableFuture<>();
+            result.whenComplete((value, error) -> {
+                if (result.isCancelled()) {
+                    original.cancel(true);
+                }
+            });
+            original.whenComplete((response, failure) -> {
+                if (failure != null) {
+                    result.completeExceptionally(failure);
+                } else {
+                    result.complete(new RpcTransportResponse(response, RpcPeerIdentity.anonymous()));
+                }
+            });
+            return result;
         }
 
         @Override
@@ -720,12 +738,12 @@ class OtryxRpcClientResilienceTest {
         private final CountDownLatch releaseClose = new CountDownLatch(1);
 
         @Override
-        public CompletionStage<byte[]> request(
-                RpcEndpoint endpoint,
+        public CompletionStage<RpcTransportResponse> request(
+                RpcTarget target,
                 byte[] frame,
                 Duration timeout) {
             return CompletableFuture.completedFuture(
-                    successResponse(frame, "ok"));
+                    new RpcTransportResponse(successResponse(frame, "ok"), RpcPeerIdentity.anonymous()));
         }
 
         @Override

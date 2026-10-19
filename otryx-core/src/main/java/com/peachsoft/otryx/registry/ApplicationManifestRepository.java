@@ -22,7 +22,7 @@ import java.util.concurrent.CompletionStage;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/15 17:48
  */
-public interface ApplicationManifestRepository {
+public interface ApplicationManifestRepository extends RegistrySecuritySource {
 
     /**
      * 幂等地发布 Manifest。相同应用与修订版必须对应完全相同内容。
@@ -60,8 +60,16 @@ public interface ApplicationManifestRepository {
         CompletionStage<Optional<ApplicationManifest>> stage =
                 Objects.requireNonNull(lookup(application, revision), "lookup result");
         return stage.thenApply(result -> {
-            Objects.requireNonNull(result, "lookup returned null");
-            result.ifPresent(manifest -> manifest.requireReference(application, revision));
+            if (result == null) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+            }
+            result.ifPresent(manifest -> {
+                try {
+                    manifest.requireReference(application, revision);
+                } catch (IllegalArgumentException rejected) {
+                    throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
+                }
+            });
             return result;
         });
     }

@@ -3,13 +3,17 @@ package com.peachsoft.otryx.registry.memory;
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
-import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationManifestRepository;
+import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationRegistrar;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
+import com.peachsoft.otryx.registry.ChannelProtection;
 import com.peachsoft.otryx.registry.RegistryCapabilities;
 import com.peachsoft.otryx.registry.RegistryCapability;
+import com.peachsoft.otryx.registry.RegistryChannel;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySourceProtection;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import java.util.ArrayList;
@@ -61,6 +65,19 @@ public final class MemoryApplicationRegistry implements ApplicationRegistry, App
     private int subscribers;
     private long revision;
     private boolean closed;
+
+    /**
+     * 由审核过的实际进程内实现声明本通道，无远端或调用方可填的信任开关。
+     *
+     * @return 进程内实际来源
+     */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        ChannelProtection local = new ChannelProtection(RegistrySourceProtection.LOCAL_PROCESS,
+                java.util.Set.of(), java.util.Optional.empty(), java.util.Optional.empty());
+        return new RegistrySecurityDescriptor(java.util.Map.of(
+                RegistryChannel.MEMBERSHIP, java.util.List.of(local)));
+    }
 
     /** 创建一个隔离、初始为空的应用成员注册中心。 */
     public MemoryApplicationRegistry() {

@@ -2,7 +2,7 @@
 
 > 当前 Maven 坐标：`com.peachsoft.otryx:otryx-* : 1.0.0-SNAPSHOT`（源码开发版，须本地 install，尚未从 Maven Central 发布）。历史 Peach RPC 1.0.x Java API 不与 OTRYX 1.0 自动兼容。参见[迁移指南](../migration.md)。
 >
-> 本文描述当前唯一应用级 Starter 行为。#139 的全仓清理、真实后端契约与 JVM 矩阵仍须绑定准确 PR Head 和合并后 main CI；当前验收状态见[断点](../engineering/agent-governance-checkpoint.md)。
+> 本文以当前分支的配置模型、实际 SPI 与应用级运行时为准。安全配置和代码示例不代表某次端到端验收已经通过；验证记录须对应准确提交，见[工程断点](../engineering/agent-governance-checkpoint.md)。
 
 ## 1. 引入
 
@@ -58,7 +58,7 @@ flowchart LR
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-这是源码测试命令。若业务项目单独引用单一 Starter，需先引入双方共享的 RPC 接口定义，然后分别声明 `@OtryxRpcService` 和 `@OtryxRpcReference`，单 JVM 内存模式适合本地冒烟，跨进程生产环境必须换用 Etcd、Nacos、Consul、Eureka 或等价的共享注册中心。
+这是源码测试命令。若业务项目单独引用单一 Starter，需先引入双方共享的 RPC 接口定义，然后分别声明 `@OtryxRpcService` 和 `@OtryxRpcReference`，单 JVM 内存模式适合显式可信开发；跨进程网络部署须选择能满足全部安全通道要求的共享注册中心，当前支持范围见第 6.2 节。
 
 ### 1.3 V2 应用级身份、生命周期与路由
 
@@ -92,9 +92,25 @@ otryx:
 
 **后端装配**：默认 `registry.type=consul` 必须使用一个本地 Consul Agent；旧 `otryx.rpc.registry.consul.datacenter` 非空会被拒绝，应移除该键并用 `otryx.rpc.registry.endpoints` 选择本地 Agent。默认 `registry.type=eureka` 必须显式声明 `otryx.rpc.registry.eureka.metadata-backend`（`etcd`、`nacos` 或 `consul`）与 `otryx.rpc.registry.eureka.metadata-endpoints`，并加入所选元数据 Adapter。Eureka 只管理应用成员，外置后端提供 Manifest/Mapping，不会额外注册同一业务实例；纯 Consumer 的 Eureka Port 保持 disabled。
 
-`metadata-options` 使用后端原始选项名称；例如向 Consul 传递 ACL Token 时用 YAML Map 键 `"[consulToken]": "${CONSUL_TOKEN}"` 保留大小写，从环境或受控配置源注入真实值。不要在代码、文档或日志中写入凭据。完整后端约束见 [Consul V2](registry-consul-v2.md) 与 [Eureka V2](registry-eureka-v2.md)。
+`metadata-options` 只接受所选后端实现的非敏感选项，例如 TTL、轮询周期和后端组。成员链的 TLS/凭据放在 `otryx.rpc.registry.security`，Eureka 外置元数据链使用独立的 `otryx.rpc.registry.metadata-security`；后者缺失时不会继承前者的 CA 或凭据。完整后端约束见 [Consul V2](registry-consul-v2.md) 与 [Eureka V2](registry-eureka-v2.md)，字段说明见第 6.2 节。
 
 实现入口：[自动装配与配置校验](../../otryx-spring-boot/otryx-spring-boot-autoconfigure/src/main/java/com/peachsoft/otryx/spring/autoconfigure/OtryxRpcAutoConfiguration.java)、[配置模型](../../otryx-spring-boot/otryx-spring-boot-autoconfigure/src/main/java/com/peachsoft/otryx/spring/autoconfigure/OtryxRpcProperties.java)、[运行时生命周期](../../otryx-spring-boot/otryx-spring-boot-autoconfigure/src/main/java/com/peachsoft/otryx/spring/runtime/OtryxRpcRuntimeCoordinator.java)。跨注册代际的成对迁移与回滚见[迁移指南](../migration.md)；Starter 不提供旧路径 fallback 或双读双写模式。
+
+### 1.4 每个入口都要选择安全 Profile
+
+`RpcSecurityProfile` 表示部署意图，默认值 `UNSPECIFIED` 不能用于启动。这个要求同时适用于 Spring 配置、程序化 `OtryxRpcClient.Builder.securityProfile(...)` / `OtryxRpcServer.Builder.securityProfile(...)` 和创建 Registry 的 `RegistryOptions`。开发工具可显式使用 `RegistryOptions.trustedDevelopment(...)`；仅调用旧形状的便捷构造或 `fromCsv(...)` 不会自动获得开发许可。
+
+| Profile | 使用条件 | 必需行为 |
+|---|---|---|
+| `TRUSTED_DEVELOPMENT` | 可信隔离的开发或测试 | 明确承担明文、匿名 Peer 或兼容 Codec 的边界；仍保持容量、截止时间与应用级注册约束 |
+| `NETWORK_MTLS` | 需要保护网络身份与控制面的部署 | RPC 双向 TLS、有限证书绑定、实际安全 Codec、全部 Registry 来源保护，以及显式 Provider 授权策略 |
+| `UNSPECIFIED` | 配置缺省值 | 在资源创建或启动前拒绝，不降级为开发模式 |
+
+`NETWORK_MTLS` 且 `server.enabled=true` 时，Spring 必须在创建 Registry 工厂和 RPC 运行时前找到 `RpcAuthorizer` Bean；纯 Consumer 应明确设置 `server.enabled=false`。自定义授权器由应用声明，通用 Starter 不注入放行策略。Core Server Builder 同样拒绝缺失的网络授权器。
+
+安全配置试绑定之后，还会核对最终实际对象。Starter 为已启用的 Client/Server 准备 Builder，在两端都通过 `validate()` 后才启动任一角色；因此 BOTH 不会先注册一个角色，再发现另一个角色保护不足。Provider 在 `start()` 时还会复核本地证书绑定和实际能力，覆盖创建与启动之间的失效窗口。
+
+实现入口：[Core 安全预检](../../otryx-core/src/main/java/com/peachsoft/otryx/core/RpcSecurityChecks.java)、[RegistryOptions](../../otryx-core/src/main/java/com/peachsoft/otryx/registry/RegistryOptions.java)、[Starter 运行时协调](../../otryx-spring-boot/otryx-spring-boot-autoconfigure/src/main/java/com/peachsoft/otryx/spring/runtime/OtryxRpcRuntimeCoordinator.java)。
 
 ## 2. Provider
 
@@ -104,7 +120,7 @@ public class OrderServiceImpl implements OrderService {
 }
 ```
 
-以下为 Nacos 与 Provider 地址配置片段；还须按第 6 节和安全 Profile 要求配置网络安全参数。
+以下是可信隔离环境中的 Nacos 与 Provider 地址片段。当前 Nacos Adapter 拒绝 `NETWORK_MTLS` 和 TLS 配置，因为其 SDK 登录链与数据链尚未具备完整的隔离保护实现；网络安全示例使用 [Quickstart](../../otryx-quickstart/README.md) 中的受保护 Etcd 控制面。
 
 Nacos V2（包括 Eureka 选用 Nacos 元数据后端）要求部署流程在所有应用启动前，独占初始化同一 namespace/group 的 Mapping 分片。使用现有 `NacosV2MetadataBootstrap.initialize(RegistryOptions)`，或按 [Quickstart 独立初始化命令](../../otryx-quickstart/README.md#2-第二条调用nacos-双独立-jvm) 执行。Starter 使用已初始化的控制面；缺失分片时拒绝发布，不能由每个应用启动时并发补建。详见 [Nacos CAS 与初始化约束](registry-nacos-v2.md#4-nacos-config-servicemappingmd5-casfencing分片)。
 
@@ -114,6 +130,7 @@ spring:
     name: order-service
 otryx:
   rpc:
+    security-profile: TRUSTED_DEVELOPMENT
     registry:
       type: nacos
       endpoints: 127.0.0.1:8848
@@ -156,7 +173,7 @@ private OrderService orderService;
 
 Consumer 在请求编码之前预留有界响应完成容量，容量不足时**不执行参数序列化**，直接返回 `RpcOverloadedException`；同步编码失败则立即归还预留容量。
 
-Vert.x Transport 每隔 1 分钟尝试清退连续空闲至少 5 分钟的 Endpoint 连接池，仅清退无活跃请求的分组，重访时重新连接；这是当前源码内部的固定策略，尚无对应 Spring 配置项。Consumer 的负载统计也会周期性清退注册目录中已消失、且无在途请求的 Endpoint，避免频繁上下线导致的长期堆积。
+连接池和负载统计以 `RpcTarget(ApplicationKey, RpcEndpoint)` 区分目标；相同地址上的不同应用不能共享一个目标身份。Vert.x Transport 每隔 1 分钟尝试清退连续空闲至少 5 分钟且无活跃请求的连接分组，重访时重新连接；这是当前源码内部固定策略，尚无对应 Spring 配置项。Consumer 的负载统计也会周期性清退目录中已消失、且无在途请求的目标。
 
 自动重试默认最多 2 次 attempt，但**只有显式标注 `@OtryxRpcIdempotent` 的服务方法才允许重试**。未标注方法无论 Retry Budget 是否有余额都不会由框架自动重试：
 
@@ -207,6 +224,7 @@ public interface OrderService {
 ## 5. 主要配置
 
 - `otryx.rpc.enabled`：总开关。
+- `otryx.rpc.security-profile`：必须显式选择 `TRUSTED_DEVELOPMENT` 或 `NETWORK_MTLS`；默认 `UNSPECIFIED` 拒绝启动。
 - `otryx.rpc.registry.type`：`memory`、`etcd`、`nacos`、`consul` 或 `eureka`，也可以是自定义 SPI 名称。
 - `otryx.rpc.registry.endpoints`：默认空，由 Adapter 决定；Etcd 默认 `http://127.0.0.1:2379`，Nacos 默认 `127.0.0.1:8848`。
 - `otryx.rpc.registry.namespace`：Spring Starter 默认 `default`；不同 Provider/Consumer 必须一致。独立手动创建的 Adapter 可能有专用 Namespace 默认值，两者不可混为一谈。
@@ -214,12 +232,12 @@ public interface OrderService {
 - `otryx.rpc.registry.control-plane-timeout`：共享成员单次控制面操作和 Consumer 入册等待预算，默认 `3s`，允许范围为大于零且不超过 `30s`；与 `server.enabled`、`server.control-plane-timeout` 独立。
 - `otryx.rpc.registry.nacos.member-host`：纯 Consumer 在 Nacos 中使用的真实主机 IP，不是可调用 RPC Endpoint。
 - `otryx.rpc.registry.nacos.group` / `cluster`：Nacos 管理分组与集群，默认 `OTRYX_RPC` / `DEFAULT`；RPC 接口自身的 group 仍属于 `ServiceKey`，两者不是同一概念。
-- `otryx.rpc.registry.nacos.username` / `password`：Nacos 用户名密码；日志和异常不得输出密码。
-- `otryx.rpc.registry.consul.*`：ACL Token、TTL、心跳、轮询、请求超时与可选 Enterprise namespace，详见 [Consul V2](registry-consul-v2.md)。默认 Consul 工厂拒绝非空 `datacenter`；使用 `registry.endpoints` 指定单个本地 Agent。
-- `otryx.rpc.registry.eureka.*`：Basic Auth、Lease、心跳、轮询、请求超时、真实 `member-host`、强制 `metadata-backend` 和 `metadata-endpoints`。外置 Metadata 选项用 `metadata-options` 传递；详见 [Eureka V2](registry-eureka-v2.md)。
+- `otryx.rpc.registry.security`：实际成员访问链的有类型 TLS/凭据；`registry.metadata-security` 专供 Eureka 独立外置元数据链，详见第 6.2 节。
+- `otryx.rpc.registry.consul.*`：TTL、心跳、轮询、请求超时与可选 Enterprise namespace，详见 [Consul V2](registry-consul-v2.md)。ACL Token 使用 `registry.security.credentials`。默认 Consul 工厂拒绝非空 `datacenter`；使用 `registry.endpoints` 指定单个本地 Agent。
+- `otryx.rpc.registry.eureka.*`：Lease、心跳、轮询、请求超时、真实 `member-host`、强制 `metadata-backend` 和 `metadata-endpoints`。Basic Auth 使用 `registry.security.credentials`；外置 Metadata 的非敏感选项用 `metadata-options` 传递，其 TLS/凭据使用独立的 `registry.metadata-security`。详见 [Eureka V2](registry-eureka-v2.md)。
 - `otryx.rpc.transport.type`：默认 `vertx`。
 - `otryx.rpc.transport.handshake-timeout`：协议握手超时，默认 3 秒。
-- `otryx.rpc.transport.connections-per-endpoint`：每个服务端点连接分片数，默认 1。
+- `otryx.rpc.transport.connections-per-endpoint`：每个实际 `RpcTarget` 的连接分片数，默认 1；配置键名称保持不变。
 - `otryx.rpc.transport.heartbeat-interval`：空闲连接发送 PING 前的间隔，默认 30 秒。
 - `otryx.rpc.transport.heartbeat-timeout`：PING 后等待任意有效入站流量/PONG 的最大时间，默认 10 秒。
 - `otryx.rpc.transport.reconnect-base-backoff`：异常连接下一次 request-driven 重连的基础 full-jitter 窗口，默认 50ms。
@@ -232,8 +250,9 @@ public interface OrderService {
 - `otryx.rpc.transport.security.handshake-timeout`：TLS handshake timeout，默认 3 秒。
 - `otryx.rpc.transport.security.reload-interval`：证书文件变化检查周期，默认 30 秒。
 - `otryx.rpc.transport.security.expiry-warning-threshold`：证书过期前告警窗口，默认 7 天。
+- `otryx.rpc.transport.security.identity.certificate-bindings`：部署方维护的叶证书与完整 `ApplicationKey` 绑定列表，最多 1024 条；每条包含 `certificate-sha256`、`application.namespace`、`application.application-name` 与有限的 `valid-until`。同指纹的矛盾应用或期限被拒绝。
 - `otryx.rpc.client.enabled`：默认 true，表示允许 Consumer；引用所属 Bean 实例化或程序化获取 Client 时按需创建运行时。
-- `otryx.rpc.client.directory-max-staleness`：应用级 V2 的 LKG 同步故障允许陈旧期限，Core 与 Spring 默认均为 **30 秒**。只要 `client.enabled=true`，显式设为 `0s`（无限 LKG）即 fail-fast，即使尚无实际引用；Core 的程序化预算同样必须严格为正且可转换为有限纳秒时长。
+- `otryx.rpc.client.directory-max-staleness`：普通同步故障下，最近一次有效目录的最大陈旧期限，Core 与 Spring 默认均为 **30 秒**。只要 `client.enabled=true`，显式设为 `0s` 即 fail-fast，即使尚无实际引用；Core 预算同样必须为正且可转换为有限纳秒。安全拒绝立即使旧验证代次失效，不享受这段陈旧宽限。
 - `otryx.rpc.server.enabled`：默认 true，表示允许 Provider；没有 `@OtryxRpcService` 时不会自动监听端口，程序化 Server 由调用方启动。
 - `otryx.rpc.client.proxy`：Generated Stub 缺失时的 fallback，默认 `jdk`；可显式选择 `cglib` 或可选 Byte Buddy 模块提供的 `bytebuddy`。
 - `otryx.rpc.client.load-balancer`：默认 `p2c-ewma`。
@@ -243,6 +262,10 @@ public interface OrderService {
 - `otryx.rpc.server.drain-timeout`：Provider 关闭时等待 inflight 排空的最大时间，默认 30 秒。
 - `otryx.rpc.server.control-plane-timeout`：Provider 自身控制面等待预算，默认 3 秒；不再用作共享 Membership 或 Consumer 入册预算，后两者使用 `registry.control-plane-timeout`。
 - `otryx.rpc.server.shutdown-timeout`：Provider **整体**关闭预算，Spring 默认 25 秒，约束所有注销/排空/清理阶段且不按服务数累加。Spring SmartLifecycle 使用异步停止回调，业务线程可能超过该预算仍在运行。
+- `otryx.rpc.server.authorization.max-pending`：真实授权工作槽位上限，默认 1024；策略体和原始 Stage 都结束后才归还。
+- `otryx.rpc.server.authorization.max-buffered-request-bytes`：逻辑授权等待保留的请求 Frame 字节上限，默认 67108864。
+- `otryx.rpc.server.authorization.timeout`：授权等待上限，默认 3 秒，仍受原请求剩余预算约束。
+- `otryx.rpc.server.authorization.max-grant-lifetime`：单次许可最大有效期，默认 30 秒，必须大于零且不超过 1 天；策略返回更长期限也不能突破此上限。
 - `otryx.rpc.server.execution.allow-direct`：是否允许 DIRECT 方法运行在 Transport Event Loop，默认 false。
 - `otryx.rpc.server.execution.cpu-parallelism`：CPU 执行池线程数，默认当前 JVM 可用处理器数。
 - `otryx.rpc.server.execution.cpu-queue-capacity`：CPU 执行池有界队列容量，默认 1024。
@@ -262,21 +285,46 @@ public interface OrderService {
 - `otryx.rpc.client.resilience.circuit-consecutive-failure-threshold`：方法级熔断连续失败阈值，默认 20。
 - `otryx.rpc.client.resilience.circuit-open-duration`：Circuit OPEN 时间，默认 10 秒。
 
-## 6. TLS / mTLS
+## 6. RPC 身份与独立 Registry 保护
 
-TLS/mTLS 配置属于 Transport，不修改 OTRYX RPC v1 Header。启用后顺序为：
+### 6.1 双向 TLS 和有限应用绑定
 
-~~~text
-TCP connect
- -> TLS/mTLS handshake
- -> certificate verification
- -> HELLO / HELLO_ACK
- -> ACTIVE
-~~~
+TLS/mTLS 属于 Transport，不改变 OTRYX Wire v1 Header。连接先完成 TLS 证书链校验，再完成 OTRYX HELLO/ACK；网络 Profile 还要求从真实 TLS 会话的叶证书解析可信应用绑定。CN、SAN、请求 Metadata、Registry attributes 和远端自报 ApplicationName 都不能替代这一绑定。Hostname Verification 继续验证网络目标，应用绑定另行验证完整 `ApplicationKey(namespace, applicationName)`。
 
-完整证书校验、在线 Reload、迁移与测试说明见 [TLS / mTLS 安全指南](../security.md)。
+`certificate-bindings` 中每条叶证书 SHA-256 必须对应一个应用和有限的 `valid-until`，列表同时覆盖本端证书与允许建立 RPC 连接的对端证书。一个应用可以绑定多张轮换证书；同一指纹不能对应矛盾应用或期限。本端应用身份取自实际 Membership Coordinator，不再单独配置第二份本端应用名。
 
-可运行的 [Quickstart mTLS 教程](../../otryx-quickstart/README.md#5-mtls已认证证书仍须通过方法授权) 使用现有 Provider/Consumer 的 `mtls` Profile：临时 CA 下的两个客户端都可通过证书信任检查，但仅显式授权的叶子证书指纹可调用指定 Greeting 方法。证书路径变量为 `OTRYX_QUICKSTART_TLS_CERT`、`OTRYX_QUICKSTART_TLS_KEY`、`OTRYX_QUICKSTART_TLS_CA`；旧 `OTRYX_RPC_TLS_*` 环境变量应移除，避免被 Starter 严格配置校验识别为未知键。
+有效期取证书期限与部署绑定期限的交集。框架同时检查壁钟和从验证时刻开始的单调时间预算，壁钟回退不能延长已有身份；单调时钟倒退也会失效。真实 TLS 材料代次改变时，旧会话不能冒充新代次身份，调用会得到固定的 `SECURITY_CONTEXT_CHANGED` 认证失败。Consumer 使用同一连接的 `RpcTransportResponse(frame, peer)`，在响应解码前以及解码后交付结果前再次检查 Peer 的有效期、目标应用和 namespace。
+
+完整材料校验与 Reload 边界见 [安全指南](../security.md)。可直接对照 [Provider mTLS 配置](../../otryx-quickstart/otryx-quickstart-provider/src/main/resources/application-mtls.yml) 与 [Consumer mTLS 配置](../../otryx-quickstart/otryx-quickstart-consumer/src/main/resources/application-mtls.yml)：RPC 证书路径使用 `OTRYX_QUICKSTART_TLS_CERT`、`OTRYX_QUICKSTART_TLS_KEY`、`OTRYX_QUICKSTART_TLS_CA`，Registry 另用自己的 CA 和凭据目录。实际运行步骤与阶段断言见 [Quickstart](../../otryx-quickstart/README.md)。
+
+### 6.2 有类型的 Registry TLS 与凭据
+
+`otryx.rpc.registry.security` 描述成员访问链。Eureka 还需要结构相同、彼此独立的 `otryx.rpc.registry.metadata-security`，供外置 Manifest/Mapping 后端使用。RPC CA、Eureka 成员 CA、元数据 CA 与各自凭据均按实际访问链配置。
+
+以下字段均相对于 `registry.security`；Eureka 元数据链把前缀替换为 `registry.metadata-security`：
+
+| 字段 | 含义与约束 |
+|---|---|
+| `tls.trust-certificate-collection` | 明确的 PEM CA 集合路径；不隐式采用系统默认信任库 |
+| `tls.client-identity.certificate-chain` / `private-key` | 可选的完整客户端证书链与 PKCS#8 私钥，必须成对提供 |
+| `tls.client-identity.private-key-password` | 加密私钥密码；通过受控配置源注入 |
+| `credentials.kind` | `NONE`、`USER_PASSWORD`、`ACL_TOKEN` 或 `CLIENT_CERTIFICATE`；还须被具体工厂支持 |
+| `credentials.username` / `password` | 仅用于 `USER_PASSWORD` |
+| `credentials.token` | 仅用于 `ACL_TOKEN` |
+
+凭据种类与字段不一致会被拒绝，不能同时混入另一种凭据。敏感值使用 Spring `configtree:` 或受控秘密配置源；Quickstart 以私有文件注入完整的属性名，例如 `otryx.rpc.registry.security.credentials.username` 与 `otryx.rpc.registry.security.credentials.password`。TLS/凭据不再混入普通 `providerOptions` 或 Eureka `metadata-options` Map。配置对象和安全异常使用脱敏描述，日志不能回显原始密码、Token、材料内容或绑定错误值。
+
+| 当前 Factory | `NETWORK_MTLS` 下的 Registry 访问链 | 实现边界 |
+|---|---|---|
+| Etcd | HTTPS/gRPC TLS、明确 CA、`USER_PASSWORD` | 三个通道共享实际安装保护的客户端；可另装客户端证书材料 |
+| Consul | 单个本地 Agent 的 HTTPS、明确 CA、`ACL_TOKEN` | 成员、Manifest 和 Mapping 均经实际受保护 HTTP 客户端 |
+| Eureka | 成员 HTTPS 与 `USER_PASSWORD`；元数据链单独配置受支持后端 | Mapping 同时依赖元数据和 Eureka 健康状态，两条来源都必须通过检查 |
+| Nacos | 当前拒绝 | SDK 登录 HTTP 与数据 gRPC 的隔离保护尚未完整实现；仅支持显式可信开发 |
+| Memory | 真实进程内实现 | 只承认框架的实际 Memory 来源；自定义 SPI 自报 `LOCAL_PROCESS` 不会取得同等许可 |
+
+`CLIENT_CERTIFICATE` 是有类型凭据模型的一部分，当前 Etcd/Consul/Eureka 工厂并未接受它作为单独的 `credentials.kind`；可选客户端证书不替代这些工厂要求的用户名密码或 ACL Token。所有网络 Endpoint 必须与明确的 TLS 模式一致，URL 中的 user-info、query、fragment 和隐式 HTTPS 信任均被拒绝。
+
+Factory 在验证并安装实际 TLS/凭据后才报告 `RegistrySecurityDescriptor`。Core 对 `MEMBERSHIP`、`MANIFEST`、`MAPPING` 中的每个实际来源逐项检查；一个已保护的来源不能覆盖同通道中的未知或明文来源。详见 [Registry 安全配置模型](../../otryx-core/src/main/java/com/peachsoft/otryx/registry/RegistrySecurityOptions.java)、[实际来源描述](../../otryx-core/src/main/java/com/peachsoft/otryx/registry/RegistrySecurityDescriptor.java) 与 [Spring 绑定模型](../../otryx-spring-boot/otryx-spring-boot-autoconfigure/src/main/java/com/peachsoft/otryx/spring/autoconfigure/OtryxRpcRegistrySecurityProperties.java)。
 
 ## 7. 可观测性
 
@@ -322,7 +370,9 @@ Core 的 `RpcObserver`、`RpcTracingBridge`、`RpcMetadataPropagator` 不依赖�
 
 自定义 `ApplicationRegistry` 必须提供真实 `ApplicationRegistrar`，并实现 `ApplicationMetadataBackend`、返回非空 Manifest/Mapping Repository，供默认 Coordinator 和 Resolver 使用。覆盖 Registry Bean 后不再加载默认类型对应的工厂，未使用的 Consul/Eureka 专属后端配置不会阻止该覆盖；通用配置与有效安全 Profile 校验仍然执行。
 
-自定义扩展必须实现当前应用级成员与元数据 SPI。Core 和 Starter 均要求真实 Consumer 入册及 Provider membership，不能依赖 discovery-only Bean、静态候选或隐式 fallback 建立运行时。
+自定义 Transport Client 使用 `request(RpcTarget, byte[], Duration)`，返回 `CompletionStage<RpcTransportResponse>`，响应必须携带同一连接验证得到的 Peer；没有只接收 Endpoint 的兼容入口。Core 的目标应用校验依赖这份实际证明，不能由注册中心 Metadata 合成。
+
+自定义扩展必须实现当前应用级成员与元数据 SPI，并由实际对象提供安全能力描述。`NETWORK_MTLS` 会核验最终 Codec、绑定后的方法 Codec、Transport Client/Server、Coordinator 与 Resolver 的实际来源；缺省 `UNKNOWN` 声明不满足要求。默认 Fory 的严格模式配置只约束自动配置实际创建的 Fory；替换成其他 Codec 后，仍须通过相同的有限类型/载荷能力检查。Core 和 Starter 均要求真实 Consumer 入册及 Provider membership，不能依赖 discovery-only Bean、静态候选或隐式 fallback 建立运行时。
 
 ## 10. 启动 Fail-fast 与脱敏诊断
 
@@ -334,45 +384,55 @@ Core 的 `RpcObserver`、`RpcTracingBridge`、`RpcMetadataPropagator` 不依赖�
 
 无法找到已配置的 SPI 时（例如在 单一 Starter 上选择 `otryx.rpc.registry.type=nacos`，却未加入 `otryx-registry-nacos` 依赖），启动异常会指出配置键，并建议加入对应 Adapter。可用扩展列表来自实际 Classpath，不硬编码在诊断器中。
 
-启动时输出 Registry、Transport、Proxy、Fory 安全模式、TLS 模式、启用角色与限额摘要，**不记录注册中心 username/password、密钥、证书或其文件内容**。默认的 `PLAINTEXT` 与 `TRUSTED_COMPATIBILITY` 会发出安全提醒；提醒不阻止本地开发，但面向不可信网络应开启 TLS/mTLS 与严格 Fory allowlist。
+启动时输出 Registry、Transport、Proxy、安全模式、启用角色与限额摘要；凭据值、证书内容、私钥和原始敏感绑定异常不进入诊断。`TRUSTED_DEVELOPMENT` 可采用明文和兼容 Codec；`NETWORK_MTLS` 要求双向 TLS、完整身份绑定、受保护的 Registry 通道以及有限的契约类型校验，缺少必需能力会直接拒绝启动。
 
 当未引入任一业务注解且未程序化获取运行时时，配置校验不会提前创建 RPC Client Transport 或监听 RPC 端口；注册中心 SDK 的控制面连接行为由对应 Adapter 决定。
 
-## U05 安全意图与认证授权
+## 11. 实际能力预检与有限方法授权
 
-Spring Boot 默认要求明确指定 `otryx.rpc.security-profile`。
-可信隔离开发可选 `TRUSTED_DEVELOPMENT`（不得开放至不可信网络）；
-网络部署选 `NETWORK_MTLS`，同时设置
-`otryx.rpc.transport.security.mode=MTLS`、
-`otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST` 与实际 DTO allowlist。
-缺失任何必需项在配置绑定阶段失败。
+### 11.1 自定义组件也要通过最终能力检查
 
-Provider 在实际解码 RPC DTO 之前从已验证 TLS Peer 与预绑定
-ServiceKey/MethodId 生成 `RpcAuthorizationContext`；若容器中声明
-`RpcAuthorizer` Bean 则运行自定义服务/方法权限，网络 Profile 始终
-先要求证书已验证。业务授权 Stage 必须非阻塞。
+`NETWORK_MTLS` 检查实际对象提供的 descriptor，而不是 Bean 名称、Codec ID 或配置开关。对应接口的缺省 `UNKNOWN` 声明不能用于网络运行时。
 
-`otryx.rpc.server.authorization.max-pending` 默认 1024，
-`otryx.rpc.server.authorization.timeout` 默认 3s；
-已逻辑超时但尚未真实退出的授权仍占据容量，不可认为业务已停止。
+| 实际对象 | Core 必须确认的能力 |
+|---|---|
+| Transport Client/Server | 有效 mTLS、真实证书链校验、应用绑定、Peer 交付与身份期限；Client 还要求目标应用校验、目标绑定连接池和 Hostname Verification |
+| Codec Registry 与每个绑定后的 Method Codec | `EXPLICIT_ALLOWLIST` 或 `REGISTERED_CONTRACT_TYPES`、声明契约类型检查、DTO 实例化前载荷检查、正数的载荷/深度/估算图内存上限 |
+| Coordinator 与 Resolver | 三个 Registry 通道的完整实际来源列表；网络来源须认证 TLS、非空有效凭据与正确 namespace |
 
-`otryx.rpc.server.authorization.max-buffered-request-bytes` 默认
-67108864，限制异步安全策略等待期间持有的原始请求 Frame 总字节数；
-与 `max-pending` 一起组成授权阶段双维度容量限制，超额立即拒绝。
+Transport 的启用 Codec ID 集合必须等于实际 Codec Registry，绑定后的 Method Codec ID 也必须匹配。默认 Fory 在网络 Profile 下使用 `STRICT_ALLOWLIST` 和实际 DTO allowlist；替换 Codec 后按上述能力契约校验，不以某个实现类名作为信任依据。Codec 的估算内存限制不能解释为 JVM、Direct Memory 或编码过程的硬内存租约。
 
+### 11.2 策略结果与执行期限
 
-安全 Profile 对自定义 `RpcCodecRegistry` 与 `RpcTransportOptions` Bean 进行运行时
-验证：`NETWORK_MTLS` 的最终 Codec 必须是严格白名单 Fory，最终 Transport
-必须启用 mTLS。授权失败使用已有 `BAD_REQUEST`，不应重试；
-授权等待截止时间为客户端剩余预算与服务端策略超时的较短者。
+应用实现 `RpcAuthorizer.authorize(RpcAuthorizationContext)`，返回 `CompletionStage<RpcAuthorizationDecision>`。允许结果必须通过 `RpcAuthorizationDecision.allowUntil(Instant)` 指定有限到期时刻；拒绝使用 `deny()`。策略不返回布尔值或无限期许可，`allowed()` 也只表示声明允许，执行前仍须检查期限。
 
-`NETWORK_MTLS` Provider 未声明 `RpcAuthorizer` Bean 时默认拒绝所有方法，
-业务须声明按证书身份和 ServiceKey/MethodId 验证的授权 Bean。
+Context 来自真实 Peer、实际本端 `ApplicationKey` 和预绑定 `ServiceKey`/`methodId`，不包含业务 Payload。应用据此检查完整来源应用及方法权限。`maximumValidUntil` 已取原请求剩余预算、`max-grant-lifetime` 和 Peer 身份剩余期限中的最早边界；策略许可只能进一步收紧，不能延长这段预算。
 
-Quickstart Provider 在 `mtls` Profile 下提供一个独立示例授权器；它不属于通用 Starter 的默认授权策略。必须设置 `otryx.rpc.quickstart.mtls.allowed-client-sha256` 为允许客户端叶子证书 DER 的 SHA-256（64 个小写十六进制字符、无冒号或首尾空白）。它同时限定 `GreetingService` / `1.0.0` / `default` 与 `hello` MethodId，Details 方法不在授权范围；CN/SAN 和注册中心 attributes 不能代替已验证证书身份。
+授权策略体被调度到独立的有界工作池，超时任务先于策略调用建立。即使策略在返回 Stage 之前阻塞，也不会阻塞接收请求的 EventLoop；等待期限为原请求剩余预算与 `server.authorization.timeout` 的较短者。容量耗尽立即拒绝，不在 EventLoop 等待空位。
 
-Consumer 的示例拒绝模式只把精确的 `RpcRemoteException`、`BAD_REQUEST` 和 `RPC authorization denied` 视为预期结果，不能把连接中断、CA/Hostname 校验或 TLS 握手失败算成授权验收成功。自动脚本还验证切回允许客户端后的真实调用成功，见 [Quickstart](../../otryx-quickstart/README.md)。
+| 资源或阶段 | 释放或复核规则 |
+|---|---|
+| `max-pending` 授权槽位 | 正在运行的策略体退出且原始 Stage 实际结束后才归还；超时、取消或中断本身不能证明工作结束 |
+| 尚未运行的 owned 授权任务 | 超时、取消或关闭后明确从队列放弃，不得稍后再调用策略 |
+| 授权等待中的 Frame 字节预算 | 逻辑授权终态清理后才对外发布结果；这不代表后续业务的内存已释放 |
+| 队列与解码边界 | 在策略调用前、恢复原请求执行器时、进入业务执行前、解码前及解码后调用业务前复核许可与 Peer |
+| 已经开始的业务 | 许可到期不伪装为安全强停；正常响应交付仍受请求与 Peer 有效性约束 |
 
+异步授权完成后，DIRECT 方法通过 Transport 提供的原请求执行器恢复，CPU/虚拟线程方法继续使用各自执行模型。身份与许可采用壁钟加单调时间的双重判断；RPC Deadline 保持真实调用时钟，不因许可续期重置。
+
+策略拒绝、空结果、异常和过期许可使用现有 `BAD_REQUEST` 授权拒绝结果，Wire 没有新增鉴权消息格式。纯可信开发未提供策略时使用受同样期限限制的开发许可；网络 Provider 缺策略则在启动前失败。
+
+实现入口：[RpcAuthorizer](../../otryx-core/src/main/java/com/peachsoft/otryx/core/RpcAuthorizer.java)、[Context](../../otryx-core/src/main/java/com/peachsoft/otryx/api/RpcAuthorizationContext.java)、[有限 Decision](../../otryx-core/src/main/java/com/peachsoft/otryx/api/RpcAuthorizationDecision.java)、[隔离授权工作](../../otryx-core/src/main/java/com/peachsoft/otryx/core/RpcAuthorizationGate.java)。
+
+### 11.3 目录安全代次与不重试边界
+
+普通控制面暂时不可用可在 `directory-max-staleness` 内继续使用最后一次验证成功的目录。TLS、认证、授权或元数据完整性拒绝则产生类型化 `RegistrySecurityException`，推进 Resolver 的安全代次；其他路由仍缓存的旧验证结果也立即失去使用资格，不能因某个路由后来恢复而重新生效。
+
+Directory 原子保存同一次候选快照与其端点投影，发布、状态读取、快照读取和每次 attempt 发送前都执行本地安全复核。发送前核对的是选中端点所属的原始候选，不能拿另一份更新的候选为旧端点背书。该检查不访问 Registry 网络。
+
+`RpcAuthenticationException` 与 `RegistrySecurityException` 在 attempt 内立即终结逻辑调用，包括异步响应和重试调度进入的 attempt。它们不会重试，也不累计 Endpoint 或熔断失败，也不更新目标延迟 EWMA；已持有的 inflight/探测额度正常归还，已有健康历史不会被重置。`SECURITY_CONTEXT_CHANGED` 遵循同一规则。远端方法授权拒绝保持已有 `BAD_REQUEST` 的非重试行为。
+
+Quickstart 的 `mtls` 示例策略按完整允许 Consumer `ApplicationKey`、指定 `GreetingService` 与 `hello` 方法发放有限许可；轮换证书可以绑定同一应用，Details 仍独立拒绝。Consumer 分别核对精确的远端授权拒绝和类型化认证 reason，不能把一般断连算作相同结果。场景和真实验收记录见 [Quickstart](../../otryx-quickstart/README.md) 与 [安全指南](../security.md)。
 
 ## 可运行的自定义 Observer 接入示例（U11）
 
@@ -386,4 +446,6 @@ Consumer 示例中的 [QuickstartCallObserver](../../otryx-quickstart/otryx-quic
 
 本示例不包含持久化、Exactly-once 审计或网络外部 Exporter；直接在隔离开发环境运行上述双 JVM 示例即可触发回调。
 
-应用注册状态另由 Quickstart 的只读 `QuickstartRegistrySnapshot` CLI 观察，输出指定应用的成员与 Manifest，并查询三个固定 Quickstart 契约的 ServiceMapping 候选与已验证 Provider；服务视图可能包含同 scope 中其他导出相同契约的应用。它不枚举整个注册中心、不创建观察者成员、不导出任意 attributes，也不替代调用遥测或事务快照。命令要求新输出文件，详见 [成员诊断](../../otryx-quickstart/README.md#24-观察真实成员manifest-与-mapping)。
+应用注册状态另由 Quickstart 的只读 `QuickstartRegistrySnapshot` CLI 观察。它输出指定应用的成员与 Manifest，并查询三个固定 Quickstart 契约的 ServiceMapping 候选与已验证 Provider；服务视图可能包含同 scope 中其他导出相同契约的应用。观察过程只执行读取，不创建观察者成员、不发布 Manifest/Mapping、不导出任意 attributes，也不替代调用遥测或事务快照。
+
+CLI 通过 `QUICKSTART_REGISTRY_SECURITY_FILE` 读取独立安全文件：配置与凭据引用文件须为私有 `0600` 普通文件，严格限制大小和 JSON 结构，拒绝符号链接、未知字段和矛盾凭据。文件存在时按 `NETWORK_MTLS` 检查实际 Resolver 的全部来源；未提供文件的公开开发调用显式使用 `TRUSTED_DEVELOPMENT`。配置只存秘密文件引用，Eureka 的元数据链仍单独声明。命令要求新输出文件，保留 15 秒默认读取预算、30 秒上限和固定输出限额，详见 [Quickstart 成员诊断](../../otryx-quickstart/README.md)。

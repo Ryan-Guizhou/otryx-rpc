@@ -5,7 +5,6 @@ otryx:
       endpoints: ${CONSUL_HTTP_ADDR:http://127.0.0.1:8500}
       namespace: example
       consul:
-        token: ${CONSUL_HTTP_TOKEN:}
         ttl-seconds: 30
         heartbeat-seconds: 10
         poll-interval-millis: 1000

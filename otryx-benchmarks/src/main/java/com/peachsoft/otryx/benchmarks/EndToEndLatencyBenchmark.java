@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.benchmarks;
 
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.core.OtryxRpcClient;
@@ -116,6 +117,7 @@ public class EndToEndLatencyBenchmark {
                         Duration.ofSeconds(3));
 
         rpcServer = OtryxRpcServer.builder()
+                .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.provider())
                 .transportServer(
                         transportFactory.createServer(transportOptions))

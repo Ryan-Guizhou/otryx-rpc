@@ -19,15 +19,15 @@ Meet Otti, the engineering otter: **Simple to Call. Built to Scale.**
 **GitHub:** [Ryan-Guizhou/otryx-rpc](https://github.com/Ryan-Guizhou/otryx-rpc). Trademark use, original artwork provenance and Maven Central namespace ownership still need external clearance; see [Publication readiness](docs/publication-readiness.md).
 · **Java 21** · **Spring Boot 3.5.4** · **Wire v1** · **MIT**
 
-The project has not yet reached GA and makes no backward-compatibility promise to unpublished development snapshots for Java APIs, SPI, Wire, Schema or configuration. Current-version protocol correctness, interoperability and security still require verification. Spring Starter requires an explicit security profile: `TRUSTED_DEVELOPMENT` for isolated demos or `NETWORK_MTLS` (mTLS, strict Fory allowlist and per-method authorization) for network deployments. Directly constructed Core runtimes still require an explicit security boundary. See the [Java coding standard](docs/engineering/java-coding-standard.md).
+The project has not yet reached GA and makes no backward-compatibility promise to unpublished development snapshots for Java APIs, SPI, Wire, Schema or configuration. Current-version protocol correctness, interoperability and security still require verification. Spring Starter, Core Client/Server builders and RegistryOptions all require an explicit security profile: `TRUSTED_DEVELOPMENT` for trusted isolated development or `NETWORK_MTLS` for network deployments. The default `UNSPECIFIED` profile rejects startup. Network mode requires actual mTLS and application bindings, secure codecs, protected Registry channels and finite method grants. See the [Java coding standard](docs/engineering/java-coding-standard.md).
 
 <!-- doc-section:capabilities -->
 ## Core capabilities
 
 - **Unary RPC**: Generated Stubs / Dispatchers with JDK Proxy / MethodHandle fallback.
 - **Transport**: Vert.x TCP, sharded connections, heartbeat, reconnect, CANCEL, GO_AWAY and graceful drain.
-- **Security**: PLAINTEXT / TLS / mTLS, hostname verification and certificate reload.
-- **Registry**: Memory, Etcd, Nacos, Consul, Eureka; the consumer hot path reads a local service directory.
+- **Security**: explicit deployment profiles, certificates bound to full application identities, hostname verification, certificate reload, finite method grants and actual SPI capability checks.
+- **Registry**: Memory, Etcd, Nacos, Consul, Eureka; the consumer hot path reads a locally verified directory. Network security support depends on the actual adapter.
 - **Load balancing**: P2C + EWMA, inflight count and static weights.
 - **Resilience**: method/per-call timeouts, inherited monotonic deadline budgets, explicitly idempotent retries, retry budget, circuit breaker, outlier ejection and provider admission.
 - **Execution**: virtual threads, bounded CPU resources, Fory and stable type IDs.
@@ -43,7 +43,9 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 
 **Design**: control-plane/data-plane isolation; SPI and adapters for implementations; no registry I/O, SPI scan or dynamic parsing per request.
 
-**Application registry (#139 acceptance in progress):** Core, the single Starter and the four Quickstart modules use Application identity, shared Provider/Consumer/BOTH membership, immutable Manifests, instance-owner CAS Mapping, a Resolver and bounded caches. Consumer-only members register without RPC endpoints; ServiceKey identifies business contracts and ServiceInstance is only a local load-balancing DTO. Cleanup gates reject retired SPI, paths and configuration. Shared real-backend contracts, the four-backend process/chain/revision matrix and all five rolling pairs require actual evidence for the exact head; source or shell fixtures alone do not establish acceptance. [Design](docs/design/application-registry-v2.md) · [Acceptance and measurement boundaries](docs/reference/application-registry-acceptance.md).
+**Application registry (#139 completed):** [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) was merged into main at `783bf8115c9523e5667023678dafe659315b2b66`, and that merge commit passed its main gates. Core, the single Starter and the four Quickstart modules use Application identity, shared Provider/Consumer/BOTH membership, immutable Manifests, instance-owner CAS Mapping, a Resolver and bounded caches. Consumer-only members register without RPC endpoints; ServiceKey identifies business contracts, and ServiceInstance is a local load-balancing candidate carrying the target application. Transitional SPI, registry paths and configuration have been removed. [Design](docs/design/application-registry-v2.md) · [Acceptance and measurement boundaries](docs/reference/application-registry-acceptance.md).
+
+**Security contracts and acceptance (#140):** this document describes explicit security profiles, verified application identity and protected control-plane entrypoints. Verify the complete acceptance scope against the exact PR Head, post-merge main and raw evidence recorded in [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) and the engineering checkpoint.
 
 <!-- doc-section:compatibility -->
 ## Compatibility and migration
@@ -69,15 +71,16 @@ Requires **JDK 21 and Spring Boot 3.5.4**. The checked-in Maven Wrapper pins Mav
 
 Use `mvnw.cmd` on Windows CMD/PowerShell; a globally installed Maven is optional.
 
-Start with the **no-Docker single-JVM Memory Quickstart**, then explore Nacos application members and verified routes, the BOTH role and deadlines in A→B→C, promotion/rollback between two real export revisions of one application, and mTLS client-fingerprint and method authorization. See the [Quickstart tutorial](otryx-quickstart/README.en-US.md) for commands, JSON fields and expected outcomes, or [Getting started](docs/getting-started.md) for a shorter path.
+Start with the **no-Docker single-JVM Memory Quickstart**, then explore shared Registry membership and verified routes, the BOTH role and deadlines in A→B→C, and promotion/rollback between two real export revisions of one application. The separate mTLS route uses protected Etcd to demonstrate certificates bound to a full ApplicationKey, certificate rotation and finite method grants. See the [Quickstart tutorial](otryx-quickstart/README.en-US.md) for commands, JSON fields and expected outcomes, or [Getting started](docs/getting-started.md) for a shorter path.
 
-After building, with local Nacos, Bash, Python 3, GNU `timeout` and OpenSSL available, run every scenario in order:
+After building, use **Linux** and prepare local Nacos for the default process/chain/revision scenarios, plus Bash, Python 3, GNU `timeout`, OpenSSL and an Etcd **3.5.21** executable, then run all scenarios in order. Linux is required by the mTLS security runner and this aggregate entrypoint:
 
 ~~~bash
-NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
+ETCD_BINARY=/absolute/path/to/etcd \
+  NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
 ~~~
 
-Nacos process scenarios bootstrap separate groups. The process, chain and revision scripts also support real Etcd, Consul and Eureka through `QUICKSTART_REGISTRY` and `QUICKSTART_REGISTRY_ENDPOINT`; Eureka additionally requires `QUICKSTART_EUREKA_METADATA_ENDPOINT` for real Consul metadata. Allowlisted JSON and `summary.log` are saved under `target/quickstart-e2e/`, without temporary private keys. A command proves only its actual coverage; complete #139 acceptance also requires shared contracts, Chaos, exact-head CI and post-merge main verification. See [application acceptance](docs/reference/application-registry-acceptance.md) and the [Starter guide](docs/reference/starter.md) for parameters, telemetry and assembly.
+The default process, chain and revision scenarios each bootstrap a separate Nacos group. They also support real Etcd, Consul and Eureka through `QUICKSTART_REGISTRY` and `QUICKSTART_REGISTRY_ENDPOINT`; Eureka additionally requires `QUICKSTART_EUREKA_METADATA_ENDPOINT` for real Consul metadata. The mTLS script starts and cleans up its own loopback Etcd TLS/RBAC instance, with separate RPC/Registry CAs and credentials for each role; it does not need Nacos. Allowlisted JSON and `summary.log` are saved under `target/quickstart-e2e/`, without temporary private keys or credentials. Execution records establish only the actual coverage of the tested commit; complete acceptance requires checking each real scenario and CI for that exact commit. See [application acceptance](docs/reference/application-registry-acceptance.md) and the [Starter guide](docs/reference/starter.md) for parameters and assembly.
 
 <!-- doc-section:dependency -->
 ## Maven coordinates
@@ -114,9 +117,11 @@ otryx:
 
 `spring.application.name` supplies the default application identity; override it with `otryx.rpc.registry.application-name`. Startup fails if both are absent. `registry.control-plane-timeout` is independent of `server.control-plane-timeout`, defaults to `3s`, and must be positive and no greater than `30s`; it bounds shared membership operations and the Consumer membership wait. No member is created before an actual Consumer or Provider runtime is needed.
 
-Real network deployments must explicitly choose `NETWORK_MTLS` with mutual TLS, a strict Fory DTO allowlist and an `RpcAuthorizer` that checks the verified peer against ServiceKey/MethodId. Provider denies calls by default without an authorizer. Missing security intent fails Spring startup; `TRUSTED_DEVELOPMENT` is for isolated demos only. See the [security guide](docs/security.md).
+`NETWORK_MTLS` binds the actual TLS leaf certificate SHA-256 to a complete `ApplicationKey(namespace, applicationName)` and finite expiry. Application policy then checks the source application, ServiceKey and MethodId and returns `RpcAuthorizationDecision.allowUntil(Instant)` or `deny()`. A grant cannot outlive the certificate, deployment binding, request budget or server grant limit. CN/SAN, request Metadata and Registry attributes cannot substitute for an application binding.
 
-Implemented application-level backends are documented in [Etcd](docs/reference/registry-etcd.md), [Nacos V2](docs/reference/registry-nacos-v2.md), [Consul V2](docs/reference/registry-consul-v2.en-US.md) and [Eureka V2](docs/reference/registry-eureka-v2.en-US.md). Consul uses a single local Agent. Eureka owns application members and requires a separately configured Etcd/Nacos/Consul metadata backend and endpoints. The Starter provides neither fallback to legacy interface-level adapters nor dual reads/writes.
+With network mode and `server.enabled=true`, a missing explicit `RpcAuthorizer` bean rejects startup before the Registry factory or RPC runtime is created; a pure Consumer should set `server.enabled=false`. Core Server builders enforce the same missing-policy rejection. Starter also validates the final actual capabilities of both enabled Client/Server builders before either role starts. Default Fory uses `STRICT_ALLOWLIST`; custom codecs are checked for contract types, validation before decoding and finite capacity limits. See [Starter security configuration](docs/reference/starter.md) and the [security guide](docs/security.md).
+
+Implemented application-level backends are documented in [Etcd](docs/reference/registry-etcd.md), [Nacos V2](docs/reference/registry-nacos-v2.md), [Consul V2](docs/reference/registry-consul-v2.en-US.md) and [Eureka V2](docs/reference/registry-eureka-v2.en-US.md). In network mode, Etcd uses an explicit CA and username/password, Consul uses HTTPS and an ACL token with one local Agent, and Eureka configures its membership and external metadata connections separately. Spring carries typed TLS/credentials in `registry.security` and independent `registry.metadata-security`; a protected source cannot mask a weak source in the same channel. The current Nacos adapter rejects NETWORK/TLS intent before creating its SDK and remains available for trusted development; Eureka therefore cannot use Nacos metadata in network mode. Starter retains one application-level registry path.
 
 Initialize Nacos V2 Mapping shards before starting any application, in an exclusive maintenance window for the same namespace/group. Quickstart provides a standalone initialization command; its independent-process verification scripts perform this step for a separate group per run. See the [Nacos startup steps](otryx-quickstart/README.en-US.md#2-nacos-two-independent-jvms).
 
@@ -148,4 +153,4 @@ The repository requires **Chinese standard Javadoc, English structured logs and 
 
 ## Registry freshness
 
-Core and the Spring Starter both default to `otryx.rpc.client.directory-max-staleness=30s` and require a strictly positive finite budget. Expired last-known-good routes are rejected **after explicit registry synchronization failure**; a quiet Watch alone is not unhealthy. Etcd, Nacos and Consul/Eureka expose health events and bounded recovery. See [directory freshness](docs/reference/registry-freshness.md) for state semantics, real Nacos restart checks and the four-backend independent-process evidence boundaries.
+Core and the Spring Starter both default to `otryx.rpc.client.directory-max-staleness=30s` and require a strictly positive finite budget. Ordinary Registry synchronization failures may use the last valid directory within that budget; a quiet Watch alone is not unhealthy. Authentication, authorization, TLS or metadata-integrity rejection immediately invalidates the previous verification epoch. Before each send, a local guard checks the same candidate that supplied the selected endpoint. Security failures are not retried, counted as endpoint failures or used to update latency EWMA. See [directory freshness](docs/reference/registry-freshness.md) and [current security boundaries](docs/reference/starter.md).

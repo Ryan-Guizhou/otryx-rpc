@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit;
 public final class NacosV2MetadataBootstrap {
 
     private static final String OPTION_GROUP = "nacosGroup";
-    private static final int COMMAND_ARGUMENT_COUNT = 3;
+    private static final int COMMAND_ARGUMENT_COUNT = 4;
     private static final String VALID_GROUP = "[A-Za-z0-9._:-]{1,128}";
     private static final int VERIFY_ATTEMPTS = 16;
     private static final long VERIFY_DELAY_MILLIS = 250L;
@@ -39,7 +39,7 @@ public final class NacosV2MetadataBootstrap {
      * 不得嵌入 Spring 启动、EventLoop 或业务故障恢复回调。连接与验证失败直接
      * 终止命令；已有分片仍遵守 {@link #initialize(RegistryOptions)} 的保留规则。
      *
-     * @param args 依次为逗号分隔 endpoint、namespace、group，三项均须显式非空
+     * @param args 依次为 endpoint、namespace、group 和显式 TRUSTED_DEVELOPMENT
      * @throws IllegalArgumentException 参数缺失、目标为空或 endpoint 内嵌凭据时抛出
      * @throws IllegalStateException Nacos 初始化或已有分片验证失败时抛出
      */
@@ -50,7 +50,8 @@ public final class NacosV2MetadataBootstrap {
     /** 解析显式部署目标；验证阶段不创建 SDK Client，也不允许回退到默认目标。 */
     static RegistryOptions commandLineOptions(String[] args) {
         if (args == null || args.length != COMMAND_ARGUMENT_COUNT) {
-            throw new IllegalArgumentException("Nacos bootstrap requires endpoint, namespace and group");
+            throw new IllegalArgumentException(
+                    "Nacos bootstrap requires endpoint, namespace, group and TRUSTED_DEVELOPMENT");
         }
         for (String argument : args) {
             if (argument == null || argument.isBlank()) {
@@ -61,7 +62,13 @@ public final class NacosV2MetadataBootstrap {
         if (!group.matches(VALID_GROUP)) {
             throw new IllegalArgumentException("Invalid Nacos bootstrap group");
         }
-        RegistryOptions options = RegistryOptions.fromCsv(args[0], args[1], Map.of(OPTION_GROUP, group));
+        if (!"TRUSTED_DEVELOPMENT".equals(args[3])) {
+            throw new com.peachsoft.otryx.registry.RegistrySecurityException(
+                    com.peachsoft.otryx.registry.RegistrySecurityFailure.UNSUPPORTED_PROTECTION);
+        }
+        RegistryOptions parsed = RegistryOptions.fromCsv(args[0], args[1], Map.of(OPTION_GROUP, group));
+        RegistryOptions options = RegistryOptions.trustedDevelopment(
+                parsed.endpoints(), parsed.namespace(), parsed.providerOptions());
         if (options.endpoints().isEmpty()) {
             throw new IllegalArgumentException("Nacos bootstrap requires at least one explicit endpoint");
         }
@@ -76,6 +83,7 @@ public final class NacosV2MetadataBootstrap {
      */
     public static void initialize(RegistryOptions options) {
         Objects.requireNonNull(options, "options");
+        NacosApplicationRegistryFactory.requireSecurity(options);
         List<String> endpoints = options.endpoints().isEmpty()
                 ? List.of(NacosApplicationRegistryFactory.DEFAULT_ENDPOINT) : options.endpoints();
         for (String endpoint : endpoints) {
@@ -122,7 +130,11 @@ public final class NacosV2MetadataBootstrap {
             if (error instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            throw new IllegalStateException("Nacos Mapping bootstrap failed; keep application writes disabled", error);
+            Throwable safe = NacosFailures.normalize(error);
+            if (safe instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new IllegalStateException("Nacos Mapping bootstrap failed; keep application writes disabled");
         }
     }
 }

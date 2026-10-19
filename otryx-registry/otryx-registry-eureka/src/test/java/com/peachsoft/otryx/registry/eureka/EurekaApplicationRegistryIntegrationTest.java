@@ -217,7 +217,7 @@ class EurekaApplicationRegistryIntegrationTest {
 
     private static EurekaApplicationRegistry registry(String namespace) {
         return (EurekaApplicationRegistry) new EurekaApplicationRegistryFactory()
-                .create(new RegistryOptions(List.of(ENDPOINT), namespace, Map.of(
+                .create(RegistryOptions.trustedDevelopment(List.of(ENDPOINT), namespace, Map.of(
                         "eurekaMetadataBackend", "consul",
                         "eurekaMetadataEndpoints", CONSUL_ENDPOINT,
                         "eurekaMemberHost", "127.0.0.1",

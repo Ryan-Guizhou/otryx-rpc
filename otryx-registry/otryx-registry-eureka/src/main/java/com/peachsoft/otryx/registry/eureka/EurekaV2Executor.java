@@ -1,10 +1,14 @@
 package com.peachsoft.otryx.registry.eureka;
 
+import com.peachsoft.otryx.registry.RegistryFailureSanitizer;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -35,6 +39,7 @@ final class EurekaV2Executor implements AutoCloseable {
     private final ThreadPoolExecutor workers;
     private final ScheduledThreadPoolExecutor scheduler;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final Set<ControlFuture<?>> active = ConcurrentHashMap.newKeySet();
 
     EurekaV2Executor() {
         AtomicInteger counter = new AtomicInteger();
@@ -52,12 +57,14 @@ final class EurekaV2Executor implements AutoCloseable {
 
     <T> CompletableFuture<T> submit(String operation, Callable<T> action) {
         Objects.requireNonNull(action, "action");
-        CompletableFuture<T> future = new CompletableFuture<>();
+        ControlFuture<T> future = new ControlFuture<>();
         if (closed.get()) {
             return CompletableFuture.failedFuture(new IllegalStateException("Eureka control executor closed"));
         }
+        active.add(future);
+        future.whenComplete((value, error) -> active.remove(future));
         try {
-            workers.execute(() -> {
+            future.attach(workers.submit(() -> {
                 if (future.isCancelled()) {
                     return;
                 }
@@ -67,12 +74,12 @@ final class EurekaV2Executor implements AutoCloseable {
                     if (failure instanceof InterruptedException) {
                         Thread.currentThread().interrupt();
                     }
-                    future.completeExceptionally(failure);
+                    future.completeExceptionally(RegistryFailureSanitizer.sanitize(failure));
                 }
-            });
+            }));
         } catch (RejectedExecutionException rejected) {
             future.completeExceptionally(new IllegalStateException(
-                    "Eureka control-plane capacity exhausted: operation=" + operation, rejected));
+                    "Eureka control-plane capacity exhausted: operation=" + operation));
         }
         return future;
     }
@@ -96,8 +103,36 @@ final class EurekaV2Executor implements AutoCloseable {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
+            active.forEach(future -> future.cancel(true));
             scheduler.shutdownNow();
             workers.shutdownNow();
         }
     }
+    /** 取消 SPI Future 同时中断其实际有界工作任务，阻塞 HTTP 等待随后撤销网络 exchange。 */
+    private final class ControlFuture<T> extends CompletableFuture<T> {
+        private Future<?> task;
+
+        synchronized void attach(Future<?> value) {
+            task = value;
+            if (isCancelled()) {
+                value.cancel(true);
+                if (value instanceof Runnable queued) {
+                    workers.remove(queued);
+                }
+            }
+        }
+
+        @Override
+        public synchronized boolean cancel(boolean mayInterruptIfRunning) {
+            boolean won = super.cancel(mayInterruptIfRunning);
+            if (won && task != null) {
+                task.cancel(mayInterruptIfRunning);
+                if (task instanceof Runnable queued) {
+                    workers.remove(queued);
+                }
+            }
+            return won;
+        }
+    }
+
 }

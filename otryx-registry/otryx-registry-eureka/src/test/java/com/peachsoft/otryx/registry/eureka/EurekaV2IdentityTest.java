@@ -13,6 +13,8 @@ import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -63,8 +65,10 @@ class EurekaV2IdentityTest {
                 .put(EurekaProtocol.FIELD_PORT, Map.of(
                         EurekaProtocol.FIELD_VALUE, 80,
                         EurekaProtocol.FIELD_ENABLED, EurekaProtocol.PORT_ENABLED));
-        assertNull(identity.fromInstance(APP, MAPPER.valueToTree(nativeEntry)
-                .path(EurekaProtocol.FIELD_INSTANCE)));
+        assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                assertThrows(RegistrySecurityException.class,
+                        () -> identity.fromInstance(APP, MAPPER.valueToTree(nativeEntry)
+                                .path(EurekaProtocol.FIELD_INSTANCE))).reason());
     }
 
     @Test
@@ -83,7 +87,29 @@ class EurekaV2IdentityTest {
         assertNull(identity.fromInstance(APP, invalid));
         invalid = raw.deepCopy();
         invalid.withObject(EurekaProtocol.FIELD_METADATA).put("otryxV2Application", "forged");
-        assertNull(identity.fromInstance(APP, invalid));
+        JsonNode forged = invalid;
+        assertEquals(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH,
+                assertThrows(RegistrySecurityException.class, () -> identity.fromInstance(APP, forged)).reason());
+    }
+
+
+    @Test
+    void downStatusCannotHideMalformedRoleOrForeignApplication() {
+        EurekaV2Identity identity = new EurekaV2Identity(APP.namespace());
+        JsonNode raw = MAPPER.valueToTree(identity.nativeRegistration(
+                provider("p1"), TOKEN, "127.0.0.1", 1, 9)).path(EurekaProtocol.FIELD_INSTANCE);
+        com.fasterxml.jackson.databind.node.ObjectNode badRole = raw.deepCopy();
+        badRole.put(EurekaProtocol.FIELD_STATUS, EurekaProtocol.STATUS_DOWN);
+        badRole.withObject(EurekaProtocol.FIELD_METADATA).put("otryxV2Role", "FORGED");
+        assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                assertThrows(RegistrySecurityException.class,
+                        () -> identity.fromInstance(APP, badRole)).reason());
+        com.fasterxml.jackson.databind.node.ObjectNode foreign = raw.deepCopy();
+        foreign.put(EurekaProtocol.FIELD_STATUS, EurekaProtocol.STATUS_DOWN);
+        foreign.withObject(EurekaProtocol.FIELD_METADATA).put("otryxV2Application", "foreign");
+        assertEquals(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH,
+                assertThrows(RegistrySecurityException.class,
+                        () -> identity.fromInstance(APP, foreign)).reason());
     }
 
     @Test
@@ -100,14 +126,14 @@ class EurekaV2IdentityTest {
     void factoryRequiresExternalTrustedMetadataStoreEvenWhenEurekaEndpointExists() {
         EurekaApplicationRegistryFactory factory = new EurekaApplicationRegistryFactory();
         assertThrows(IllegalArgumentException.class,
-                () -> factory.create(new RegistryOptions(List.of("http://127.0.0.1:8761/eureka"),
+                () -> factory.create(RegistryOptions.trustedDevelopment(List.of("http://127.0.0.1:8761/eureka"),
                         APP.namespace(), Map.of())));
         assertThrows(IllegalArgumentException.class,
-                () -> factory.create(new RegistryOptions(List.of("http://127.0.0.1:8761/eureka"),
+                () -> factory.create(RegistryOptions.trustedDevelopment(List.of("http://127.0.0.1:8761/eureka"),
                         APP.namespace(), Map.of("eurekaMetadataBackend", "eureka",
                                 "eurekaMetadataEndpoints", "http://127.0.0.1:2379"))));
         assertThrows(IllegalArgumentException.class,
-                () -> factory.create(new RegistryOptions(List.of("http://127.0.0.1:8761/eureka"),
+                () -> factory.create(RegistryOptions.trustedDevelopment(List.of("http://127.0.0.1:8761/eureka"),
                         APP.namespace(), Map.of("eurekaMetadataBackend", "etcd"))));
     }
 

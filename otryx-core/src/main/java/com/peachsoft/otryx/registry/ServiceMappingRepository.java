@@ -22,7 +22,7 @@ import java.util.concurrent.CompletionStage;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/15 18:30
  */
-public interface ServiceMappingRepository {
+public interface ServiceMappingRepository extends RegistrySecuritySource {
 
     /**
      * 为真实应用实例原子申请所有权，废止同身份的前一个 generation。
@@ -75,9 +75,11 @@ public interface ServiceMappingRepository {
     default CompletionStage<ServiceMappingSnapshot> lookupVerified(ServiceMappingKey key) {
         Objects.requireNonNull(key, "key");
         return Objects.requireNonNull(lookup(key), "lookup result").thenApply(snapshot -> {
-            Objects.requireNonNull(snapshot, "lookup returned null");
+            if (snapshot == null) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+            }
             if (!key.equals(snapshot.key())) {
-                throw new IllegalArgumentException("Service mapping key mismatch");
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
             }
             return snapshot;
         });

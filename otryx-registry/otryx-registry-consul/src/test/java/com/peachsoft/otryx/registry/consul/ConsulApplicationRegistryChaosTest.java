@@ -47,7 +47,7 @@ class ConsulApplicationRegistryChaosTest {
                 "chaos-" + UUID.randomUUID().toString().substring(0, 8), "consumer");
         ApplicationInstance consumer = new ApplicationInstance("only-consumer",
                 application, ApplicationRole.CONSUMER, null, 0, null, Map.of());
-        RegistryOptions options = new RegistryOptions(List.of(endpoint), application.namespace(), Map.of(
+        RegistryOptions options = RegistryOptions.trustedDevelopment(List.of(endpoint), application.namespace(), Map.of(
                 "consulTtlSeconds", "10",
                 "consulHeartbeatSeconds", "1",
                 "consulPollIntervalMillis", Integer.toString(POLL_INTERVAL_MILLIS),

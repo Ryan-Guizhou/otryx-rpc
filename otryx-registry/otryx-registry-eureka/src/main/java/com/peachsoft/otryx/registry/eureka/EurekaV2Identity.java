@@ -5,6 +5,8 @@ import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -168,19 +170,13 @@ final class EurekaV2Identity {
      */
     ApplicationInstance fromInstance(ApplicationKey application, JsonNode input) {
         requireNamespace(application);
-        if (!EurekaProtocol.STATUS_UP.equals(input.path(EurekaProtocol.FIELD_STATUS).asText())) {
-            return null;
-        }
-        String override = input.path(EurekaProtocol.FIELD_OVERRIDDEN_STATUS).asText("");
-        if (EurekaProtocol.STATUS_DOWN.equals(override)
-                || EurekaProtocol.STATUS_OUT_OF_SERVICE.equals(override)) {
-            return null;
-        }
         Map<String, String> meta = readMeta(input.path(EurekaProtocol.FIELD_METADATA));
-        if (!V2.equals(meta.get(META_VERSION))
-                || !application.namespace().equals(meta.get(META_NAMESPACE))
+        if (!V2.equals(meta.get(META_VERSION))) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+        }
+        if (!application.namespace().equals(meta.get(META_NAMESPACE))
                 || !application.applicationName().equals(meta.get(META_APPLICATION))) {
-            return null;
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
         }
         try {
             String token = meta.get(META_TOKEN);
@@ -189,7 +185,7 @@ final class EurekaV2Identity {
             if (!validToken(token)
                     || !expected.equals(input.path(EurekaProtocol.FIELD_INSTANCE_ID).asText())
                     || !appName(application).equalsIgnoreCase(input.path(EurekaProtocol.FIELD_APP).asText())) {
-                return null;
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
             }
             ApplicationRole role = ApplicationRole.valueOf(meta.get(META_ROLE));
             String revision = meta.get(META_REVISION);
@@ -212,7 +208,7 @@ final class EurekaV2Identity {
                 endpoint = new RpcEndpoint(host, port);
             } else if (port != NO_RPC_PORT || weight != 0 || !revision.isEmpty()
                     || !EurekaProtocol.SECURE_PORT_DISABLED.equals(enabled)) {
-                return null;
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
             }
             Map<String, String> attrs = new HashMap<>();
             for (Map.Entry<String, String> entry : meta.entrySet()) {
@@ -220,16 +216,28 @@ final class EurekaV2Identity {
                     attrs.put(entry.getKey().substring(ATTR_PREFIX.length()), entry.getValue());
                 }
             }
-            return new ApplicationInstance(instanceId, application, role, endpoint, weight,
+            ApplicationInstance decoded = new ApplicationInstance(instanceId, application, role, endpoint, weight,
                     role.providesRpc() ? revision : null, attrs);
+            if (!EurekaProtocol.STATUS_UP.equals(input.path(EurekaProtocol.FIELD_STATUS).asText())) {
+                return null;
+            }
+            String override = input.path(EurekaProtocol.FIELD_OVERRIDDEN_STATUS).asText("");
+            if (EurekaProtocol.STATUS_DOWN.equals(override)
+                    || EurekaProtocol.STATUS_OUT_OF_SERVICE.equals(override)) {
+                return null;
+            }
+            return decoded;
         } catch (IllegalArgumentException | NullPointerException malformed) {
-            return null;
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
         }
     }
 
     private static Map<String, String> readMeta(JsonNode json) {
-        if (!json.isObject() || json.size() > MAX_META_KEYS) {
-            return Map.of();
+        if (!json.isObject()) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+        }
+        if (json.size() > MAX_META_KEYS) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
         }
         Map<String, String> values = new HashMap<>();
         var entries = json.fields();
@@ -237,7 +245,7 @@ final class EurekaV2Identity {
             Map.Entry<String, JsonNode> entry = entries.next();
             if (!metaKey(entry.getKey()) || !entry.getValue().isValueNode()
                     || !fits(entry.getValue().asText(), MAX_META_VALUE_BYTES)) {
-                return Map.of();
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
             }
             values.put(entry.getKey(), entry.getValue().asText());
         }

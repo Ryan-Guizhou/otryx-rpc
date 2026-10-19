@@ -13,7 +13,7 @@ import java.util.concurrent.CompletionStage;
  * @Version 1.0.0
  * @CreateTime 2026/10/15 17:48
  */
-public interface ApplicationRegistrar {
+public interface ApplicationRegistrar extends RegistrySecuritySource {
 
     /**
      * 发布或更新一个应用成员。

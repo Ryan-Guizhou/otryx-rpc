@@ -5,8 +5,6 @@ otryx:
       endpoints: ${EUREKA_ENDPOINT:http://127.0.0.1:8761/eureka}
       namespace: example
       eureka:
-        username: ${EUREKA_USERNAME:}
-        password: ${EUREKA_PASSWORD:}
         lease-seconds: 30
         heartbeat-seconds: 10
         poll-interval-millis: 1000

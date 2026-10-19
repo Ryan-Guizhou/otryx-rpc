@@ -4,6 +4,7 @@ import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ServiceInstance;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
 import com.peachsoft.otryx.registry.RegistrySubscription;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.VerifiedProviderSnapshot;
 import java.util.Map;
@@ -42,7 +43,10 @@ final class ServiceDirectory implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicReference<DirectorySnapshot> state =
             new AtomicReference<>(new DirectorySnapshot(
-                    EMPTY, 0L, false, false, 0L, 0L));
+                    null, EMPTY, 0L, false, false, 0L, 0L));
+    private final ApplicationServiceResolver resolver;
+    private final ServiceMappingKey key;
+    private final String expectedSchema;
     private final RpcDirectoryFreshnessOptions freshnessOptions;
     private final LongSupplier monotonicClock;
     private final RegistrySubscription subscription;
@@ -75,9 +79,9 @@ final class ServiceDirectory implements AutoCloseable {
             RpcDirectoryFreshnessOptions freshnessOptions,
             ScheduledExecutorService scheduler,
             LongSupplier monotonicClock) {
-        Objects.requireNonNull(resolver, "resolver");
-        Objects.requireNonNull(key, "key");
-        Objects.requireNonNull(expectedSchema, "expectedSchema");
+        this.resolver = Objects.requireNonNull(resolver, "resolver");
+        this.key = Objects.requireNonNull(key, "key");
+        this.expectedSchema = Objects.requireNonNull(expectedSchema, "expectedSchema");
         Objects.requireNonNull(scheduler, "scheduler");
         this.freshnessOptions = Objects.requireNonNull(freshnessOptions, "freshnessOptions");
         this.monotonicClock = Objects.requireNonNull(monotonicClock, "monotonicClock");
@@ -96,6 +100,8 @@ final class ServiceDirectory implements AutoCloseable {
                                 } else {
                                     markUnavailable();
                                 }
+                            } catch (RegistrySecurityException rejected) {
+                                markUnavailable();
                             } finally {
                                 refreshing.set(false);
                             }
@@ -114,22 +120,26 @@ final class ServiceDirectory implements AutoCloseable {
     }
 
     private void publishVerified(ServiceMappingKey key, VerifiedProviderSnapshot candidate) {
+        if (!resolver.isSnapshotUsable(key, expectedSchema, candidate)) {
+            return;
+        }
         long now = monotonicClock.getAsLong();
         ServiceInstance[] endpoints = candidate.providers().stream()
                 .map(instance -> verifiedEndpoint(key, instance))
                 .toArray(ServiceInstance[]::new);
         state.updateAndGet(current -> {
-            if (closed.get() || candidate.mappingRevision() < current.revision()) {
+            if (closed.get() || !resolver.isSnapshotUsable(key, expectedSchema, candidate)
+                    || candidate.mappingRevision() < current.revision()) {
                 return current;
             }
-            return new DirectorySnapshot(endpoints, candidate.mappingRevision(), true, false, now, 0L);
+            return new DirectorySnapshot(candidate, endpoints, candidate.mappingRevision(), true, false, now, 0L);
         });
     }
 
     private static ServiceInstance verifiedEndpoint(ServiceMappingKey key, ApplicationInstance instance) {
         String id = instance.application().namespace() + "/"
                 + instance.application().applicationName() + "/" + instance.instanceId();
-        return new ServiceInstance(id, key.serviceKey(),
+        return new ServiceInstance(id, instance.application(), key.serviceKey(),
                 instance.rpcEndpoint(), instance.weight(), Map.of());
     }
 
@@ -139,43 +149,55 @@ final class ServiceDirectory implements AutoCloseable {
             if (closed.get() || !current.initialized() || current.unhealthy()) {
                 return current;
             }
-            return new DirectorySnapshot(current.instances(), current.revision(),
+            return new DirectorySnapshot(current.candidate(), current.instances(), current.revision(),
                     true, true, current.lastSuccessfulSyncNanos(), now);
         });
     }
 
     Status status() {
+        return selection().status();
+    }
+
+    ServiceInstance[] snapshot() {
+        return selection().instances();
+    }
+
+    Selection selection() {
         if (closed.get()) {
-            return Status.CLOSED;
+            return new Selection(null, EMPTY, Status.CLOSED);
         }
         DirectorySnapshot current = state.get();
+        if (!resolver.isSnapshotUsable(key, expectedSchema, current.candidate()) || !current.initialized()) {
+            return new Selection(current.candidate(), EMPTY, Status.NOT_READY);
+        }
+        Status status = status(current);
+        return new Selection(current.candidate(), status == Status.STALE ? EMPTY : current.instances(), status);
+    }
+
+    boolean isUsable(Selection selected) {
+        if (closed.get()) {
+            return false;
+        }
+        // 必须校验选中端点来自的原始候选；新候选不能为旧数组补发信任凭据。
+        if (!resolver.isSnapshotUsable(key, expectedSchema, selected.candidate())) {
+            return false;
+        }
+        DirectorySnapshot current = state.get();
+        return current.candidate() == selected.candidate() && status(current) != Status.STALE;
+    }
+
+    private Status status(DirectorySnapshot current) {
         if (!current.initialized()) {
             return Status.NOT_READY;
         }
         if (!current.unhealthy()) {
             return Status.HEALTHY;
         }
-        if (monotonicClock.getAsLong() - current.unhealthySinceNanos()
-                        < freshnessOptions.maxStaleness().toNanos()) {
-            return Status.LAST_KNOWN_GOOD;
-        }
-        return Status.STALE;
+        return monotonicClock.getAsLong() - current.unhealthySinceNanos()
+                < freshnessOptions.maxStaleness().toNanos() ? Status.LAST_KNOWN_GOOD : Status.STALE;
     }
 
-    ServiceInstance[] snapshot() {
-        if (closed.get()) {
-            return EMPTY;
-        }
-        DirectorySnapshot current = state.get();
-        if (!current.initialized()) {
-            return EMPTY;
-        }
-        if (!current.unhealthy()
-                || monotonicClock.getAsLong() - current.unhealthySinceNanos()
-                        < freshnessOptions.maxStaleness().toNanos()) {
-            return current.instances();
-        }
-        return EMPTY;
+    record Selection(VerifiedProviderSnapshot candidate, ServiceInstance[] instances, Status status) {
     }
 
     long lastSuccessfulSyncNanos() {
@@ -190,6 +212,7 @@ final class ServiceDirectory implements AutoCloseable {
     }
 
     private record DirectorySnapshot(
+            VerifiedProviderSnapshot candidate,
             ServiceInstance[] instances,
             long revision,
             boolean initialized,

@@ -1,11 +1,9 @@
 package com.peachsoft.otryx.spring.runtime;
 
 import com.peachsoft.otryx.api.RpcEndpoint;
-import com.peachsoft.otryx.codec.RpcCodec;
-import com.peachsoft.otryx.codec.RpcCodecIds;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
+import com.peachsoft.otryx.api.RpcAuthorizationDecision;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
-import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
-import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
 import com.peachsoft.otryx.core.ApplicationMembershipCoordinator;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.RpcDirectoryFreshnessOptions;
@@ -24,13 +22,17 @@ import com.peachsoft.otryx.observability.RpcTracingBridge;
 import com.peachsoft.otryx.proxy.ProxyFactory;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
 import com.peachsoft.otryx.spring.autoconfigure.OtryxRpcProperties;
 import com.peachsoft.otryx.transport.RpcTransportFactory;
+import com.peachsoft.otryx.transport.RpcTransportClient;
+import com.peachsoft.otryx.transport.RpcTransportServer;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
@@ -49,6 +51,7 @@ import org.springframework.beans.factory.ObjectProvider;
  */
 public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(OtryxRpcRuntimeCoordinator.class);
+    private static final int MAX_COMPLETION_FAILURE_DEPTH = 32;
 
     private final ApplicationRegistry registry;
     private final ApplicationMembershipCoordinator membership;
@@ -68,10 +71,16 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
             tracingBridgeProvider;
     private final ObjectProvider<RpcAuthorizer> authorizerProvider;
     private final OtryxRpcProperties properties;
+    private final RpcSecurityProfile securityProfile;
+    private OtryxRpcClient.Builder preparedClientBuilder;
+    private OtryxRpcServer.Builder preparedServerBuilder;
+    private RpcTransportClient preparedClientTransport;
+    private RpcTransportServer preparedServerTransport;
     private volatile OtryxRpcClient client;
     private volatile OtryxRpcServer server;
     private volatile boolean providerAutoStart;
     private boolean closed;
+    private boolean startupFailed;
     private final CompletableFuture<Void> closeCompletion = new CompletableFuture<>();
     private Thread closeOwner;
     private long closeDeadlineNanos;
@@ -144,46 +153,64 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
         this.properties = Objects.requireNonNull(
                 properties,
                 "properties");
-        validateEffectiveNetworkSecurity();
+        securityProfile = Objects.requireNonNull(properties.getSecurityProfile(), "securityProfile");
+        if (securityProfile == RpcSecurityProfile.UNSPECIFIED) {
+            throw new IllegalStateException("An explicit otryx.rpc.security-profile is required");
+        }
+        if (securityProfile == RpcSecurityProfile.NETWORK_MTLS) {
+            prepareNetworkBuilders();
+        }
     }
 
-    /**
-     * 检查最终注入的安全运行对象，防止自定义 Spring Bean 绕过 Profile。
-     */
-    private void validateEffectiveNetworkSecurity() {
-        if (!properties.isEnabled()
-                || properties.getSecurityProfile()
-                != OtryxRpcProperties.SecurityProfile.NETWORK_MTLS) {
+    /** 准备实际 Transport 后验证两个最终 Builder，任何一端都不能提前激活成员。 */
+    private void prepareNetworkBuilders() {
+        RpcAuthorizer policy = properties.getServer().isEnabled() ? authorizer() : null;
+        try {
+            if (properties.getClient().isEnabled()) {
+                preparedClientTransport = transportFactory.createClient(transportOptions.withObserver(observer()));
+                preparedClientBuilder = clientBuilder(preparedClientTransport);
+            }
+            if (properties.getServer().isEnabled()) {
+                preparedServerTransport = transportFactory.createServer(transportOptions.withObserver(observer()));
+                preparedServerBuilder = serverBuilder(preparedServerTransport, policy);
+            }
+            validatePreparedBuilders();
+        } catch (RuntimeException | Error failure) {
+            closePreparedTransports();
+            throw failure;
+        }
+    }
+
+    private void validatePreparedBuilders() {
+        if (preparedServerBuilder != null) {
+            preparedServerBuilder.validate();
+        }
+        if (preparedClientBuilder != null) {
+            preparedClientBuilder.validate();
+        }
+    }
+
+    /** 只关闭尚未交给 Core 的准备对象；默认 Adapter 此时没有监听、连接或工作线程。 */
+    private void closePreparedTransports() {
+        RpcTransportClient pendingClient = preparedClientTransport;
+        RpcTransportServer pendingServer = preparedServerTransport;
+        preparedClientTransport = null;
+        preparedServerTransport = null;
+        preparedClientBuilder = null;
+        preparedServerBuilder = null;
+        closePrepared(pendingClient);
+        closePrepared(pendingServer);
+    }
+
+    private static void closePrepared(AutoCloseable resource) {
+        if (resource == null) {
             return;
         }
-        if (!transportOptions.security().mutualTls()) {
-            throw new IllegalStateException(
-                    "Invalid otryx.rpc.transport.security.mode: "
-                            + "effective transport must use MTLS");
-        }
-        // 未声明统一安全策略的第三方 Codec 不可在网络 Profile 中协商。
-        if (!codecRegistry.supportedCodecIds()
-                .equals(java.util.Set.of(RpcCodecIds.FORY_NATIVE))
-                || !transportOptions.codecIds()
-                        .equals(java.util.Set.of(RpcCodecIds.FORY_NATIVE))) {
-            throw new IllegalStateException(
-                    "Invalid otryx.rpc.codec.fory.mode: "
-                            + "NETWORK_MTLS supports only audited Fory Native codec");
-        }
-        RpcCodec effective;
         try {
-            effective = codecRegistry.require(RpcCodecIds.FORY_NATIVE);
-        } catch (IllegalArgumentException error) {
-            throw new IllegalStateException(
-                    "Invalid otryx.rpc.codec.fory.mode: "
-                            + "effective registry must contain Fory codec", error);
-        }
-        if (!(effective instanceof ForyRpcCodec fory)
-                || fory.securityOptions().mode()
-                != ForyRpcSecurityOptions.Mode.STRICT_ALLOWLIST) {
-            throw new IllegalStateException(
-                    "Invalid otryx.rpc.codec.fory.mode: "
-                            + "effective Fory codec must use STRICT_ALLOWLIST");
+            resource.close();
+        } catch (Exception failure) {
+            LOGGER.warn("Spring RPC prepared transport cleanup failed. errorType={}",
+                    failure.getClass().getSimpleName());
         }
     }
 
@@ -196,6 +223,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
      *
      * @return 已确认应用成员注册的 Consumer 运行时
      * @throws IllegalStateException 已关闭、Consumer 被禁用或成员注册失败时抛出
+     * @throws RegistrySecurityException 成员注册遭到明确安全拒绝时保留固定原因，不携带外部异常链
      */
     public synchronized OtryxRpcClient client() {
         requireOpen();
@@ -230,6 +258,9 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     private void requireOpen() {
         if (closed) {
             throw new IllegalStateException("Spring RPC runtime is closed");
+        }
+        if (startupFailed) {
+            throw new IllegalStateException("Spring RPC runtime startup failed; create a new application context");
         }
     }
 
@@ -272,13 +303,13 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 : Optional.empty();
     }
 
-    private OtryxRpcClient createClient() {
+    private OtryxRpcClient.Builder clientBuilder(RpcTransportClient transport) {
         OtryxRpcProperties.Client clientProperties = properties.getClient();
-        OtryxRpcClient created = OtryxRpcClient.builder()
+        return OtryxRpcClient.builder()
+                .securityProfile(securityProfile)
                 .applicationControlPlane(resolver, membership, identity.application().namespace())
                 .codecRegistry(codecRegistry)
-                .transportClient(transportFactory.createClient(
-                        transportOptions.withObserver(observer())))
+                .transportClient(transport)
                 .loadBalancer(loadBalancer)
                 .proxyFactory(proxyFactory)
                 .timeout(clientProperties.getTimeout())
@@ -288,10 +319,30 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .resilienceOptions(resilienceOptions)
                 .observer(observer())
                 .metadataPropagator(metadataPropagator())
-                .tracingBridge(tracingBridge())
-                .build();
+                .tracingBridge(tracingBridge());
+    }
+
+    private OtryxRpcClient createClient() {
+        RpcTransportClient transport = preparedClientTransport;
+        OtryxRpcClient created;
+        try {
+            if (preparedClientBuilder != null) {
+                validatePreparedBuilders();
+                OtryxRpcClient.Builder builder = preparedClientBuilder;
+                preparedClientBuilder = null;
+                preparedClientTransport = null;
+                created = builder.build();
+            } else {
+                transport = transportFactory.createClient(transportOptions.withObserver(observer()));
+                created = clientBuilder(transport).build();
+            }
+        } catch (RuntimeException | Error failure) {
+            failStartup(transport);
+            throw failure;
+        }
         Duration controlTimeout = properties.getRegistry().getControlPlaneTimeout();
         boolean interrupted = false;
+        RegistrySecurityException securityFailure = null;
         try {
             created.membershipReady().toCompletableFuture()
                     .get(controlTimeout.toNanos(), TimeUnit.NANOSECONDS);
@@ -299,9 +350,12 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
         } catch (InterruptedException failure) {
             interrupted = true;
         } catch (ExecutionException | TimeoutException failure) {
+            securityFailure = membershipSecurityFailure(failure);
             LOGGER.warn("Spring RPC Consumer membership failed. errorType={}",
                     failure.getClass().getSimpleName());
         }
+        // 先禁止同步重入或后续懒创建，再清理尚未使用的另一侧准备对象。
+        failStartup(null);
         // 尚未发布的 Client 同样拥有 Transport/Executor，不能依赖 Bean 销毁回调回收。
         try {
             created.shutdown(new RpcShutdownOptions(controlTimeout)).toCompletableFuture()
@@ -316,17 +370,32 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 Thread.currentThread().interrupt();
             }
         }
+        if (securityFailure != null) {
+            throw securityFailure;
+        }
         throw new IllegalStateException("RPC Consumer application membership was not acknowledged within "
                 + "otryx.rpc.registry.control-plane-timeout; verify registry access and application identity");
     }
 
-    private OtryxRpcServer createServer() {
+    /** 只解包标准异步包装；保留稳定分类，不复制 SDK、业务异常或包装层的敏感信息。 */
+    private static RegistrySecurityException membershipSecurityFailure(Throwable failure) {
+        Throwable current = failure;
+        for (int depth = 0; depth < MAX_COMPLETION_FAILURE_DEPTH
+                && (current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null && current.getCause() != current; depth++) {
+            current = current.getCause();
+        }
+        return current instanceof RegistrySecurityException rejected
+                ? new RegistrySecurityException(rejected.reason()) : null;
+    }
+
+    private OtryxRpcServer.Builder serverBuilder(RpcTransportServer transport, RpcAuthorizer policy) {
         OtryxRpcProperties.Server serverProperties = properties.getServer();
         return OtryxRpcServer.builder()
+                .securityProfile(securityProfile)
                 .applicationMembership(membership)
                 .codecRegistry(codecRegistry)
-                .transportServer(transportFactory.createServer(
-                        transportOptions.withObserver(observer())))
+                .transportServer(transport)
                 .bindEndpoint(new RpcEndpoint(
                         serverProperties.getHost(),
                         serverProperties.getPort()))
@@ -338,38 +407,66 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .drainTimeout(serverProperties.getDrainTimeout())
                 .controlPlaneTimeout(serverProperties.getControlPlaneTimeout())
                 .executionOptions(executionOptions)
-                .authorizer(authorizer())
+                .authorizer(policy)
+                .maxAuthorizationGrantLifetime(serverProperties.getAuthorization().getMaxGrantLifetime())
                 .maxPendingAuthorizations(serverProperties.getAuthorization().getMaxPending())
                 .maxPendingAuthorizationBytes(
                         serverProperties.getAuthorization().getMaxBufferedRequestBytes())
                 .authorizationTimeout(serverProperties.getAuthorization().getTimeout())
                 .observer(observer())
                 .metadataPropagator(metadataPropagator())
-                .tracingBridge(tracingBridge())
-                .build();
+                .tracingBridge(tracingBridge());
+    }
+
+    private OtryxRpcServer createServer() {
+        RpcTransportServer transport = preparedServerTransport;
+        try {
+            if (preparedServerBuilder != null) {
+                validatePreparedBuilders();
+                OtryxRpcServer.Builder builder = preparedServerBuilder;
+                preparedServerBuilder = null;
+                preparedServerTransport = null;
+                return builder.build();
+            }
+            transport = transportFactory.createServer(transportOptions.withObserver(observer()));
+            return serverBuilder(transport, authorizer()).build();
+        } catch (RuntimeException | Error failure) {
+            failStartup(transport);
+            throw failure;
+        }
     }
 
     /**
-     * Spring 注入的业务授权不能绕过 NETWORK_MTLS 的认证前置条件。
+     * 在协调器监视器内终结本次启动，关闭尚未交付给 Core 的所有权。
      *
-     * @return 网络身份强制校验后组合的非阻塞策略
+     * <p>失败的 Builder 不可重建已关闭 Transport，也不可隐式重新注册成员；
+     * 已创建的其他运行时仍由正常 close 路径按既有总预算清理。
+     *
+     * @param attempted 当前构建失败、尚未交给 Core 的 Transport；成员回滚时为 null
      */
+    private void failStartup(AutoCloseable attempted) {
+        startupFailed = true;
+        if (attempted == preparedClientTransport) {
+            preparedClientTransport = null;
+        }
+        if (attempted == preparedServerTransport) {
+            preparedServerTransport = null;
+        }
+        closePrepared(attempted);
+        closePreparedTransports();
+    }
+
+    /** 实际策略保持有限许可；NETWORK 缺失策略不能转换为可启动的拒绝替身。 */
     private RpcAuthorizer authorizer() {
-        if (properties.getSecurityProfile()
-                != OtryxRpcProperties.SecurityProfile.NETWORK_MTLS) {
-            return authorizerProvider.getIfAvailable(
-                    RpcAuthorizer::allowTrustedDevelopment);
-        }
-        // 仅验证客户端证书的身份不等于得到 ServiceKey/MethodId 授权。
-        // 网络 Profile 未声明业务授权 Bean 时拒绝全部请求，不自动信任 CA 角色。
         RpcAuthorizer policy = authorizerProvider.getIfAvailable();
-        if (policy == null) {
-            return context -> java.util.concurrent.CompletableFuture
-                    .completedFuture(false);
+        if (policy != null) {
+            return policy;
         }
-        return context -> context.peer().authenticated()
-                ? policy.authorize(context)
-                : java.util.concurrent.CompletableFuture.completedFuture(false);
+        if (securityProfile == RpcSecurityProfile.NETWORK_MTLS) {
+            throw new IllegalStateException("NETWORK_MTLS requires an explicit RpcAuthorizer bean");
+        }
+        return context -> CompletableFuture.completedFuture(
+                RpcAuthorizationDecision.allowUntil(context.maximumValidUntil()));
     }
 
     private static RpcProviderAdmissionOptions providerAdmissionOptions(
@@ -448,6 +545,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
             // closed 与运行时发布共用监视器；从此两端引用不再变化。
             closeCreatedRuntimes(client, server, options, deadlineNanos);
         } finally {
+            closePreparedTransports();
             synchronized (this) {
                 closeOwner = null;
             }

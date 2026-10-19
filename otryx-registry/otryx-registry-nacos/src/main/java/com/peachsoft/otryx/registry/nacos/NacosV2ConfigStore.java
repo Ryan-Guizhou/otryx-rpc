@@ -2,6 +2,9 @@ package com.peachsoft.otryx.registry.nacos;
 
 import com.alibaba.nacos.api.config.ConfigQueryResult;
 import com.alibaba.nacos.api.config.ConfigService;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
@@ -22,12 +25,22 @@ final class NacosV2ConfigStore {
     static final int MAX_CAS_ATTEMPTS = 12;
     private static final long CONFIG_TIMEOUT_MILLIS = 3000L;
 
+    private final RegistrySecurityDescriptor descriptor;
     private final ConfigService config;
     private final String group;
 
     NacosV2ConfigStore(ConfigService config, String group) {
+        this(config, group, RegistrySecurityDescriptor.unknown());
+    }
+
+    NacosV2ConfigStore(ConfigService config, String group, RegistrySecurityDescriptor descriptor) {
+        this.descriptor = Objects.requireNonNull(descriptor, "descriptor");
         this.config = Objects.requireNonNull(config, "config");
         this.group = Objects.requireNonNull(group, "group");
+    }
+
+    RegistrySecurityDescriptor securityDescriptor() {
+        return descriptor;
     }
 
     /** 从服务端获取数据和真正的 CAS MD5；没有服务端 MD5 的旧快照必须拒绝。 */
@@ -55,7 +68,7 @@ final class NacosV2ConfigStore {
         requireSize(value);
         String md5 = response.getMd5();
         if (md5 == null || !md5.matches("[0-9a-fA-F]{32}")) {
-            throw new IllegalStateException("Nacos Config did not return an authoritative CAS MD5");
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
         }
         return new Entry(value, md5);
     }
@@ -82,11 +95,16 @@ final class NacosV2ConfigStore {
 
     private static void requireSize(String content) {
         Objects.requireNonNull(content, "config content");
-        if (content.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG_BYTES) {
-            throw new IllegalArgumentException("Nacos Config metadata exceeds safe byte limit");
+        if (content.length() > MAX_CONFIG_BYTES
+                || content.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG_BYTES) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
         }
     }
 
     record Entry(String content, String md5) {
+        @Override
+        public String toString() {
+            return "NacosConfigEntry[present=" + (content != null) + ", authoritative=" + (md5 != null) + ']';
+        }
     }
 }

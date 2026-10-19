@@ -1,6 +1,7 @@
 package com.peachsoft.otryx.spring.autoconfigure;
 
 import com.peachsoft.otryx.observability.RpcSecurityMode;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
 import java.util.LinkedHashSet;
@@ -40,18 +41,8 @@ public class OtryxRpcProperties implements InitializingBean {
         OtryxRpcStartupDiagnostics.validateAndReport(this);
     }
 
-    /** RPC 安全部署意图，默认不允许隐式使用不安全连接。 */
-    public enum SecurityProfile {
-        /** 未指定安全意图。 */
-        UNSPECIFIED,
-        /** 明确隔离的开发或可信内网。 */
-        TRUSTED_DEVELOPMENT,
-        /** 需要双向 TLS 和严格 DTO 白名单的网络部署。 */
-        NETWORK_MTLS
-    }
-
     private boolean enabled = true;
-    private SecurityProfile securityProfile = SecurityProfile.UNSPECIFIED;
+    private RpcSecurityProfile securityProfile = RpcSecurityProfile.UNSPECIFIED;
     private final Registry registry = new Registry();
     private final Transport transport = new Transport();
     private final Client client = new Client();
@@ -81,7 +72,7 @@ public class OtryxRpcProperties implements InitializingBean {
      *
      * @return 部署安全模式
      */
-    public SecurityProfile getSecurityProfile() {
+    public RpcSecurityProfile getSecurityProfile() {
         return securityProfile;
     }
 
@@ -90,7 +81,7 @@ public class OtryxRpcProperties implements InitializingBean {
      *
      * @param value 部署安全模式
      */
-    public void setSecurityProfile(SecurityProfile value) {
+    public void setSecurityProfile(RpcSecurityProfile value) {
         securityProfile = value;
     }
 
@@ -282,6 +273,8 @@ public class OtryxRpcProperties implements InitializingBean {
         private final Nacos nacos = new Nacos();
         private final Consul consul = new Consul();
         private final Eureka eureka = new Eureka();
+        private final OtryxRpcRegistrySecurityProperties security = new OtryxRpcRegistrySecurityProperties();
+        private OtryxRpcRegistrySecurityProperties metadataSecurity;
 
         /**
          * 返回注册中心 SPI 名称。
@@ -438,6 +431,33 @@ public class OtryxRpcProperties implements InitializingBean {
         public Eureka getEureka() {
             return eureka;
         }
+
+        /**
+         * 返回成员访问链的独立安全配置。
+         *
+         * @return 有类型 TLS 与凭据配置
+         */
+        public OtryxRpcRegistrySecurityProperties getSecurity() {
+            return security;
+        }
+
+        /**
+         * 返回 Eureka 外置元数据链的独立安全配置。
+         *
+         * @return 未配置时为 null，不继承成员链凭据
+         */
+        public OtryxRpcRegistrySecurityProperties getMetadataSecurity() {
+            return metadataSecurity;
+        }
+
+        /**
+         * 设置 Eureka 外置元数据链的安全配置，其他后端拒绝此配置。
+         *
+         * @param value 独立元数据安全配置
+         */
+        public void setMetadataSecurity(OtryxRpcRegistrySecurityProperties value) {
+            metadataSecurity = value;
+        }
     }
 
     /**
@@ -448,7 +468,6 @@ public class OtryxRpcProperties implements InitializingBean {
      * @CreateTime 2026/10/10 18:00
      */
     public static class Consul {
-        private String token = "";
         private String datacenter = "";
         private String enterpriseNamespace = "";
         private long ttlSeconds = 30;
@@ -460,18 +479,6 @@ public class OtryxRpcProperties implements InitializingBean {
         public Consul() {
         }
 
-        /**
-     * 返回相应配置或运行状态。
-     *
-     * @return Consul ACL token
-     */
-        public String getToken() { return token; }
-        /**
-     * 设置对应配置项。
-     *
-     * @param value Consul ACL token
-     */
-        public void setToken(String value) { this.token = value; }
         /**
      * 返回相应配置或运行状态。
      *
@@ -554,8 +561,6 @@ public class OtryxRpcProperties implements InitializingBean {
      * @CreateTime 2026/10/10 18:00
      */
     public static class Eureka {
-        private String username = "";
-        private String password = "";
         private long leaseSeconds = 30;
         private long heartbeatSeconds = 10;
         private long pollIntervalMillis = 1000;
@@ -569,30 +574,6 @@ public class OtryxRpcProperties implements InitializingBean {
         public Eureka() {
         }
 
-        /**
-     * 返回相应配置或运行状态。
-     *
-     * @return Eureka Basic Auth 用户名
-     */
-        public String getUsername() { return username; }
-        /**
-     * 设置对应配置项。
-     *
-     * @param value Eureka Basic Auth 用户名
-     */
-        public void setUsername(String value) { this.username = value; }
-        /**
-     * 返回相应配置或运行状态。
-     *
-     * @return Eureka Basic Auth 密码
-     */
-        public String getPassword() { return password; }
-        /**
-     * 设置对应配置项。
-     *
-     * @param value Eureka Basic Auth 密码
-     */
-        public void setPassword(String value) { this.password = value; }
         /**
      * 返回相应配置或运行状态。
      *
@@ -710,8 +691,6 @@ public class OtryxRpcProperties implements InitializingBean {
 
         private String group = "OTRYX_RPC";
         private String cluster = "DEFAULT";
-        private String username = "";
-        private String password = "";
         private String memberHost = "";
 
         /**
@@ -750,41 +729,9 @@ public class OtryxRpcProperties implements InitializingBean {
             this.cluster = cluster;
         }
 
-        /**
-         * 返回 Nacos 用户名。
-         *
-         * @return Nacos 用户名
-         */
-        public String getUsername() {
-            return username;
-        }
 
-        /**
-         * 设置 Nacos 用户名。
-         *
-         * @param username Nacos 用户名
-         */
-        public void setUsername(String username) {
-            this.username = username;
-        }
 
-        /**
-         * 返回 Nacos 密码。
-         *
-         * @return Nacos 密码
-         */
-        public String getPassword() {
-            return password;
-        }
 
-        /**
-         * 设置 Nacos 密码。
-         *
-         * @param password Nacos 密码
-         */
-        public void setPassword(String password) {
-            this.password = password;
-        }
 
         /**
          * 获取 Nacos Consumer 的真实 Member Host。
@@ -1159,12 +1106,22 @@ public class OtryxRpcProperties implements InitializingBean {
         public Security() {
         }
 
+        /**
+         * 返回由部署方维护的应用身份绑定。
+         *
+         * @return 证书绑定列表；本地应用由成员身份决定
+         */
+        public OtryxRpcIdentityProperties getIdentity() {
+            return identity;
+        }
+
         private RpcSecurityMode mode =
                 RpcSecurityMode.PLAINTEXT;
         private String certificatePath = "";
         private String privateKeyPath = "";
         private String trustCertificatePath = "";
         private boolean hostnameVerification = true;
+        private final OtryxRpcIdentityProperties identity = new OtryxRpcIdentityProperties();
         private Duration handshakeTimeout =
                 Duration.ofSeconds(3);
         private Duration reloadInterval =
@@ -1835,12 +1792,32 @@ public class OtryxRpcProperties implements InitializingBean {
      * @CreateTime 2026/10/13 13:43
      */
     public static class Authorization {
+        private static final Duration DEFAULT_MAX_GRANT_LIFETIME = Duration.ofSeconds(30);
+        private Duration maxGrantLifetime = DEFAULT_MAX_GRANT_LIFETIME;
         private int maxPending = 1024;
         private long maxBufferedRequestBytes = 64L * 1024L * 1024L;
         private Duration timeout = Duration.ofSeconds(3);
 
         /** 创建 Provider 授权配置。 */
         public Authorization() {
+        }
+
+        /**
+         * 返回从原始接收时间计算的单次许可最长有效期。
+         *
+         * @return 默认 30 秒，必须为正且不超过一天
+         */
+        public Duration getMaxGrantLifetime() {
+            return maxGrantLifetime;
+        }
+
+        /**
+         * 设置有限授权许可的最长有效期，不改变等待策略结果的超时。
+         *
+         * @param value 正数且不超过一天的有效期
+         */
+        public void setMaxGrantLifetime(Duration value) {
+            maxGrantLifetime = value;
         }
 
         /**

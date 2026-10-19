@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.compare.otryx;
 
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.RpcEndpoint;
@@ -101,6 +102,7 @@ public final class OtryxComparisonMain {
         RpcCodecRegistry codecs = RpcCodecRegistry.fromSpi();
         try (ControlPlane controlPlane = new ControlPlane(PROVIDER_APPLICATION);
              OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                      .applicationMembership(controlPlane.membership)
                      .transportServer(transport.createServer(options()))
                      .codecRegistry(codecs)
@@ -138,6 +140,7 @@ public final class OtryxComparisonMain {
         RpcTransportFactory transport = transportFactory();
         try (ControlPlane controlPlane = new ControlPlane(CONSUMER_APPLICATION);
              OtryxRpcClient client = OtryxRpcClient.builder()
+                .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                      .applicationControlPlane(controlPlane.resolver, controlPlane.membership, controlPlane.namespace)
                      .transportClient(transport.createClient(options()))
                      .codecRegistry(RpcCodecRegistry.fromSpi())
@@ -188,7 +191,7 @@ public final class OtryxComparisonMain {
             String endpoint = requiredEnvironment(ENV_REGISTRY_ENDPOINT);
             registry = ExtensionLoader.getLoader(ApplicationRegistryFactory.class)
                     .getExtension(EtcdApplicationRegistryFactory.EXTENSION_NAME)
-                    .create(new RegistryOptions(List.of(endpoint), namespace, Map.of()));
+                    .create(RegistryOptions.trustedDevelopment(List.of(endpoint), namespace, Map.of()));
             if (!(registry instanceof ApplicationMetadataBackend metadata)) {
                 registry.close();
                 throw new IllegalStateException("Comparison application registry has no metadata backend");
