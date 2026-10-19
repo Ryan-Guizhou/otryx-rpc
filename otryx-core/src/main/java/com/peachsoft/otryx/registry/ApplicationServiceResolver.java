@@ -67,7 +67,7 @@ public final class ApplicationServiceResolver implements AutoCloseable {
      * @param mappingCache 本地映射控制面缓存
      * @param discovery 应用目录查询 SPI
      * @param manifestCache Manifest 本地缓存
-     * @param maxStale 解析失败后允许沿用已验证路由的时长
+     * @param maxStale 解析失败后允许沿用已验证路由的正时长，必须可转换为纳秒
      */
     public ApplicationServiceResolver(
             ServiceMappingCache mappingCache,
@@ -83,7 +83,7 @@ public final class ApplicationServiceResolver implements AutoCloseable {
      * @param mappingCache 映射缓存
      * @param discovery 应用目录
      * @param manifestCache Manifest 缓存
-     * @param maxStale 最长 Last-Known-Good 时长
+     * @param maxStale 最长 Last-Known-Good 正时长
      * @param clock 单调纳秒时钟
      */
     public ApplicationServiceResolver(
@@ -97,8 +97,8 @@ public final class ApplicationServiceResolver implements AutoCloseable {
         this.manifestCache = Objects.requireNonNull(manifestCache, "manifestCache");
         this.clock = Objects.requireNonNull(clock, "clock");
         Objects.requireNonNull(maxStale, "maxStale");
-        if (maxStale.isNegative()) {
-            throw new IllegalArgumentException("maxStale cannot be negative");
+        if (maxStale.isZero() || maxStale.isNegative()) {
+            throw new IllegalArgumentException("maxStale must be positive");
         }
         try {
             this.staleNanos = maxStale.toNanos();

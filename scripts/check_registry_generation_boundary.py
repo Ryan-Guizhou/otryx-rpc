@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Select rolling pairs from concrete Starter registry wiring, failing on ambiguity.
+"""Require application registry wiring on both sides of the five-pair rolling gate.
 
-Core may contain both generations during the staged V2 migration. Only the
-factory and Consumer/Provider wiring used by the runnable Starter determine
-which control plane a checkout actually uses. This is a narrow migration gate,
-not a Java parser or proof of general protocol compatibility.
+The factory and Consumer/Provider wiring of the runnable Starter must agree.
+Historical interface-registry baselines are rejected before starting a process.
+This is a source wiring guard, not proof of RPC or backend interoperability.
 """
 
 from __future__ import annotations
@@ -61,11 +60,15 @@ def main() -> int:
     try:
         baseline = registry_generation(args.baseline)
         current = registry_generation(args.current)
+        for label, generation in (("baseline", baseline), ("current", current)):
+            if generation != "application":
+                raise ValueError(f"Unsupported {label} registry mode: {generation}; "
+                                 "rolling requires application-level Starter wiring on both sides")
     except (OSError, ValueError) as error:
         print(f"Registry generation check failed: {error}", file=sys.stderr)
         return 1
     print(f"Starter registry generation: baseline={baseline}, current={current}", file=sys.stderr)
-    print("same-generation" if baseline == current else "registry-migration")
+    print("same-generation")
     return 0
 
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if (( $# != 0 )); then
-  echo "Usage: run_quickstart_revision_e2e.sh (built JARs and a running Nacos are required)" >&2
+  echo "Usage: run_quickstart_revision_e2e.sh (built JARs and a running selected application registry are required)" >&2
   exit 2
 fi
 
@@ -21,9 +21,7 @@ start_revision() {
     --spring.application.name="$PROVIDER_APP" \
     --otryx.rpc.registry.application-name="$PROVIDER_APP" \
     --otryx.rpc.registry.instance-id="$instance" \
-    --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-    --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
-    --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+    "${QUICKSTART_REGISTRY_ARGS[@]}" \
     --otryx.rpc.quickstart.role=leaf \
     --otryx.rpc.quickstart.details-enabled="$details" \
     --otryx.rpc.server.port="$port" \
@@ -44,9 +42,7 @@ java -jar "$CONSUMER_JAR" \
   --spring.application.name="$CONSUMER_APP" \
   --otryx.rpc.registry.application-name="$CONSUMER_APP" \
   --otryx.rpc.registry.instance-id=consumer-main \
-  --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-  --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
-  --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+  "${QUICKSTART_REGISTRY_ARGS[@]}" \
   --otryx.rpc.quickstart.use-relay=false \
   --otryx.rpc.quickstart.use-details=false \
   --otryx.rpc.quickstart.expect-authorization-denied=false \
@@ -69,9 +65,7 @@ java -jar "$CONSUMER_JAR" \
   --spring.application.name=otryx-quickstart-revision-details-probe \
   --otryx.rpc.registry.application-name=otryx-quickstart-revision-details-probe \
   --otryx.rpc.registry.instance-id=details-probe \
-  --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-  --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
-  --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+  "${QUICKSTART_REGISTRY_ARGS[@]}" \
   --otryx.rpc.quickstart.use-relay=false \
   --otryx.rpc.quickstart.use-details=true \
   --otryx.rpc.quickstart.expect-authorization-denied=false \

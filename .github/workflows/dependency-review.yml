@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      # This gate intentionally compares the target dependency baseline with the
+      # proposed merge; it does not claim to execute the PR Head runtime tests.
       - name: Checkout PR merge with complete history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

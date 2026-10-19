@@ -5,6 +5,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+import re
 
 REQUIRED_NUMERIC = (
     "concurrency", "payload_bytes", "warmup_seconds", "measurement_seconds",
@@ -89,6 +90,13 @@ def validate_pair(otryx, dubbo, environment, max_error_rate=0.05):
     require(environment.get("schema") ==
             "otryx.rpc.comparison.environment.v1",
             "Environment provenance record is missing")
+    require(environment.get("otryx_registry_backend") == "etcd",
+            "OTRYX comparison requires shared Etcd application-registry provenance")
+    namespace = environment.get("otryx_registry_namespace")
+    require(isinstance(namespace, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,128}", namespace),
+            "OTRYX comparison requires an isolated application namespace")
+    require(environment.get("registry_traffic_measurement") == "not-measured",
+            "Registry traffic must remain explicitly not-measured in this smoke")
     for field in ("run_id", "git_sha", "evidence_class"):
         require(environment.get(field) == otryx.get(field),
                 f"Environment mismatch: {field}")
@@ -116,6 +124,7 @@ def markdown(otryx, dubbo, environment):
         "",
         f"Source SHA: `{otryx['git_sha']}`. Run: `{otryx['run_id']}`.",
         f"Runner: `{environment.get('runner_id', 'unknown')}`.",
+        f"OTRYX control plane: shared Etcd, namespace `{environment['otryx_registry_namespace']}`.",
         "",
         "| Metric | OTRYX RPC | Apache Dubbo |",
         "|---|---:|---:|",
@@ -152,6 +161,8 @@ def markdown(otryx, dubbo, environment):
         "",
         "Both runtimes used separate provider and client JVMs; "
         "the reported workload is **closed-loop synchronous byte[] echo**.",
+        "OTRYX discovers application members through shared Etcd before warmup; "
+        "Dubbo uses a direct URL. Backend HTTP, watches and keepalive traffic are not measured.",
         "The protocols and serializers are different (OTRYX Wire v1/Fory vs "
         "Dubbo TCP/Hessian2), so results measure the complete runtime stacks, "
         "not isolated transport efficiency.",

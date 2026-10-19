@@ -50,36 +50,17 @@ mindmap
 
 ## 3. Registry
 
-### Memory
+Provider、Consumer、BOTH 都使用应用身份；纯 Consumer 无 RPC Endpoint。ServiceKey 是业务契约，Manifest 描述实际导出，实例 Owner Mapping 指向应用；ServiceInstance 只作为已验证本地 LB DTO。
 
-适合单进程测试和简单场景。
+| 后端 | 应用级能力与边界 |
+| --- | --- |
+| Memory | 单 Registry 对象内成员与元数据；用于同 JVM 测试，不跨进程 |
+| Etcd | 应用 Lease、不可变 Manifest、实例 CAS、Range/Watch、Compaction/租约恢复 |
+| Nacos | Naming 成员、Config Manifest/Mapping CAS、预初始化分片、健康校对与恢复 |
+| Consul | 单 Agent TTL Check、Session 身份 Claim、KV CAS、Owner fencing、有界轮询 |
+| Eureka | 原生应用成员/Lease，显式外置可靠 Metadata Backend，Owner 健康交叉校验 |
 
-### Etcd
-
-**V2 应用级 Adapter** 已新增 Provider/Consumer/BOTH 成员、Etcd Lease、版本化 Manifest、实例级 fencing Mapping 与跨进程 CAS，详见 [Etcd V2 设计与限制](reference/registry-etcd.md)。在 #139 前旧 SPI 代码仅为迁移过渡，不得视为最终兼容模式。
-
-现有旧接口级 Adapter 的历史能力：
-
-- register / unregister；
-- Range / Watch；
-- Lease / keepalive；
-- compaction recovery；
-- restart recovery；
-- 三节点 leader transfer Chaos。
-
-### Nacos
-
-**V2 独立应用级 Adapter**：新增 Naming 应用成员和 Nacos Config Manifest/Mapping CAS、Consumer-only port=0 成员、多 Revision/Owner fencing，详见 [Nacos V2](reference/registry-nacos-v2.md)。旧 SPI 将于 #139 清理。
-
-现有旧接口级 Adapter 的历史能力：
-
-- 临时实例；
-- register / unregister / lookup / subscribe；
-- namespace / group / cluster；
-- weight / metadata；
-- 健康和 enabled 过滤；
-- pause/unpause recovery Chaos；
-- 本地注销和远端 Provider 消失后的订阅收敛。
+原生 Revision、轮询/Watch 和资源预算各不相同，详见[应用级设计](design/application-registry-v2.md)。四真实后端的共享契约使用 30 个真实接口与 10 个独立 client 对象；独立 JVM process/chain/revision 和 Chaos 是另外的证据层，不能把对象数称为业务进程数。门禁与实测边界见[应用级注册验收](reference/application-registry-acceptance.md)。
 
 ## 4. Transport
 
@@ -223,8 +204,8 @@ CLIENT/SERVER Span + W3C Trace Context/Baggage。
 - Streaming RPC；
 - 跨语言 SDK；
 - Protobuf IDL；
-- ZooKeeper Adapter（Consul / Eureka Adapter 已在源码中按需提供，V2 应用级接入分别跟踪 #135 / #136）；
+- ZooKeeper Adapter（Consul / Eureka Adapter 已在源码中按需提供，应用级接入使用唯一控制面）；
 - HTTP/2/gRPC Transport；
 - 非 NONE 数据面压缩。
 
-这些内容如果进入后续版本，必须保持 1.0.x 已冻结契约的升级边界。
+这些内容若进入后续版本，须独立设计和验证；当前未发布快照不承诺历史开发 API 兼容。

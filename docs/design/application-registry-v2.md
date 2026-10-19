@@ -1,8 +1,8 @@
 # OTRYX V2：应用级注册身份与 SPI 契约
 
-> **当前状态：#128–#137 已完成 Core、Memory、Etcd、Nacos、Consul、Eureka 外置元数据与单一 Spring Starter 的应用级接入。当前 #138 工作包在原有 Quickstart 四模块上补齐成员诊断、两个真实 Manifest revision 与 mTLS 授权教程。#139 的全仓旧接口级 SPI 清理尚未完成。**
+> **当前源码：唯一应用级注册模型。#128–#138 的身份、后端、Starter 和 Quickstart 已接入；#139 正在完成全仓清理、共享契约与四后端独立 JVM 验收。源码存在或脚本夹具通过不能替代准确 Head 的真实后端与 CI 证据。**
 >
-> 总控 Issue [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#138](https://github.com/Ryan-Guizhou/otryx-rpc/issues/138)。#137 已通过 [PR #158](https://github.com/Ryan-Guizhou/otryx-rpc/pull/158) 合并。本页区分历史阶段与当前工作包；#138 验收须绑定自身准确 PR Head 和合并后 main CI，不能沿用前一工作包的绿色状态。
+> 总控 [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139)。#138 由 [PR #159](https://github.com/Ryan-Guizhou/otryx-rpc/pull/159) 合并；当前验收与剩余限制见[断点记录](../engineering/agent-governance-checkpoint.md)，不沿用前一工作包的绿色检查。
 > 版本 JDK 21、Spring Boot 3.5.4、1.0.0-SNAPSHOT、Wire v1 均保持不变。
 
 ## 1. 核心决策
@@ -34,22 +34,18 @@ Provider/BOTH 必须包含实际 RPC Endpoint、正整数权重及 Manifest Revi
 
 目录快照不接受跨 ApplicationKey 的成员、重复 instanceId、负 revision；成功健康通知不得作为清空实例的命令。接口契约与 Manifest 的校验已由 #129–#130 接入，见后文。
 
-## 3. 分阶段开发约束
+## 3. 实现范围与验收约束
 
-**历史背景（#128 阶段）：** 当时 Core Client/Server、ServiceDirectory 与 Registry Adapter 仍依赖旧 Registry / ServiceRegistrar / ServiceDiscovery(ServiceKey)。在后继实现尚未落地时直接删除所有旧类型会破坏多模块编译，因此采用逐阶段迁移；这不是当前仍缺少 #129–#136 实现的声明。
+| 范围 | 当前职责 |
+| --- | --- |
+| Core | 应用身份、Manifest、ServiceMapping、Resolver、有界缓存、共享成员生命周期 |
+| Registry | Memory 与 Etcd/Nacos/Consul/Eureka 应用成员，原生或显式外置元数据 |
+| Starter / Quickstart | 唯一 Starter、四模块示例、真实成员诊断、多个 Manifest revision 与 mTLS 授权 |
+| #139 | 删除过渡代码与注册路径，统一共享契约，完整五组 rolling 和四真实后端独立 JVM 门禁 |
 
-**遗留代码只是分阶段开发期间的待删除实现，绝不是最终兼容或双模式支持。** 当前阶段状态如下：
+不保留接口注册模式、运行时双模式开关或双读双写。缺少必需成员注册、元数据能力或配置时直接失败。ServiceKey 只表示业务契约，ServiceInstance 只表示本地负载均衡候选，RegistrySubscription 仍是应用订阅的关闭句柄。
 
-| Issue | 范围 | 当前状态 |
-| --- | --- | --- |
-| #128–#130 | 身份、应用 SPI、Manifest、ServiceMapping、Resolver 与缓存 | 已实现 |
-| #131–#132 | Memory 应用 Registry、Core Provider/Consumer 共享成员生命周期 | 已实现 |
-| #133–#136 | Etcd、Nacos、Consul、Eureka 应用成员及原生或外置元数据 | 已实现 |
-| #137 | 单一 Starter 自动装配、角色启动/关闭、严格配置与覆盖 | 已合并，见 PR #158 |
-| #138 | 应用级 Quickstart 完整改写及独立进程验收 | 当前工作包，场景与验证入口见第 14 节；以自身准确 Head 的实测为准 |
-| #139 | 清除所有旧接口级 Registry SPI、Key/Path、配置、测试和历史文案 | 待完成；未通过不得宣布全仓 V2 迁移完成 |
-
-不允许新运行路径调用旧接口级 SPI；不得增加运行时双模式开关。缺少 Metadata KV 的 Eureka 已使用显式外置仓库，缺少必需元数据配置或能力时直接失败，不能回退。
+#139 的实现和验收须作为完整纵向 PR 完成；每次结论绑定准确 PR Head，合并后独立核验 main。共享测试计数和实际后端、进程边界详见[应用级注册验收](../reference/application-registry-acceptance.md)。
 
 ## 4. 质量验证
 
@@ -245,7 +241,7 @@ Manifest 多修订号与 SPI ServiceLoader 工厂。
 
 > **历史阶段边界（[#132](https://github.com/Ryan-Guizhou/otryx-rpc/issues/132)）：**
 > 该阶段仅交付 Core 编程式 Client/Server 的应用级运行路径。真实 Adapter 随后由 #133–#136 接入；
-> Starter 已由 #137 接入；当前 #138 负责 Quickstart 教程与对应验收，#139 旧 SPI 删除仍是独立的剩余工作包。
+> Starter 与 Quickstart 已复用相同应用控制面；#139 的统一契约、源码清理与真实四后端独立 JVM 验收见[验收入口](../reference/application-registry-acceptance.md)。
 
 ### 8.1 生命周期与顺序
 
@@ -289,7 +285,7 @@ sequenceDiagram
 ### 8.2 Client 解析与数据面
 
 - `OtryxRpcClient.Builder.applicationControlPlane(resolver, membership, namespace)`
-  使 Consumer 使用新的应用级目录，不走旧 `ServiceDiscovery(ServiceKey)`；
+  是 Consumer 的必需应用控制面入口；
   Client 构造期间启动本应用 Consumer-only 成员注册，`membershipReady()` 可作为就绪门禁。
   未入册或已关闭，业务调用 fail closed，不发送 Transport。
 - 对每个业务接口提前计算 `ServiceKey + RpcSchemaFingerprint`；
@@ -304,8 +300,7 @@ sequenceDiagram
 - `OtryxRpcServer.Builder.applicationMembership(membership)` 选择新 Provider
   发布路径。必须向 Client/Server 传入同一个应用生命周期实例才能正确得到 BOTH，
   且注册中心、Manifest/Mapping 后端需是同一控制面部署域。
-  **这不是允许长期保留接口级旧路径的兼容开关**：旧 Builder/SPIs 仅为分阶段的
-  暂留代码，最终 #139 强制删除。
+  缺少该入口或有效成员能力时启动失败，不允许直接伪造注册候选。
 
 ### 8.3 验证及明确剩余边界
 
@@ -322,7 +317,7 @@ sequenceDiagram
 
 ## 9. V2-06：Etcd 原生应用成员与映射（#133）
 
-新增 `EtcdApplicationRegistry`、`EtcdApplicationRegistryFactory`、`EtcdApplicationManifestRepository`、`EtcdServiceMappingRepository`。成员按 ApplicationKey 注册，纯 Consumer 保持租约而无 RPC Endpoint；Manifest 内容寻址不可变，Mapping 以每实例 Owner 单键存储服务全集，用 Etcd CAS 防止旧代写入。Watch 从 Range revision+1 建立，Compaction/断线显式健康恢复。旧 EtcdRegistry 仍待 #139 最终删除。
+新增 `EtcdApplicationRegistry`、`EtcdApplicationRegistryFactory`、`EtcdApplicationManifestRepository`、`EtcdServiceMappingRepository`。成员按 ApplicationKey 注册，纯 Consumer 保持租约而无 RPC Endpoint；Manifest 内容寻址不可变，Mapping 以每实例 Owner 单键存储服务全集，用 Etcd CAS 防止旧代写入。Watch 从 Range revision+1 建立，Compaction/断线显式健康恢复。成员主键与业务 ServiceKey 分离，目录只接受应用成员。
 
 本阶段按真实后端上限约束 Mapping Owner 扫描（512 个 Owner、8 MiB），并检查活跃 Member Lease，不能把共享 CI smoke 当生产控制面规模证据。详细键空间、限制、接口示例及测试参见 [Etcd V2 文档](../reference/registry-etcd.md)。
 
@@ -330,7 +325,7 @@ sequenceDiagram
 
 实现 `NacosApplicationRegistry`、`NacosApplicationRegistryFactory`、`NacosApplicationManifestRepository` 与 `NacosServiceMappingRepository`，Naming 使用应用 ServiceName，Provider/Consumer/BOTH 均有真实应用成员；纯 Consumer 借助 Nacos 允许的 0 端口与真实主机 IP 表示心跳，不能进入 RPC Endpoint 列表。Config 采用内容寻址 Manifest 与分片 MD5-CAS Mapping Generation，严格容量和权威 MD5，所有阻塞 SDK 调用在有界控制面线程执行。配置和限制详见 [Nacos V2](../reference/registry-nacos-v2.md)。
 
-Nacos V2 不启用双读/双写；旧 `NacosRegistry` 仍仅是 #139 前的过渡源码。Starter 已由合并的 #137 接入 V2。首次使用某个 Nacos namespace/group，须在所有业务应用启动前独占运行 `NacosV2MetadataBootstrap`；普通应用不并发补建 Mapping 分片。#138 的独立进程脚本为每轮隔离 group 自动执行初始化。
+Nacos 只使用应用成员与 Config 元数据，Starter 复用同一套控制面。首次使用某个 Nacos namespace/group，须在所有业务应用启动前独占运行 `NacosV2MetadataBootstrap`；普通应用不并发补建 Mapping 分片。#138 的独立进程脚本为每轮隔离 group 自动执行初始化。
 
 ## 11. V2-08：Consul 应用成员与 KV 元数据（#135）
 
@@ -384,7 +379,7 @@ sequenceDiagram
 
 ### 13.3 严格装配与覆盖
 
-Starter 在创建 RPC 资源前拒绝旧 Registry / ServiceRegistrar / ServiceDiscovery Bean 定义，包括 lazy Bean；也严格检查自己拥有的配置键，未知键与旧接口级选项不能被静默忽略。`otryx.rpc.observability.*` 和 `otryx.rpc.quickstart.*` 由各自模块校验；`otryx.rpc.enabled=false` 跳过 Starter 自动装配及其前置检查。
+Starter 要求自定义扩展实现应用级成员与元数据 SPI，并严格检查自己拥有的配置键；未知键与已移除选项不能被静默忽略。`otryx.rpc.observability.*` 和 `otryx.rpc.quickstart.*` 由各自模块校验；`otryx.rpc.enabled=false` 跳过 Starter 自动装配及其前置检查。
 
 自定义 ApplicationRegistry Bean 可替代默认工厂，但须提供 ApplicationRegistrar 与非空 ApplicationMetadataBackend 仓库。此时不会校验未使用的默认 Consul/Eureka 后端专属设置；通用配置与有效安全 Profile 仍须满足。默认 Eureka 工厂缺少外置元数据后端或地址时，错误明确列出 `otryx.rpc.registry.eureka.metadata-backend` / `otryx.rpc.registry.eureka.metadata-endpoints`。默认 Consul 工厂的旧 Datacenter 配置错误则要求改用单个本地 Agent。
 
@@ -392,7 +387,7 @@ Starter 默认依赖仍仅为 AutoConfiguration、Core/Memory、JDK Proxy、Fory
 
 ### 13.4 迁移矩阵与剩余验收
 
-滚动检查按实际 Starter 工厂、Consumer 发现和 Provider 成员装配识别注册代际。同代快照保留完整 N/N+1 与回滚矩阵；跨接口级/应用级边界只要求 N/N 与 N+1/N+1 的独立 JVM 配对，不能声称混合代际或混合代际回滚互通。未知、双模式或不一致装配直接失败。跨代应隔离注册域，并成对部署、迁移和回滚 Provider/Consumer；详见[迁移指南](../migration.md)。
+滚动检查要求两个 checkout 的 Starter 工厂、Consumer 发现和 Provider 成员装配全部为应用级。未知、历史接口模式、双模式或不一致装配直接失败；应用级 N/N、N+1/N、N/N+1、N+1/N+1 和回滚五组必须全部执行。旧基线不能触发缩减矩阵，参见[迁移指南](../migration.md)。
 
 在 JDK 21、仓库根目录运行 Starter 回归：
 
@@ -400,7 +395,7 @@ Starter 默认依赖仍仅为 AutoConfiguration、Core/Memory、JDK Proxy、Fory
 ./mvnw -B -ntp -pl otryx-spring-boot/otryx-spring-boot-autoconfigure -am test
 ```
 
-此命令、源码中的测试和矩阵选择都不是某个新提交已经通过的声明；每次变更须核验准确 PR Head 的真实执行结果，合并后再核对 main CI。#137 的验收不替代 #138 的完整 Quickstart 验收或 #139 的仓库级旧路径删除门禁。
+此命令、源码中的测试和矩阵选择都不是某个新提交已经通过的声明；每次变更须核验准确 PR Head 的真实执行结果，合并后再核对 main CI。#139 同时要求仓库清理、共享契约和四真实后端纵向门禁，不能沿用历史验收结果。
 
 ## 14. V2-11：应用级 Quickstart 与独立进程证据（#138）
 
@@ -408,9 +403,9 @@ Starter 默认依赖仍仅为 AutoConfiguration、Core/Memory、JDK Proxy、Fory
 
 继续使用 API、Provider、Consumer、Memory 四个模块和唯一 Starter，复用 Core 的 MembershipCoordinator、Resolver、Manifest 与 Mapping，不创建另一套演示注册协议。逐步命令见 [中文 Quickstart](../../otryx-quickstart/README.md) / [English Quickstart](../../otryx-quickstart/README.en-US.md)。
 
-`QuickstartRegistrySnapshot` 从 Provider 可执行 JAR 作为独立 CLI 运行，不启动 Spring，不注册自己的成员。输入为 Nacos endpoint、Nacos namespace/group、application namespace、新输出路径及 1–16 个明确 applicationName。当前 Starter 将 `registry.namespace` 同时用于后端和 ApplicationKey，教程显式使用 `public`，所以 CLI 的两个 namespace 均传 `public`；CLI 的两个参数不代表新增了独立的 Spring 配置项。
+`QuickstartRegistrySnapshot` 从 Provider 可执行 JAR 作为独立 CLI 运行，不启动 Spring、不注册自己的成员。输入是后端类型、endpoints、共享 namespace、Nacos group（其他后端用 `-`）、Eureka 的 Consul metadata endpoints（其他后端用 `-`）、新输出路径及 1–16 个明确应用名。当前 Starter 将 registry.namespace 同时用于后端和 ApplicationKey；Nacos 采用 public 与每轮隔离 group，其他后端采用每轮隔离 namespace。SDK 创建、读取和关闭受外层进程总预算约束。
 
-JSON 白名单包含指定应用成员的 instanceId、role、真实可选 Endpoint、weight、manifestRevision；关联 Manifest 的 ServiceKey、serviceId、methodIds、schemaFingerprint；以及三个已知 Quickstart 服务的 mappedApplications 和 verifiedProviders。服务视图使用真实 Mapping/Resolver，可能包含同 scope 中未列名却导出这些契约的应用；它不枚举整个注册中心、不输出任意实例 attributes。所有读取成功后才写文件，并拒绝覆盖；跨 Naming/Config 的读取不是事务快照，故脚本有界等待状态收敛，不能把读取错误当作空目录。
+JSON 白名单包含指定应用成员的 instanceId、role、真实可选 Endpoint、weight、manifestRevision；关联 Manifest 的 ServiceKey、serviceId、methodIds、schemaFingerprint；以及三个已知 Quickstart 服务的 mappedApplications 和 verifiedProviders。服务视图使用真实 Mapping/Resolver，可能包含同 scope 中未列名却导出这些契约的应用；它不枚举整个注册中心、不输出任意实例 attributes。所有读取成功后才写文件，并拒绝覆盖；跨成员/元数据的读取不是事务快照，故脚本有界等待状态收敛，不能把读取错误当作空目录。
 
 ### 14.2 必须由真实进程证明的行为
 
@@ -428,12 +423,12 @@ Quickstart 的 `mtls` Provider 示例授权器同时校验 Transport 已验证�
 
 ### 14.3 验证入口与剩余边界
 
-在 JDK 21、已构建 JAR、Bash、Python 3、GNU `timeout`、OpenSSL 和运行中的本地 Nacos 环境下执行：
+在 JDK 21、已构建 JAR、Bash、Python 3、GNU `timeout`、OpenSSL 和运行中的本地 Nacos 环境下执行完整示例：
 
 ```bash
 NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
 ```
 
-入口依次运行 Memory、process、chain、revision、mTLS，失败即停止。每个跨进程场景在新隔离 Nacos group 中初始化分片，再启动应用。四个 Nacos 场景的证据保存在 `target/quickstart-e2e/<scenario>.<随机后缀>/` 的受限 JSON 与 `summary.log`；Memory 标记在控制台输出，临时私钥不进入证据。可用 `OTRYX_QUICKSTART_EVIDENCE_DIR` 覆盖目录。细化入口为 `run_quickstart_revision_e2e.sh` 和 `run_quickstart_mtls_e2e.sh`，已有 Memory/process/chain 入口保持可用。
+入口依次运行 Memory、process、chain、revision、mTLS，失败即停止。Nacos 场景在新隔离 group 中初始化分片，再启动应用。Etcd/Consul/Eureka 的 process、chain、revision 使用相同脚本与独立 namespace，Eureka 显式使用真实 Consul metadata；参数和 CI 矩阵见[应用级注册验收](../reference/application-registry-acceptance.md)。四个 Nacos 场景的证据保存在 `target/quickstart-e2e/<scenario>.<随机后缀>/` 的受限 JSON 与 `summary.log`；Memory 标记在控制台输出，临时私钥不进入证据。可用 `OTRYX_QUICKSTART_EVIDENCE_DIR` 覆盖目录。细化入口为 `run_quickstart_revision_e2e.sh` 和 `run_quickstart_mtls_e2e.sh`，已有 Memory/process/chain 入口保持可用。
 
-测试用例、脚本和教程描述的是验收契约；实际完成结论须绑定对应提交的执行日志、准确 PR Head 与合并后 main CI。短时本地或共享 CI 验收不代表 10k soak、生产容量、安全部署全流程或正式发布。#139 仍须删除所有旧接口级 SPI、Key/Path、配置、测试和历史文案；该门禁通过前不能宣布全仓 V2 迁移完成。
+测试用例、脚本和教程描述的是验收契约；实际完成结论须绑定对应提交的执行日志、准确 PR Head 与合并后 main CI。短时本地或共享 CI 验收不代表 10k soak、生产容量、安全部署全流程或正式发布。#139 的全仓清理、共享后端契约、真实 JVM 与准确 Head CI 均通过后才可宣布该工作包验收完成。

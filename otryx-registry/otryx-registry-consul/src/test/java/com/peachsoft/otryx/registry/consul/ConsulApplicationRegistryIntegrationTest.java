@@ -14,6 +14,7 @@ import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.ApplicationRegistryContractTestKit;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.RegistryCapability;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
@@ -144,33 +145,19 @@ class ConsulApplicationRegistryIntegrationTest {
     }
 
     @Test
-    void thirtyContractsUseOnlyTenApplicationMembers() throws Exception {
-        String ns = unique();
-        ApplicationKey app = new ApplicationKey(ns, "batch");
-        Set<ServiceKey> thirty = new java.util.HashSet<>();
-        for (int index = 0; index < 30; index++) {
-            thirty.add(service("Batch" + index));
-        }
-        List<ConsulApplicationRegistry> writers = new ArrayList<>();
-        try {
-            for (int index = 0; index < 10; index++) {
-                ConsulApplicationRegistry writer = registry(ns);
-                writers.add(writer);
-                String instanceId = "node-" + index;
-                ServiceMappingOwner owner = writer.serviceMappingRepository().claim(app, instanceId)
-                        .toCompletableFuture().join();
-                writer.serviceMappingRepository().publish(owner, thirty).toCompletableFuture().join();
-                writer.register(provider(app, instanceId, RPC_BASE_PORT + 10 + index))
-                        .toCompletableFuture().join();
-            }
-            assertTrue(await(AWAIT_BUDGET, () -> writers.getFirst().lookup(app)
-                    .toCompletableFuture().join().instances().size() == 10));
-            assertEquals(10, writers.getFirst().lookup(app).toCompletableFuture().join().instances().size());
-            assertEquals(Set.of(app), writers.getFirst().serviceMappingRepository()
-                    .lookup(new ServiceMappingKey(ns, thirty.iterator().next()))
-                    .toCompletableFuture().join().applications());
-        } finally {
-            writers.forEach(ConsulApplicationRegistry::close);
+    @Timeout(value = 300, unit = TimeUnit.SECONDS)
+    void thirtyRealContractsAndTenIndependentClientsSatisfySharedApplicationContract() throws Exception {
+        String namespace = unique();
+        ConsulV2Identity identity = new ConsulV2Identity(namespace);
+        try (ConsulV2Client raw = raw()) {
+            ApplicationRegistryContractTestKit.verify("consul", namespace, 10, () -> registry(namespace),
+                    application -> {
+                        var services = raw.json("GET", "/v1/agent/services", null).body();
+                        assertTrue(services.isObject());
+                        return java.util.stream.StreamSupport.stream(services.spliterator(), false)
+                                .filter(service -> identity.serviceName(application)
+                                        .equals(service.path("Service").asText())).count();
+                    }, AWAIT_BUDGET);
         }
     }
 

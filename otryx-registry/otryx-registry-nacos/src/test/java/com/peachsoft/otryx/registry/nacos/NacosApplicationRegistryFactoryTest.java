@@ -4,8 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.peachsoft.otryx.registry.RegistryCapability;
-import com.peachsoft.otryx.registry.RegistryFactory;
+import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
 import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.alibaba.nacos.api.PropertyKeyConst;
@@ -21,17 +20,17 @@ import org.junit.jupiter.api.Test;
  * @Version 1.0.0
  * @CreateTime 2026/9/28 11:35
  */
-class NacosRegistryFactoryTest {
+class NacosApplicationRegistryFactoryTest {
 
     @Test
     void shouldLoadFactoryThroughSpi() {
-        RegistryFactory factory =
+        ApplicationRegistryFactory factory =
                 ExtensionLoader.getLoader(
-                                RegistryFactory.class)
+                                ApplicationRegistryFactory.class)
                         .getExtension("nacos");
 
         assertEquals(
-                NacosRegistryFactory.class,
+                NacosApplicationRegistryFactory.class,
                 factory.getClass());
     }
 
@@ -45,7 +44,7 @@ class NacosRegistryFactoryTest {
 
         IllegalArgumentException error = assertThrows(
                 IllegalArgumentException.class,
-                () -> new NacosRegistryFactory()
+                () -> new NacosApplicationRegistryFactory()
                         .create(options));
 
         assertTrue(
@@ -67,7 +66,7 @@ class NacosRegistryFactoryTest {
                         secret));
 
         Properties properties =
-                NacosRegistryFactory.clientProperties(
+                NacosApplicationRegistryFactory.clientProperties(
                         options,
                         options.endpoints(),
                         options.namespace());
@@ -103,19 +102,8 @@ class NacosRegistryFactoryTest {
 
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new NacosRegistryFactory()
+                () -> new NacosApplicationRegistryFactory()
                         .create(options));
     }
 
-    @Test
-    void shouldDeclareExpectedCapabilities() {
-        assertTrue(
-                NacosRegistry.CAPABILITIES_FOR_TEST
-                        .supports(
-                                RegistryCapability.REGISTRATION));
-        assertTrue(
-                NacosRegistry.CAPABILITIES_FOR_TEST
-                        .supports(
-                                RegistryCapability.SUBSCRIPTION));
-    }
 }

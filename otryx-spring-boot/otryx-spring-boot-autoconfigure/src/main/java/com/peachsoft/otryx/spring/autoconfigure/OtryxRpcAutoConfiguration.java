@@ -20,10 +20,7 @@ import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
 import com.peachsoft.otryx.registry.ManifestSnapshotCache;
-import com.peachsoft.otryx.registry.Registry;
-import com.peachsoft.otryx.registry.ServiceDiscovery;
 import com.peachsoft.otryx.registry.ServiceMappingCache;
-import com.peachsoft.otryx.registry.ServiceRegistrar;
 import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.peachsoft.otryx.spring.lifecycle.OtryxRpcServerLifecycle;
@@ -95,8 +92,6 @@ public class OtryxRpcAutoConfiguration {
     private static final List<ConfigurationPropertyName> DELEGATED_PROPERTY_PREFIXES = List.of(
             ConfigurationPropertyName.of("otryx.rpc.observability"),
             ConfigurationPropertyName.of("otryx.rpc.quickstart"));
-    private static final List<Class<?>> LEGACY_REGISTRY_TYPES = List.of(
-            Registry.class, ServiceRegistrar.class, ServiceDiscovery.class);
     private static final String PROVIDER_OPTION_LEASE_TTL_SECONDS = "leaseTtlSeconds";
     private static final String PROVIDER_OPTION_NACOS_GROUP = "nacosGroup";
     private static final String PROVIDER_OPTION_NACOS_CLUSTER = "nacosCluster";
@@ -127,9 +122,9 @@ public class OtryxRpcAutoConfiguration {
     }
 
     /**
-     * 在创建任何 RPC 资源之前拒绝旧接口级 Bean 和无法绑定的 Starter 配置键。
+     * 在创建任何 RPC 资源之前拒绝无法绑定的 Starter 配置键。
      *
-     * <p>仅检查 Bean 定义，不提前实例化用户的 lazy Bean。观测 Adapter 与
+     * <p>不提前实例化用户的 lazy Bean。观测 Adapter 与
      * Quickstart 独立拥有的配置子树交由对应模块校验；其余配置用实际属性模型
      * 严格试绑定。试绑定不调用初始化钩子，也不创建 Registry 或 Transport。
      *
@@ -139,12 +134,6 @@ public class OtryxRpcAutoConfiguration {
     @Bean
     public static BeanFactoryPostProcessor peachRpcApplicationConfigurationValidator(Environment environment) {
         return beanFactory -> {
-            for (Class<?> legacyType : LEGACY_REGISTRY_TYPES) {
-                if (beanFactory.getBeanNamesForType(legacyType, true, false).length != 0) {
-                    throw new IllegalStateException("Legacy interface-level Registry beans are unsupported; "
-                            + "use application-level ApplicationRegistry with ApplicationMetadataBackend");
-                }
-            }
             validateConfigurationKeys(environment);
         };
     }

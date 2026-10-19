@@ -165,6 +165,13 @@ class SnapshotAdversarialTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             assert_snapshot("revision", "baseline", data)
 
+    def test_explicit_isolated_namespace_applies_to_current_and_previous_evidence(self) -> None:
+        data = revision_fixture()
+        data["applicationNamespace"] = "otryx-e2e-isolated"
+        assert_snapshot("revision", "baseline", data, namespace="otryx-e2e-isolated")
+        with self.assertRaisesRegex(ValueError, "namespace"):
+            assert_snapshot("revision", "rolled-back", data, revision_fixture(), namespace="otryx-e2e-isolated")
+
 
 class ShellScenarioTest(unittest.TestCase):
     """Run production shell scripts with explicit fake external processes, never as RPC proof."""
@@ -175,7 +182,7 @@ class ShellScenarioTest(unittest.TestCase):
         scripts = self.root / "scripts"
         scripts.mkdir()
         for name in ("quickstart_e2e_common.sh", "bootstrap_quickstart_nacos.sh", "observe_quickstart_nacos.sh",
-                     "assert_quickstart_snapshot.py", "run_quickstart_revision_e2e.sh", "run_quickstart_mtls_e2e.sh",
+                     "observe_quickstart_registry.sh", "assert_quickstart_snapshot.py", "run_quickstart_revision_e2e.sh", "run_quickstart_mtls_e2e.sh",
                      "run_quickstart_process_e2e.sh", "run_three_process_deadline_e2e.sh", "run_quickstart_e2e.sh",
                      "run_quickstart_memory.sh"):
             shutil.copy2(ROOT / "scripts" / name, scripts / name)
@@ -218,10 +225,11 @@ class ShellScenarioTest(unittest.TestCase):
                 if "NacosV2MetadataBootstrap" in args[0]:
                     record({"kind": "bootstrap", "args": parameters, "environment": environment})
                     sys.exit(23 if os.environ.get("FIXTURE_FAIL_BOOTSTRAP") == "true" else 0)
-                endpoint, namespace, group, app_namespace, output, *names = parameters
+                backend, endpoint, namespace, group, metadata_endpoint, output, *names = parameters
                 record({"kind": "snapshot", "args": parameters, "environment": environment})
                 states = [json.loads(path.read_text()) for path in root.glob("*.json")]
                 data = fixture_snapshot(states, names)
+                data["applicationNamespace"] = namespace
                 if os.environ.get("FIXTURE_BAD_STAGE") and Path(output).name.startswith(
                         os.environ["FIXTURE_BAD_STAGE"] + "-"):
                     data["applications"] = []
@@ -292,7 +300,7 @@ class ShellScenarioTest(unittest.TestCase):
         self.environment.update({"PATH": str(binaries) + os.pathsep + os.environ["PATH"],
                                  "PYTHONDONTWRITEBYTECODE": "1", "FIXTURE_MODULE_DIR": str(ROOT / "scripts"),
                                  "FIXTURE_STATE": str(self.state), "FIXTURE_EVENTS": str(self.events_path),
-                                 "OTRYX_RPC_E2E_RESTART_NACOS": "false", "CI": "false"})
+                                 "OTRYX_RPC_E2E_RESTART_NACOS": "false", "CI": "false", "QUICKSTART_REGISTRY": "nacos"})
         self.environment.pop("OTRYX_QUICKSTART_EVIDENCE_DIR", None)
 
     def tearDown(self) -> None:
@@ -319,6 +327,50 @@ class ShellScenarioTest(unittest.TestCase):
         self.assertEqual([item["kind"] for item in self.events()], ["bootstrap"])
         self.assertNotIn(": PASS", result.stdout)
 
+    def test_each_backend_shares_explicit_scope_across_all_three_process_scenarios(self) -> None:
+        for backend, endpoint in (("etcd", "http://127.0.0.1:2379"), ("consul", "http://127.0.0.1:8500"),
+                                  ("eureka", "http://127.0.0.1:8761/eureka")):
+            for script in ("run_quickstart_process_e2e.sh", "run_three_process_deadline_e2e.sh",
+                           "run_quickstart_revision_e2e.sh"):
+                with self.subTest(backend=backend, script=script):
+                    self.events_path.unlink(missing_ok=True)
+                    result = self.run_script(script, {"QUICKSTART_REGISTRY": backend,
+                            "QUICKSTART_REGISTRY_ENDPOINT": endpoint,
+                            "QUICKSTART_EUREKA_METADATA_ENDPOINT": "http://127.0.0.1:8500"})
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    events = self.events()
+                    self.assertFalse(any(item["kind"] == "bootstrap" for item in events))
+                    snapshots = [item for item in events if item["kind"] == "snapshot"]
+                    self.assertTrue(snapshots)
+                    namespace = snapshots[0]["args"][2]
+                    self.assertTrue(namespace.startswith("otryx-e2e-"), namespace)
+                    for item in snapshots:
+                        self.assertEqual(item["args"][:4], [backend, endpoint, namespace, "-"])
+                        self.assertEqual(item["args"][4], "http://127.0.0.1:8500" if backend == "eureka" else "-")
+                    for item in (entry for entry in events if entry["kind"] == "application"):
+                        self.assertIn("--otryx.rpc.registry.type=" + backend, item["args"])
+                        self.assertIn("--otryx.rpc.registry.endpoints=" + endpoint, item["args"])
+                        self.assertIn("--otryx.rpc.registry.namespace=" + namespace, item["args"])
+                        if backend == "eureka":
+                            self.assertIn("--otryx.rpc.registry.eureka.metadata-backend=consul", item["args"])
+                            self.assertIn("--otryx.rpc.registry.eureka.metadata-endpoints=http://127.0.0.1:8500",
+                                          item["args"])
+                    self.assertEqual(list(self.state.glob("*.json")), [])
+
+    def test_eureka_missing_metadata_and_unknown_backend_fail_before_application_start(self) -> None:
+        for environment in ({"QUICKSTART_REGISTRY": "eureka", "QUICKSTART_EUREKA_METADATA_ENDPOINT": ""},
+                            {"QUICKSTART_REGISTRY": "unknown"}):
+            with self.subTest(environment=environment):
+                result = self.run_script("run_quickstart_process_e2e.sh", environment)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.events(), [])
+
+    def test_nacos_restart_cannot_operate_on_another_backend(self) -> None:
+        result = self.run_script("run_quickstart_process_e2e.sh", {
+            "QUICKSTART_REGISTRY": "etcd", "OTRYX_RPC_E2E_RESTART_NACOS": "true"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.events(), [])
+
     def test_revision_runner_uses_real_export_switch_and_same_long_lived_consumer(self) -> None:
         result = self.run_script("run_quickstart_revision_e2e.sh")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -336,8 +388,8 @@ class ShellScenarioTest(unittest.TestCase):
         endpoint, namespace, group = events[0]["args"]
         snapshots = [event for event in events if event["kind"] == "snapshot"]
         for event in snapshots:
-            self.assertEqual(event["args"][:4], [endpoint, namespace, group, namespace])
-        paths = [item["args"][4] for item in snapshots]
+            self.assertEqual(event["args"][:5], ["nacos", endpoint, namespace, group, "-"])
+        paths = [item["args"][5] for item in snapshots]
         self.assertEqual(len(paths), len(set(paths)))
         self.assertTrue(any(Path(path).name.startswith("providers-stopped-") for path in paths))
         self.assertEqual(list(self.state.glob("*.json")), [])
@@ -361,7 +413,7 @@ class ShellScenarioTest(unittest.TestCase):
         consumers = [event for event in applications if event["state"]["role"] == "CONSUMER"]
         self.assertEqual(len(consumers), 1)
         self.assertIn("--otryx.rpc.client.directory-max-staleness=7s", consumers[0]["args"])
-        self.assertTrue(any(event["kind"] == "snapshot" and "provider-stopped-" in event["args"][4]
+        self.assertTrue(any(event["kind"] == "snapshot" and "provider-stopped-" in event["args"][5]
                             for event in self.events()))
 
     def assert_process_controls_are_isolated(self, script: str) -> None:
@@ -398,8 +450,8 @@ class ShellScenarioTest(unittest.TestCase):
                      if event["state"]["app"] == "otryx-quickstart-process-consumer"]
         self.assertEqual(len(consumers), 1)
         self.assertIn("--otryx.rpc.client.directory-max-staleness=7s", consumers[0]["args"])
-        self.assertTrue(any(event["kind"] == "snapshot" and "/mtls." in event["args"][4]
-                            and "/service-denied-" in event["args"][4] for event in events))
+        self.assertTrue(any(event["kind"] == "snapshot" and "/mtls." in event["args"][5]
+                            and "/service-denied-" in event["args"][5] for event in events))
 
     def test_chain_observes_three_distinct_application_roles(self) -> None:
         result = self.run_script("run_three_process_deadline_e2e.sh")

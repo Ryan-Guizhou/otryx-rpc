@@ -1,6 +1,6 @@
-# Eureka V2 Application Membership (under development)
+# Eureka V2 Application Membership
 
-> Issue [#136](https://github.com/Ryan-Guizhou/otryx-rpc/issues/136) · `1.0.0-SNAPSHOT`. Do not claim this is released or complete until the exact PR Head and post-merge main CI pass.
+> Issue [#136](https://github.com/Ryan-Guizhou/otryx-rpc/issues/136) · `1.0.0-SNAPSHOT`. Current application backend; integrated #139 acceptance still requires exact-head backend execution and post-merge main CI.
 
 ## Separation of responsibilities
 
@@ -37,10 +37,12 @@ All `eurekaMetadata.*` options are passed to the selected backend, with the same
 
 Member count <=256; subscriptions <=128; 2–4 bounded control workers and a queue of 256; default Eureka lease/heartbeat/poll/request timeout 30s/10s/1s/3s. A 404 lease renew triggers re-registration; genuine HTTP, authorization and schema failures propagate and cannot silently replace LKG with an empty result. Mapping candidates are **not routable** until checked against Eureka members, Manifest, schema, endpoint and local service bindings.
 
-Only old incompatible ServiceKey registry usage is delegated to final deletion in #139. The Starter and Quickstart migration is #137–#138. No automatic GC of durable Generation tombstones or Manifest revisions is claimed: these protect rollbacks and fencing.
+The Starter and Quickstart use the same application control plane. No automatic GC of durable Generation tombstones or Manifest revisions is claimed: these protect rollbacks and fencing.
 
 ## Real service E2E
 
-`.github/workflows/eureka-v2.yml` launches a real Spring Boot 3.5.4 / Spring Cloud Netflix Eureka 2025.0.0 server alongside real Consul KV. CI checks Provider/Consumer/BOTH native Info, disabled Consumer port, real Meta CAS + no cross-registry member duplication, 30 contracts × 10 instances, lost lease recovery and a genuine Eureka JVM restart. The server is isolated under `.github/test-fixtures/eureka-server`, not an extra runtime Starter or Maven reactor module.
+`.github/workflows/eureka-v2.yml` launches a real Spring Boot 3.5.4 / Spring Cloud Netflix Eureka 2025.0.0 server alongside real Consul KV. CI checks Provider/Consumer/BOTH native Info, disabled Consumer port, real Meta CAS + no cross-registry member duplication, 30 real Java interfaces × ten independent Registry client objects in one test JVM, lost lease recovery and a genuine Eureka JVM restart. The server is isolated under `.github/test-fixtures/eureka-server`, not an extra runtime Starter or Maven reactor module.
 
 The isolated Eureka test fixture disables the read-only response cache for deterministic convergence tests. Production Eureka caching and lease expiry remain separate from RPC routing freshness and authorization.
+
+Independent business JVM process/chain/revision scenarios run separately in `.github/workflows/application-registry-e2e.yml` against real Eureka and Consul. Native members, SPI method-entry calls, subscription creation calls and snapshot/health notifications and convergence time are reported separately; they are not total backend HTTP, lease renewal or server Watch traffic. See [acceptance boundaries](application-registry-acceptance.md).

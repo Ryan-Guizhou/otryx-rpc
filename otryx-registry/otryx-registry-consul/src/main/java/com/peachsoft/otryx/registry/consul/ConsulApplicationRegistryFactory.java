@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Consul V2 应用级 Registry SPI 工厂，与旧接口级工厂完全隔离。
+ * Consul 应用级 Registry SPI 工厂，同时提供成员目录与可信元数据。
  *
  * <p>必须指定单个本地 Agent，TTL Check 只能向登记该 Check 的 Agent 续期。
  * 创建后的 Manifest/Mapping Repository 由同一 Registry 的 close 释放。

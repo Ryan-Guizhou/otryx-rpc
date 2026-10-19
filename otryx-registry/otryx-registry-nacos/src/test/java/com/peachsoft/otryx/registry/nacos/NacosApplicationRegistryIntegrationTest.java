@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.alibaba.nacos.api.naming.NamingService;
-import com.alibaba.nacos.api.naming.pojo.Instance;
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationManifest;
@@ -16,6 +15,7 @@ import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.ApplicationRegistryContractTestKit;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
 import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
 import com.peachsoft.otryx.registry.RegistryOptions;
@@ -24,7 +24,6 @@ import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -82,44 +81,21 @@ class NacosApplicationRegistryIntegrationTest {
     }
 
     @Test
-    void oneProviderWithThirtyServicesIsOneNamingMemberAndSupportsRoles() throws Exception {
-        String group = unique("OTRYX_V2_DENSITY");
+    @Timeout(value = 300, unit = TimeUnit.SECONDS)
+    void thirtyRealContractsAndTenIndependentClientsSatisfySharedApplicationContract() throws Exception {
+        String group = unique("OTRYX_APPLICATION_CONTRACT");
         bootstrap(group);
-        ApplicationKey app = app("inventory");
-        ApplicationInstance provider = provider(app, "provider-a", 19511);
-        ApplicationInstance both = new ApplicationInstance(
-                provider.instanceId(), app, ApplicationRole.BOTH,
-                provider.rpcEndpoint(), provider.weight(), provider.manifestRevision(), Map.of());
-
-        try (NacosApplicationRegistry registry = registry(group)) {
-            Set<ServiceKey> services = new java.util.HashSet<>();
-            for (int index = 0; index < 30; index++) {
-                services.add(new ServiceKey("demo.Inventory" + index, "1.0.0", "default"));
-            }
-            ServiceMappingOwner owner = registry.serviceMappingRepository()
-                    .claim(app, provider.instanceId()).toCompletableFuture().join();
-            registry.serviceMappingRepository().publish(owner, services).toCompletableFuture().join();
-            registry.register(provider).toCompletableFuture().get(15, TimeUnit.SECONDS);
-            assertTrue(await(Duration.ofSeconds(25),
-                    () -> registry.lookup(app).toCompletableFuture().join().instances().contains(provider)));
-            assertEquals(1, registry.lookup(app).toCompletableFuture().join().instances().size());
-
-            for (ServiceKey key : List.of(services.iterator().next())) {
-                assertEquals(Set.of(app), registry.serviceMappingRepository()
-                        .lookup(new ServiceMappingKey(app.namespace(), key))
-                        .toCompletableFuture().join().applications());
-            }
-            registry.register(both).toCompletableFuture().get(15, TimeUnit.SECONDS);
-            assertTrue(await(Duration.ofSeconds(25),
-                    () -> registry.lookup(app).toCompletableFuture().join().instances().equals(List.of(both))));
-
-            registry.register(consumer(app, provider.instanceId())).toCompletableFuture().join();
-            assertTrue(await(Duration.ofSeconds(25), () -> registry.lookup(app).toCompletableFuture()
-                    .join().instances().stream().noneMatch(ApplicationInstance::routableProvider)));
-            registry.serviceMappingRepository().revoke(owner).toCompletableFuture().join();
-            assertTrue(registry.serviceMappingRepository()
-                    .lookup(new ServiceMappingKey(app.namespace(), services.iterator().next()))
-                    .toCompletableFuture().join().applications().isEmpty());
+        String endpoint = System.getenv("NACOS_TEST_ENDPOINT");
+        NamingService raw = com.alibaba.nacos.api.NacosFactory.createNamingService(
+                NacosApplicationRegistryFactory.clientProperties(
+                        new RegistryOptions(List.of(endpoint), "public", Map.of()),
+                        List.of(endpoint), "public"));
+        try {
+            ApplicationRegistryContractTestKit.verify("nacos", "public", 10, () -> registry(group),
+                    application -> raw.getAllInstances(NacosV2Names.serviceName(application), group, false).size(),
+                    Duration.ofSeconds(30));
+        } finally {
+            raw.shutDown();
         }
     }
 
@@ -260,6 +236,42 @@ class NacosApplicationRegistryIntegrationTest {
         }
     }
 
+    @Test
+    void namingGroupsKeepTheSameApplicationIdentityIsolated() throws Exception {
+        ApplicationKey application = app("group-isolation");
+        ApplicationInstance leftMember = consumer(application, "same-logical-id");
+        try (NacosApplicationRegistry left = registry(unique("GROUP_LEFT"));
+             NacosApplicationRegistry right = registry(unique("GROUP_RIGHT"))) {
+            left.register(leftMember).toCompletableFuture().get(15, TimeUnit.SECONDS);
+            assertTrue(await(Duration.ofSeconds(25), () -> left.lookup(application)
+                    .toCompletableFuture().join().instances().equals(List.of(leftMember))));
+            assertTrue(right.lookup(application).toCompletableFuture().join().instances().isEmpty());
+            right.register(leftMember).toCompletableFuture().get(15, TimeUnit.SECONDS);
+            left.unregister(leftMember).toCompletableFuture().get(15, TimeUnit.SECONDS);
+            assertTrue(await(Duration.ofSeconds(25), () -> right.lookup(application)
+                    .toCompletableFuture().join().instances().equals(List.of(leftMember))));
+            assertTrue(await(Duration.ofSeconds(25), () -> left.lookup(application)
+                    .toCompletableFuture().join().instances().isEmpty()));
+        }
+    }
+
+    @Test
+    void logicalClustersFilterMembersWithoutConflatingApplicationIdentity() throws Exception {
+        String group = unique("CLUSTER_ISOLATION");
+        ApplicationKey application = app("cluster-isolation");
+        ApplicationInstance leftMember = provider(application, "left", 19712);
+        ApplicationInstance rightMember = consumer(application, "right");
+        try (NacosApplicationRegistry left = registry(group, "LEFT");
+             NacosApplicationRegistry right = registry(group, "RIGHT")) {
+            left.register(leftMember).toCompletableFuture().get(15, TimeUnit.SECONDS);
+            right.register(rightMember).toCompletableFuture().get(15, TimeUnit.SECONDS);
+            assertTrue(await(Duration.ofSeconds(25), () -> left.lookup(application)
+                    .toCompletableFuture().join().instances().equals(List.of(leftMember))));
+            assertTrue(await(Duration.ofSeconds(25), () -> right.lookup(application)
+                    .toCompletableFuture().join().instances().equals(List.of(rightMember))));
+        }
+    }
+
     private static void bootstrap(String group) {
         String endpoint = System.getenv("NACOS_TEST_ENDPOINT");
         assumeTrue(endpoint != null && !endpoint.isBlank(), "NACOS_TEST_ENDPOINT is required");
@@ -268,11 +280,15 @@ class NacosApplicationRegistryIntegrationTest {
     }
 
     private static NacosApplicationRegistry registry(String group) {
+        return registry(group, "DEFAULT");
+    }
+
+    private static NacosApplicationRegistry registry(String group, String cluster) {
         String endpoint = System.getenv("NACOS_TEST_ENDPOINT");
         assumeTrue(endpoint != null && !endpoint.isBlank(), "NACOS_TEST_ENDPOINT is required");
         return (NacosApplicationRegistry) new NacosApplicationRegistryFactory().create(
                 new RegistryOptions(List.of(endpoint), "public", Map.of(
-                        "nacosGroup", group, "nacosCluster", "DEFAULT",
+                        "nacosGroup", group, "nacosCluster", cluster,
                         "nacosMemberHost", "127.0.0.1")));
     }
 

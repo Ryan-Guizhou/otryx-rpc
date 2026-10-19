@@ -14,7 +14,7 @@ OTRYX RPC 的设计目标是高吞吐、低尾延迟、可控资源和可预测�
 
 ## 2. 模块边界
 
-当前 Reactor 有 16 个顶层模块。Core 不泄漏 Vert.x、Etcd、Nacos、Fory、Spring、Micrometer、OpenTelemetry、JFR 等第三方类型。
+当前 Reactor 有 10 个顶层模块。Core 不泄漏 Vert.x、Etcd、Nacos、Fory、Spring、Micrometer、OpenTelemetry、JFR 等第三方类型。
 
 ```mermaid
 flowchart TB
@@ -25,8 +25,8 @@ flowchart TB
     Dispatcher --> Core
     Core --> Codec[Method Codec Binding]
     Core --> LB[LoadBalancer]
-    Core --> Discovery[ServiceDiscovery]
-    Core --> Registrar[ServiceRegistrar]
+    Core --> Discovery[ApplicationDiscovery]
+    Core --> Registrar[ApplicationMembershipCoordinator]
     Core --> Transport[Transport SPI]
     Codec --> Fory[Fory Adapter]
     Discovery --> Etcd[Etcd Adapter]
@@ -61,15 +61,14 @@ flowchart TB
 flowchart TB
     Stub[Generated Stub / Proxy]
     Call[Logical Call]
-    Dir["ServiceInstance[] Snapshot"]
-    Compat[Compatibility Filtered]
+    Dir["已验证 Provider 的本地 DTO 快照"]
     LB[P2C + EWMA]
     Codec[Method Codec]
     Conn[Endpoint Connection]
     Pending[Connection-local Pending]
     Wire[Wire v1]
 
-    Stub --> Call --> Dir --> Compat --> LB --> Codec --> Conn --> Pending --> Wire
+    Stub --> Call --> Dir --> LB --> Codec --> Conn --> Pending --> Wire
 ```
 
 热路径不访问 Registry，不扫描 SPI，不解析配置。
@@ -123,19 +122,11 @@ Wire 由固定 Header、Metadata、Payload 构成。
 
 `RpcTypeRegistry` 在方法绑定阶段做冲突检测。
 
-`RpcSchemaFingerprint` 使用 SHA-256 计算服务契约 Fingerprint，并在 Registry Metadata 发布：
-
-```text
-peach.rpc.protocol.version
-peach.rpc.schema.version
-peach.rpc.schema.fingerprint
-```
-
-Consumer 在 Snapshot 更新阶段做 compatibility filtering，不增加单次 RPC 热路径判断。
+`RpcSchemaFingerprint` 使用 SHA-256 计算业务契约指纹。Provider 把完整导出服务写入不可变 `ApplicationManifest`，应用成员只携带 Manifest Revision。Consumer 在后台按 Mapping → 应用目录 → 实例 Manifest 校验 Wire/Schema、Service/Method ID 与 Fingerprint 后形成已验证候选，不增加单次 RPC 的远端 IO。
 
 ## 7. Registry 控制面
 
-Consumer 使用本地 `ServiceDirectory`。Registry Adapter 只负责更新 Snapshot。
+Consumer 使用本地 `ServiceDirectory` 的已验证快照。Registry Adapter 提供完整应用成员目录及 Manifest/Mapping，Core Resolver 负责契约校验，MembershipCoordinator 负责 Provider/Consumer/BOTH 的共享成员。
 
 ### Etcd
 

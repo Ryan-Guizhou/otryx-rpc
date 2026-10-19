@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,16 @@ class RegistryGenerationBoundaryTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.old = self.root / "old"
         self.new = self.root / "new"
+        self.addCleanup(self.stop_fixture_processes)
+
+    def stop_fixture_processes(self) -> None:
+        """A timeout in a broken runner must not leave its deliberately stubborn fixtures alive."""
+        for event in self.events():
+            if event["kind"] == "application":
+                try:
+                    os.kill(event["pid"], signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def detect(self) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, str(DETECTOR), str(self.old), str(self.new)],
@@ -60,13 +71,13 @@ class RegistryGenerationBoundaryTest(unittest.TestCase):
         historical_core.parent.mkdir(parents=True)
         historical_core.write_text("interface ApplicationRegistry {}", encoding="utf-8")
         result = self.detect()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "registry-migration")
-        self.assertIn("baseline=interface", result.stderr)
-        self.assertIn("current=application", result.stderr)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("baseline", result.stderr.lower())
+        self.assertIn("application", result.stderr.lower())
+        self.assertEqual(result.stdout, "")
 
     def test_same_generation_keeps_full_rolling_matrix(self) -> None:
-        for generation in ("interface", "application"):
+        for generation in ("application",):
             with self.subTest(generation=generation):
                 write_starter(self.old, generation)
                 write_starter(self.new, generation)
@@ -78,20 +89,21 @@ class RegistryGenerationBoundaryTest(unittest.TestCase):
         write_starter(self.old, "application")
         write_starter(self.new, "interface")
         result = self.detect()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "registry-migration")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("current", result.stderr.lower())
+        self.assertEqual(result.stdout, "")
 
     def test_comments_and_string_literals_do_not_change_generation(self) -> None:
-        write_starter(self.old, "interface")
-        write_starter(self.new, "interface")
+        write_starter(self.old, "application")
+        write_starter(self.new, "application")
         config = self.old / SPRING / "autoconfigure/OtryxRpcAutoConfiguration.java"
         config.write_text(config.read_text(encoding="utf-8") +
-                          '/* requireExtension(ApplicationRegistryFactory.class, key, name); */\n'
-                          'class Note { String s = "requireExtension(ApplicationRegistryFactory.class)"; }\n',
+                          '/* requireExtension(RegistryFactory.class, key, name); */\n'
+                          'class Note { String s = "requireExtension(RegistryFactory.class)"; }\n',
                           encoding="utf-8")
         runtime = self.old / SPRING / "runtime/OtryxRpcRuntimeCoordinator.java"
         runtime.write_text(runtime.read_text(encoding="utf-8") +
-                           '// client.applicationControlPlane(); server.applicationMembership();\n',
+                           '// client.serviceDiscovery(); server.serviceRegistrar();\n',
                            encoding="utf-8")
         result = self.detect()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -157,7 +169,9 @@ class RegistryGenerationBoundaryTest(unittest.TestCase):
             args = sys.argv[1:]
             events = Path(os.environ["FIXTURE_EVENTS"])
             environment = {key: os.environ.get(key) for key in
-                           ("OTRYX_RPC_COMPAT_PORT", "OTRYX_RPC_CLIENT_TIMEOUT")}
+                           ("OTRYX_RPC_COMPAT_PORT", "OTRYX_RPC_CLIENT_TIMEOUT", "ROLLING_COMPAT_STOP_SECONDS")}
+            if os.environ.get("FIXTURE_IGNORE_TERM") == "true":
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
             if "org.springframework.boot.loader.launch.PropertiesLauncher" in args:
                 jar = Path(args[args.index("-cp") + 1])
                 position = args.index("org.springframework.boot.loader.launch.PropertiesLauncher")
@@ -173,16 +187,20 @@ class RegistryGenerationBoundaryTest(unittest.TestCase):
             version = "N+1" if "new" in jar.parts else "N"
             with events.open("a", encoding="utf-8") as output:
                 output.write(json.dumps({"kind": "application", "jar": str(jar), "args": args,
-                                         "environment": environment}) + "\\n")
+                                         "pid": os.getpid(), "environment": environment}) + "\\n")
             active = Path(os.environ["FIXTURE_ACTIVE_PROVIDER"])
             if "provider" in jar.name:
-                active.write_text(json.dumps({"version": version, "pid": os.getpid()}), encoding="utf-8")
+                starts = json.loads(active.read_text(encoding="utf-8"))["starts"] + 1 if active.exists() else 1
+                active.write_text(json.dumps({"version": version, "pid": os.getpid(), "starts": starts}),
+                                  encoding="utf-8")
                 print("OTRYX RPC server started: bind=127.0.0.1:19090, advertised=127.0.0.1:19090", flush=True)
             else:
-                pair = version + "->" + json.loads(active.read_text(encoding="utf-8"))["version"]
+                provider = json.loads(active.read_text(encoding="utf-8"))
+                pair = version + "->" + provider["version"]
                 with Path(os.environ["FIXTURE_PAIRS"]).open("a", encoding="utf-8") as output:
                     output.write(pair + "\\n")
-                if pair == os.environ.get("FIXTURE_FAIL_PAIR"):
+                failure = os.environ.get("FIXTURE_FAIL_PAIR")
+                if pair == failure or (failure == "rollback" and provider["starts"] == 3):
                     print("Fixture RPC failure", flush=True)
                     sys.exit(1)
                 print("RPC quickstart completed successfully: Hello, OTRYX RPC!", flush=True)
@@ -235,7 +253,7 @@ class RegistryGenerationBoundaryTest(unittest.TestCase):
             if path.exists() else []
 
     def test_bootstrap_uses_current_jar_once_before_any_application(self) -> None:
-        result, _ = self.run_matrix("interface", "application")
+        result, _ = self.run_matrix("application", "application")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         events = self.events()
         self.assertTrue(events)
@@ -264,31 +282,33 @@ class RegistryGenerationBoundaryTest(unittest.TestCase):
             self.assertIn("--otryx.rpc.registry.nacos.group=" + group, event["args"])
 
     def test_bootstrap_failure_blocks_every_application_and_success_summary(self) -> None:
-        result, pairs = self.run_matrix("interface", "application", fail_bootstrap=True)
+        result, pairs = self.run_matrix("application", "application", fail_bootstrap=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(pairs, [])
         self.assertEqual([event["kind"] for event in self.events()], ["bootstrap"])
         self.assertNotIn("Compatibility PASS", result.stdout)
-        self.assertNotIn("Registry migration verified", result.stdout)
+        self.assertNotIn("rolling compatibility matrix passed", result.stdout)
 
     def test_script_port_control_does_not_leak_into_application_environment(self) -> None:
-        result, _ = self.run_matrix("interface", "application", extra_environment={
-            "OTRYX_RPC_COMPAT_PORT": "19443", "OTRYX_RPC_CLIENT_TIMEOUT": "4s"})
+        result, _ = self.run_matrix("application", "application", extra_environment={
+            "OTRYX_RPC_COMPAT_PORT": "19443", "OTRYX_RPC_CLIENT_TIMEOUT": "4s",
+            "ROLLING_COMPAT_STOP_SECONDS": "1"})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         events = self.events()
         self.assertTrue(events)
         for event in events:
             self.assertIsNone(event["environment"]["OTRYX_RPC_COMPAT_PORT"])
+            self.assertIsNone(event["environment"]["ROLLING_COMPAT_STOP_SECONDS"])
             self.assertEqual(event["environment"]["OTRYX_RPC_CLIENT_TIMEOUT"], "4s")
             if event["kind"] == "application" and "provider" in Path(event["jar"]).name:
                 self.assertIn("--otryx.rpc.server.port=19443", event["args"])
                 self.assertIn("--otryx.rpc.server.advertised-port=19443", event["args"])
 
-    def test_migration_requires_both_same_version_jvm_pairs(self) -> None:
+    def test_interface_baseline_blocks_all_processes(self) -> None:
         result, pairs = self.run_matrix("interface", "application")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(pairs, ["N->N", "N+1->N+1"])
-        self.assertIn("Cross-generation rolling compatibility has not been established", result.stdout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(pairs, [])
+        self.assertEqual(self.events(), [])
         self.assertNotIn("rolling compatibility matrix passed", result.stdout)
 
     def test_same_generation_runs_all_five_real_runner_pairs(self) -> None:
@@ -297,18 +317,67 @@ class RegistryGenerationBoundaryTest(unittest.TestCase):
         self.assertEqual(pairs, ["N->N", "N+1->N", "N->N+1", "N+1->N+1", "N+1->N"])
         self.assertIn("rolling compatibility matrix passed", result.stdout)
 
-    def test_old_same_version_failure_blocks_migration(self) -> None:
-        result, pairs = self.run_matrix("interface", "application", "N->N")
+    def test_term_ignoring_owned_processes_are_killed_and_reaped_within_budget(self) -> None:
+        result, pairs = self.run_matrix("application", "application", extra_environment={
+            "FIXTURE_IGNORE_TERM": "true", "ROLLING_COMPAT_STOP_SECONDS": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("forcing termination", result.stderr)
+        self.assertEqual(pairs, ["N->N", "N+1->N", "N->N+1", "N+1->N+1", "N+1->N"])
+        processes = [event["pid"] for event in self.events() if event["kind"] == "application"]
+        self.assertEqual(len(processes), 8)
+        for pid in processes:
+            with self.assertRaises(ProcessLookupError, msg=f"Owned fixture process remained alive: {pid}"):
+                os.kill(pid, 0)
+
+    def test_invalid_stop_budget_blocks_processes(self) -> None:
+        for budget in ("0", "36", "-1", "invalid"):
+            with self.subTest(budget=budget):
+                result, pairs = self.run_matrix("application", "application", extra_environment={
+                    "ROLLING_COMPAT_STOP_SECONDS": budget})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ROLLING_COMPAT_STOP_SECONDS", result.stderr)
+                self.assertEqual(pairs, [])
+                self.assertEqual(self.events(), [])
+
+    def test_two_interface_checkouts_are_not_a_supported_rolling_mode(self) -> None:
+        result, pairs = self.run_matrix("interface", "interface")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(pairs, [])
+        self.assertEqual(self.events(), [])
+
+    def test_new_consumer_old_provider_failure_blocks_rolling(self) -> None:
+        result, pairs = self.run_matrix("application", "application", "N+1->N")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(pairs[0], "N->N")
+        self.assertNotIn("N->N+1", pairs)
+        self.assertNotIn("rolling compatibility matrix passed", result.stdout)
+
+    def test_old_consumer_new_provider_failure_blocks_rolling(self) -> None:
+        result, pairs = self.run_matrix("application", "application", "N->N+1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(pairs[:2], ["N->N", "N+1->N"])
+        self.assertNotIn("N+1->N+1", pairs)
+        self.assertNotIn("rolling compatibility matrix passed", result.stdout)
+
+    def test_rollback_failure_cannot_publish_full_matrix_success(self) -> None:
+        result, pairs = self.run_matrix("application", "application", "rollback")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(pairs[:4], ["N->N", "N+1->N", "N->N+1", "N+1->N+1"])
+        self.assertIn("N rollback provider", result.stderr)
+        self.assertNotIn("rolling compatibility matrix passed", result.stdout)
+
+    def test_baseline_rpc_failure_blocks_rolling(self) -> None:
+        result, pairs = self.run_matrix("application", "application", "N->N")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(set(pairs), {"N->N"})
-        self.assertNotIn("Registry migration verified", result.stdout)
+        self.assertNotIn("rolling compatibility matrix passed", result.stdout)
 
-    def test_current_same_version_failure_blocks_migration(self) -> None:
-        result, pairs = self.run_matrix("interface", "application", "N+1->N+1")
+    def test_current_rpc_failure_blocks_rolling(self) -> None:
+        result, pairs = self.run_matrix("application", "application", "N+1->N+1")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("N->N", pairs)
         self.assertIn("N+1->N+1", pairs)
-        self.assertNotIn("Registry migration verified", result.stdout)
+        self.assertNotIn("rolling compatibility matrix passed", result.stdout)
 
 
 if __name__ == "__main__":

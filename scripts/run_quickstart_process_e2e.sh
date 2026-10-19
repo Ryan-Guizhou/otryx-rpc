@@ -2,11 +2,21 @@
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/quickstart_e2e_common.sh"
-RESTART_NACOS="${OTRYX_RPC_E2E_RESTART_NACOS:-${CI:-false}}"
+DEFAULT_RESTART=false
+if [[ "${QUICKSTART_REGISTRY:-nacos}" == nacos ]]; then DEFAULT_RESTART="${CI:-false}"; fi
+RESTART_NACOS="${OTRYX_RPC_E2E_RESTART_NACOS:-$DEFAULT_RESTART}"
 MAX_STALENESS="${OTRYX_RPC_E2E_MAX_STALENESS:-3s}"
 # These script controls are not Spring configuration keys. Preserve normal application settings.
 unset OTRYX_RPC_E2E_RESTART_NACOS OTRYX_RPC_E2E_MAX_STALENESS
 quickstart_prepare process
+if [[ "$RESTART_NACOS" != true && "$RESTART_NACOS" != false ]]; then
+  echo "OTRYX_RPC_E2E_RESTART_NACOS must be true or false." >&2
+  exit 1
+fi
+if [[ "$RESTART_NACOS" == true && "$QUICKSTART_REGISTRY" != nacos ]]; then
+  echo "The Nacos restart control requires QUICKSTART_REGISTRY=nacos." >&2
+  exit 1
+fi
 PROVIDER_APP=otryx-quickstart-process-provider
 CONSUMER_APP=otryx-quickstart-process-consumer
 PROVIDER_PID=""
@@ -18,9 +28,7 @@ start_provider() {
     --spring.application.name="$PROVIDER_APP" \
     --otryx.rpc.registry.application-name="$PROVIDER_APP" \
     --otryx.rpc.registry.instance-id=provider-main \
-    --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-    --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
-    --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+    "${QUICKSTART_REGISTRY_ARGS[@]}" \
     --otryx.rpc.quickstart.role=leaf \
     --otryx.rpc.quickstart.details-enabled=false \
     --otryx.rpc.server.port="$port" \
@@ -52,9 +60,7 @@ probe_fresh_consumer() {
       --spring.application.name=otryx-quickstart-process-fresh-consumer \
       --otryx.rpc.registry.application-name=otryx-quickstart-process-fresh-consumer \
       --otryx.rpc.registry.instance-id=fresh-consumer \
-      --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-      --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
-      --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+      "${QUICKSTART_REGISTRY_ARGS[@]}" \
       --otryx.rpc.client.directory-max-staleness="$MAX_STALENESS" \
       --otryx.rpc.quickstart.use-relay=false \
       --otryx.rpc.quickstart.use-details=false \
@@ -81,9 +87,7 @@ java -jar "$CONSUMER_JAR" \
   --spring.application.name="$CONSUMER_APP" \
   --otryx.rpc.registry.application-name="$CONSUMER_APP" \
   --otryx.rpc.registry.instance-id=consumer-main \
-  --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-  --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
-  --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+  "${QUICKSTART_REGISTRY_ARGS[@]}" \
   --otryx.rpc.client.directory-max-staleness="$MAX_STALENESS" \
   --otryx.rpc.quickstart.use-relay=false \
   --otryx.rpc.quickstart.use-details=false \
@@ -107,7 +111,7 @@ quickstart_wait_success_count "$CONSUMER_PID" "$CONSUMER_LOG" "$((successes + 1)
 observe_process provider-restarted
 
 if [[ "$RESTART_NACOS" == true ]]; then
-  if [[ "$NACOS_ENDPOINT" != 127.0.0.1:8848 ]]; then
+  if [[ "$QUICKSTART_REGISTRY_ENDPOINT" != 127.0.0.1:8848 ]]; then
     echo "The Nacos container restart scenario requires the explicit local test endpoint." >&2
     exit 1
   fi

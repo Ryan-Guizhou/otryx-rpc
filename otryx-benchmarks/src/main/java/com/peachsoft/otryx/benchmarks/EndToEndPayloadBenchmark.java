@@ -5,9 +5,6 @@ import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
-import com.peachsoft.otryx.registry.Registry;
-import com.peachsoft.otryx.registry.RegistryFactory;
-import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.observability.RpcSecurityMode;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.peachsoft.otryx.transport.RpcTransportFactory;
@@ -15,8 +12,6 @@ import com.peachsoft.otryx.transport.RpcTransportOptions;
 import com.peachsoft.otryx.transport.RpcTransportSecurityOptions;
 import java.net.ServerSocket;
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -64,7 +59,7 @@ public class EndToEndPayloadBenchmark {
     @Param({"PLAINTEXT"})
     public String transportSecurity;
 
-    private Registry registry;
+    private BenchmarkApplicationControlPlane controlPlane;
     private OtryxRpcServer server;
     private OtryxRpcClient client;
     private PayloadBenchmarkService service;
@@ -83,13 +78,7 @@ public class EndToEndPayloadBenchmark {
     public void setup() throws Exception {
         payload = new byte[payloadSize];
         int port = freePort();
-        registry = ExtensionLoader
-                .getLoader(RegistryFactory.class)
-                .getExtension("memory")
-                .create(new RegistryOptions(
-                        List.of(),
-                        "benchmark",
-                        Map.of()));
+        controlPlane = new BenchmarkApplicationControlPlane("benchmark");
 
         RpcCodecRegistry codecs =
                 RpcCodecRegistry.fromSpi();
@@ -114,8 +103,7 @@ public class EndToEndPayloadBenchmark {
                         clientSecurity());
 
         server = OtryxRpcServer.builder()
-                .serviceRegistrar(
-                        registry.registrar().orElseThrow())
+                .applicationMembership(controlPlane.provider())
                 .transportServer(
                         transportFactory.createServer(
                                 serverTransportOptions))
@@ -135,8 +123,7 @@ public class EndToEndPayloadBenchmark {
                 .toCompletableFuture()
                 .join();
 
-        client = OtryxRpcClient.builder()
-                .serviceDiscovery(registry)
+        client = controlPlane.clientBuilder()
                 .transportClient(
                         transportFactory.createClient(
                                 clientTransportOptions))
@@ -148,7 +135,7 @@ public class EndToEndPayloadBenchmark {
                 "1.0.0",
                 "benchmark");
 
-        service.echo(payload);
+        controlPlane.warmup(client, () -> service.echo(payload));
     }
 
     /**
@@ -170,8 +157,8 @@ public class EndToEndPayloadBenchmark {
         if (server != null) {
             server.close();
         }
-        if (registry != null) {
-            registry.close();
+        if (controlPlane != null) {
+            controlPlane.close();
         }
     }
 

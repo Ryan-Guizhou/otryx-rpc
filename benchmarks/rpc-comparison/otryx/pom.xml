@@ -9,6 +9,17 @@
         <version>1.0.0-SNAPSHOT</version>
     </parent>
     <artifactId>rpc-comparison-otryx</artifactId>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.peachsoft.otryx</groupId>
+                <artifactId>otryx-rpc</artifactId>
+                <version>${otryx.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
     <dependencies>
         <dependency>
             <groupId>com.peachsoft.otryx.comparison</groupId>
@@ -18,17 +29,18 @@
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
             <artifactId>otryx-core</artifactId>
-            <version>${otryx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.peachsoft.otryx</groupId>
+            <artifactId>otryx-registry-etcd</artifactId>
         </dependency>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
             <artifactId>otryx-serialization-fory</artifactId>
-            <version>${otryx.version}</version>
         </dependency>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
             <artifactId>otryx-transport-vertx</artifactId>
-            <version>${otryx.version}</version>
         </dependency>
     </dependencies>
     <build>

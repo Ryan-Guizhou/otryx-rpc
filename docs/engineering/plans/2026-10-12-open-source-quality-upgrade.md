@@ -145,7 +145,7 @@ flowchart LR
 
 - [Client](../../../otryx-core/src/main/java/com/peachsoft/otryx/core/OtryxRpcClient.java)、[Server](../../../otryx-core/src/main/java/com/peachsoft/otryx/core/OtryxRpcServer.java)、[Admission](../../../otryx-core/src/main/java/com/peachsoft/otryx/core/ProviderAdmissionController.java)。
 - [Transport Client](../../../otryx-transport/otryx-transport-vertx/src/main/java/com/peachsoft/otryx/transport/vertx/VertxRpcTransportClient.java)、[Transport Server](../../../otryx-transport/otryx-transport-vertx/src/main/java/com/peachsoft/otryx/transport/vertx/VertxRpcTransportServer.java)、[TLS Support](../../../otryx-transport/otryx-transport-vertx/src/main/java/com/peachsoft/otryx/transport/vertx/VertxTlsSupport.java)。
-- [Schema](../../../otryx-core/src/main/java/com/peachsoft/otryx/api/RpcSchemaFingerprint.java)、[兼容元数据](../../../otryx-core/src/main/java/com/peachsoft/otryx/api/RpcCompatibilityMetadata.java)、[Codegen](../../../otryx-codegen/src/main/java/com/peachsoft/otryx/codegen/OtryxRpcContractProcessor.java)。
+- [Schema](../../../otryx-core/src/main/java/com/peachsoft/otryx/api/RpcSchemaFingerprint.java)、[当前 Manifest 编码](../../../otryx-core/src/main/java/com/peachsoft/otryx/api/ApplicationManifestCodec.java)、[Codegen](../../../otryx-codegen/src/main/java/com/peachsoft/otryx/codegen/OtryxRpcContractProcessor.java)。
 - [Fory Codec](../../../otryx-serialization/otryx-serialization-fory/src/main/java/com/peachsoft/otryx/codec/fory/ForyRpcCodec.java)、[Spring 属性](../../../otryx-spring-boot/otryx-spring-boot-autoconfigure/src/main/java/com/peachsoft/otryx/spring/autoconfigure/OtryxRpcProperties.java)。
 
 ## 4. 总体实施契约
@@ -292,7 +292,7 @@ flowchart LR
 
 **目标/理由：** 解决 F06～F08，定义首发可支持契约。
 
-**Files:** 修改 Core `RpcSchemaFingerprint.java`、`RpcMethodDescriptor.java`、`ServiceBinding.java`、Client、`RpcCompatibilityMetadata.java`、`ServiceDirectory.java`；修改 Codegen Processor；新增 Core `RpcContractMethods.java`、`RpcContractMethodsTest.java`；扩展 Schema/Compatibility/Generated 测试。
+**Files:** 修改 Core `RpcSchemaFingerprint.java`、`RpcMethodDescriptor.java`、`ServiceBinding.java`、Client、`ApplicationManifestCodec.java`（当前应用级兼容契约；历史桥接已移除）、`ServiceDirectory.java`；修改 Codegen Processor；新增 Core `RpcContractMethods.java`、`RpcContractMethodsTest.java`；扩展 Schema/Compatibility/Generated 测试。
 
 **Interfaces:** 提议 `RpcContractMethods.resolve(Class<?> api)` 返回确定顺序的 `List<Method>`；有效 RPC 方法限 public abstract 实例方法，排除 static、default、Object、bridge/synthetic。编译器模型遵循同样规则与独立 fixture，不在 Core 引入 javac 私有 API。
 

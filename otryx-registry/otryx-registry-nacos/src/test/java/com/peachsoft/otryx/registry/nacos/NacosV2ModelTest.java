@@ -3,6 +3,7 @@ package com.peachsoft.otryx.registry.nacos;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,6 +17,8 @@ import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * 不依赖 Nacos 服务端的 Consumer 无端点和分片 CAS 编码回归。
@@ -102,6 +105,71 @@ class NacosV2ModelTest {
                 owner, "token-1", Set.of(new ServiceKey("bad/service", "1.0", "default")));
         assertThrows(IllegalArgumentException.class,
                 () -> NacosV2MappingCodec.encode(Map.of(NacosV2MappingCodec.identifier(owner), bad)));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {50, 100, 200})
+    void providerWeightsRoundTripWithoutLosingRoutingAttributes(int weight) {
+        ApplicationInstance provider = new ApplicationInstance("weighted", APP, ApplicationRole.PROVIDER,
+                new RpcEndpoint("127.0.0.1", 19101), weight, "sha256:" + "a".repeat(64),
+                Map.of("zone", "east", "otryx.v2.role", "CONSUMER"));
+        Instance encoded = NacosV2InstanceMapper.encode(provider, CLUSTER, "127.0.0.1", "token");
+        assertEquals(weight / 100D, encoded.getWeight());
+        assertEquals(provider, NacosV2InstanceMapper.decode(APP, CLUSTER, encoded));
+        assertTrue(NacosV2InstanceMapper.decode(APP, CLUSTER, encoded).routableProvider());
+    }
+
+    @Test
+    void unhealthyDisabledAndForeignClusterMembersAreExcluded() {
+        Instance encoded = encodedProvider();
+        encoded.setHealthy(false);
+        assertNull(NacosV2InstanceMapper.decode(APP, CLUSTER, encoded));
+        encoded.setHealthy(true);
+        encoded.setEnabled(false);
+        assertNull(NacosV2InstanceMapper.decode(APP, CLUSTER, encoded));
+        encoded.setEnabled(true);
+        assertNull(NacosV2InstanceMapper.decode(APP, "OTHER", encoded));
+    }
+
+    @Test
+    void invalidProviderWeightEndpointAndIdentityMustFailClosed() {
+        for (double weight : new double[] {0D, -1D, Double.NaN, Double.POSITIVE_INFINITY}) {
+            Instance encoded = encodedProvider();
+            encoded.setWeight(weight);
+            assertThrows(IllegalArgumentException.class,
+                    () -> NacosV2InstanceMapper.decode(APP, CLUSTER, encoded));
+        }
+        Instance invalidPort = encodedProvider();
+        invalidPort.setPort(0);
+        assertThrows(IllegalArgumentException.class,
+                () -> NacosV2InstanceMapper.decode(APP, CLUSTER, invalidPort));
+        Instance wildcard = encodedProvider();
+        wildcard.setIp("0.0.0.0");
+        assertThrows(IllegalArgumentException.class,
+                () -> NacosV2InstanceMapper.decode(APP, CLUSTER, wildcard));
+        assertThrows(IllegalArgumentException.class,
+                () -> NacosV2InstanceMapper.decode(new ApplicationKey("foreign", APP.applicationName()),
+                        CLUSTER, encodedProvider()));
+        assertThrows(IllegalArgumentException.class,
+                () -> NacosV2InstanceMapper.encode(new ApplicationInstance("wildcard", APP,
+                        ApplicationRole.PROVIDER, new RpcEndpoint("0.0.0.0", 19101), 100,
+                        "sha256:" + "a".repeat(64), Map.of()), CLUSTER, "127.0.0.1", "token"));
+    }
+
+    @Test
+    void namingIdentityUsesApplicationAndLeavesNamespaceToSdkScope() {
+        assertEquals(NacosV2Names.serviceName(APP),
+                NacosV2Names.serviceName(new ApplicationKey(APP.namespace(), APP.applicationName())));
+        assertEquals(NacosV2Names.serviceName(APP),
+                NacosV2Names.serviceName(new ApplicationKey("foreign", APP.applicationName())));
+        assertNotEquals(NacosV2Names.serviceName(APP),
+                NacosV2Names.serviceName(new ApplicationKey(APP.namespace(), "payments")));
+    }
+
+    private static Instance encodedProvider() {
+        return NacosV2InstanceMapper.encode(new ApplicationInstance("node-a", APP, ApplicationRole.PROVIDER,
+                new RpcEndpoint("127.0.0.1", 19101), 100, "sha256:" + "a".repeat(64), Map.of()),
+                CLUSTER, "127.0.0.1", "token-provider");
     }
 
     private static ApplicationInstance consumer(String id) {

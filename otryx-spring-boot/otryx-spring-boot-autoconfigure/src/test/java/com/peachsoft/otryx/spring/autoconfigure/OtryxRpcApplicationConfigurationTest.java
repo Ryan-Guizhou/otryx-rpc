@@ -3,19 +3,15 @@ package com.peachsoft.otryx.spring.autoconfigure;
 import com.peachsoft.otryx.core.ApplicationMembershipCoordinator;
 import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
-import com.peachsoft.otryx.registry.Registry;
 import com.peachsoft.otryx.registry.RegistryCapabilities;
 import com.peachsoft.otryx.registry.RegistryCapability;
-import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.registry.memory.MemoryApplicationManifestRepository;
 import com.peachsoft.otryx.registry.memory.MemoryApplicationRegistry;
-import com.peachsoft.otryx.registry.memory.MemoryRegistryFactory;
 import com.peachsoft.otryx.registry.memory.MemoryServiceMappingRepository;
 import com.peachsoft.otryx.spring.runtime.OtryxRpcApplicationIdentity;
 import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -139,19 +135,9 @@ public class OtryxRpcApplicationConfigurationTest {
     }
 
     @Test
-    void legacyRegistryBeanMustFailBeforeEvenALazyBeanIsInstantiated() {
-        AtomicBoolean created = new AtomicBoolean();
-        namedRunner().withBean(Registry.class, () -> {
-                    created.set(true);
-                    return new MemoryRegistryFactory().create(RegistryOptions.fromCsv("", "", Map.of()));
-                }, definition -> definition.setLazyInit(true))
-                .run(context -> {
-                    assertThat(context).hasFailed();
-                    assertThat(context.getStartupFailure())
-                            .hasStackTraceContaining("ApplicationRegistry")
-                            .hasStackTraceContaining("application-level");
-                    assertThat(created).isFalse();
-                });
+    void deletedInterfaceRegistryMustNotBeAvailableToUserBeans() {
+        assertThat(org.springframework.util.ClassUtils.isPresent(
+                "com.peachsoft.otryx.registry.Registry", getClass().getClassLoader())).isFalse();
     }
 
     @Test

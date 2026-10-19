@@ -14,13 +14,12 @@ import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.ApplicationRegistryContractTestKit;
 import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import com.peachsoft.otryx.registry.http.HttpRegistryClient;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -155,34 +154,23 @@ class EurekaApplicationRegistryIntegrationTest {
     }
 
     @Test
-    void thirtyInterfacesTenInstancesStillProduceOnlyTenEurekaMembers() throws Exception {
+    @Timeout(value = 300, unit = TimeUnit.SECONDS)
+    void thirtyRealContractsAndTenIndependentClientsSatisfySharedApplicationContract() throws Exception {
         String namespace = unique();
-        ApplicationKey app = new ApplicationKey(namespace, "density");
-        Set<ServiceKey> services = new HashSet<>();
-        for (int i = 0; i < 30; i++) {
-            services.add(service("Contract" + i));
-        }
-        List<EurekaApplicationRegistry> writers = new ArrayList<>();
-        try {
-            for (int i = 0; i < 10; i++) {
-                EurekaApplicationRegistry writer = registry(namespace);
-                writers.add(writer);
-                String instanceId = "provider-" + i;
-                ServiceMappingOwner owner = writer.serviceMappingRepository()
-                        .claim(app, instanceId).toCompletableFuture().join();
-                writer.serviceMappingRepository().publish(owner, services).toCompletableFuture().join();
-                writer.register(provider(app, instanceId, PROVIDER_PORT + 20 + i))
-                        .toCompletableFuture().join();
-            }
-            assertTrue(await(WAIT, () -> writers.getFirst().lookup(app)
-                    .toCompletableFuture().join().instances().size() == 10));
-            for (ServiceKey service : List.of(services.iterator().next())) {
-                assertEquals(Set.of(app), writers.getFirst().serviceMappingRepository()
-                        .lookup(new ServiceMappingKey(namespace, service))
-                        .toCompletableFuture().join().applications());
-            }
-        } finally {
-            writers.forEach(EurekaApplicationRegistry::close);
+        EurekaV2Identity identity = new EurekaV2Identity(namespace);
+        try (HttpRegistryClient raw = rawEureka()) {
+            ApplicationRegistryContractTestKit.verify("eureka", namespace, 10, () -> registry(namespace),
+                    application -> {
+                        HttpRegistryClient.Response response = raw.request("GET",
+                                "/apps/" + identity.appName(application), null);
+                        if (response.status() == 404) {
+                            return 0;
+                        }
+                        assertEquals(200, response.status());
+                        JsonNode instances = response.json().path("application").path("instance");
+                        assertTrue(instances.isArray() || instances.isObject());
+                        return instances.isArray() ? instances.size() : 1;
+                    }, WAIT);
         }
     }
 

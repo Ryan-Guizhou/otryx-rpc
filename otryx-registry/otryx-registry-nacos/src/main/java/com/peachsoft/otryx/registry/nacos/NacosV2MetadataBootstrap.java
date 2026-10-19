@@ -77,16 +77,16 @@ public final class NacosV2MetadataBootstrap {
     public static void initialize(RegistryOptions options) {
         Objects.requireNonNull(options, "options");
         List<String> endpoints = options.endpoints().isEmpty()
-                ? List.of(NacosRegistryFactory.DEFAULT_ENDPOINT) : options.endpoints();
+                ? List.of(NacosApplicationRegistryFactory.DEFAULT_ENDPOINT) : options.endpoints();
         for (String endpoint : endpoints) {
             if (endpoint.contains("@")) {
                 throw new IllegalArgumentException("Nacos endpoint must not contain credentials");
             }
         }
         String namespace = options.namespace().isBlank()
-                ? NacosRegistryFactory.DEFAULT_NAMESPACE : options.namespace();
-        String group = options.providerOption(OPTION_GROUP, NacosRegistryFactory.DEFAULT_GROUP);
-        Properties properties = NacosRegistryFactory.clientProperties(options, endpoints, namespace);
+                ? NacosApplicationRegistryFactory.DEFAULT_NAMESPACE : options.namespace();
+        String group = options.providerOption(OPTION_GROUP, NacosApplicationRegistryFactory.DEFAULT_GROUP);
+        Properties properties = NacosApplicationRegistryFactory.clientProperties(options, endpoints, namespace);
         try {
             ConfigService config = NacosFactory.createConfigService(properties);
             try {

@@ -1,8 +1,8 @@
 package com.peachsoft.otryx.registry.nacos;
 
 import com.alibaba.nacos.api.NacosFactory;
+import com.alibaba.nacos.api.PropertyKeyConst;
 import com.alibaba.nacos.api.config.ConfigService;
-import com.alibaba.nacos.api.exception.NacosException;
 import com.alibaba.nacos.api.naming.NamingService;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
@@ -33,8 +33,14 @@ public final class NacosApplicationRegistryFactory implements ApplicationRegistr
     private static final String OPTION_GROUP = "nacosGroup";
     private static final String OPTION_CLUSTER = "nacosCluster";
     private static final String OPTION_MEMBER_HOST = "nacosMemberHost";
+    private static final String OPTION_USERNAME = "nacosUsername";
+    private static final String OPTION_PASSWORD = "nacosPassword";
     private static final String VALID_GROUP = "[A-Za-z0-9._:-]{1,128}";
     private static final String VALID_CLUSTER = "[A-Za-z0-9.-]{1,64}";
+    static final String DEFAULT_ENDPOINT = "127.0.0.1:8848";
+    static final String DEFAULT_NAMESPACE = "public";
+    static final String DEFAULT_GROUP = "OTRYX_RPC";
+    static final String DEFAULT_CLUSTER = "DEFAULT";
 
     /** 创建应用级 Nacos 工厂。 */
     public NacosApplicationRegistryFactory() {
@@ -50,16 +56,16 @@ public final class NacosApplicationRegistryFactory implements ApplicationRegistr
     public ApplicationRegistry create(RegistryOptions options) {
         Objects.requireNonNull(options, "options");
         List<String> endpoints = options.endpoints().isEmpty()
-                ? List.of(NacosRegistryFactory.DEFAULT_ENDPOINT) : options.endpoints();
+                ? List.of(DEFAULT_ENDPOINT) : options.endpoints();
         for (String endpoint : endpoints) {
             if (endpoint.contains("@")) {
                 throw new IllegalArgumentException("Nacos endpoint must not embed credentials");
             }
         }
         String namespace = options.namespace().isBlank()
-                ? NacosRegistryFactory.DEFAULT_NAMESPACE : options.namespace();
-        String group = options.providerOption(OPTION_GROUP, NacosRegistryFactory.DEFAULT_GROUP);
-        String cluster = options.providerOption(OPTION_CLUSTER, NacosRegistryFactory.DEFAULT_CLUSTER);
+                ? DEFAULT_NAMESPACE : options.namespace();
+        String group = options.providerOption(OPTION_GROUP, DEFAULT_GROUP);
+        String cluster = options.providerOption(OPTION_CLUSTER, DEFAULT_CLUSTER);
         if (!group.matches(VALID_GROUP) || !cluster.matches(VALID_CLUSTER)) {
             throw new IllegalArgumentException("Invalid Nacos group or cluster");
         }
@@ -70,7 +76,7 @@ public final class NacosApplicationRegistryFactory implements ApplicationRegistr
         if (!NacosV2InstanceMapper.validHost(host)) {
             throw new IllegalArgumentException("Nacos consumer membership host must be a real local IP");
         }
-        Properties props = NacosRegistryFactory.clientProperties(options, endpoints, namespace);
+        Properties props = clientProperties(options, endpoints, namespace);
         NamingService naming = null;
         ConfigService config = null;
         try {
@@ -95,6 +101,22 @@ public final class NacosApplicationRegistryFactory implements ApplicationRegistr
             }
             throw new IllegalStateException("Unable to create Nacos V2 control plane", error);
         }
+    }
+
+    /** SDK 凭据只写入独立属性，不拼入端点、目录元数据或错误文本。 */
+    static Properties clientProperties(RegistryOptions options, List<String> endpoints, String namespace) {
+        Properties properties = new Properties();
+        properties.setProperty(PropertyKeyConst.SERVER_ADDR, String.join(",", endpoints));
+        properties.setProperty(PropertyKeyConst.NAMESPACE, namespace);
+        String username = options.providerOption(OPTION_USERNAME, "");
+        String password = options.providerOption(OPTION_PASSWORD, "");
+        if (!username.isBlank()) {
+            properties.setProperty(PropertyKeyConst.USERNAME, username);
+        }
+        if (!password.isBlank()) {
+            properties.setProperty(PropertyKeyConst.PASSWORD, password);
+        }
+        return properties;
     }
 
     private static String detectMemberHost() {

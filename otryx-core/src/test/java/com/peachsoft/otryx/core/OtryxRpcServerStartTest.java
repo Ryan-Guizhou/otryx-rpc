@@ -3,6 +3,7 @@ package com.peachsoft.otryx.core;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -10,10 +11,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import com.peachsoft.otryx.api.OtryxRpcExecution;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcExecutionMode;
-import com.peachsoft.otryx.api.ServiceInstance;
+import com.peachsoft.otryx.api.ApplicationInstance;
+import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.codec.RpcCodec;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
-import com.peachsoft.otryx.registry.ServiceRegistrar;
+import com.peachsoft.otryx.registry.ApplicationRegistrar;
+import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportServer;
 import java.time.Duration;
@@ -24,6 +27,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -35,15 +39,22 @@ import org.junit.jupiter.api.Test;
  */
 public class OtryxRpcServerStartTest {
 
+    private static final Duration CONTROL_TIMEOUT = Duration.ofSeconds(3);
+    private final ApplicationTestControlPlane controlPlane = new ApplicationTestControlPlane();
+
+    @AfterEach
+    void closeApplicationControlPlane() {
+        controlPlane.close();
+    }
+
     @Test
     void shouldRejectDirectExecutionUnlessExplicitlyEnabled() {
-        ServiceRegistrar registry = new NoopRegistry();
         RpcTransportServer transport = new TestTransportServer();
         RpcCodecRegistry codecs =
                 RpcCodecRegistry.of(new NoopCodec());
 
         OtryxRpcServer safeDefault = OtryxRpcServer.builder()
-                .serviceRegistrar(registry)
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(codecs)
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19090))
@@ -61,7 +72,7 @@ public class OtryxRpcServerStartTest {
         }
 
         OtryxRpcServer explicitlyEnabled = OtryxRpcServer.builder()
-                .serviceRegistrar(registry)
+                .applicationMembership(controlPlane.membership())
                 .transportServer(new TestTransportServer())
                 .codecRegistry(codecs)
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19091))
@@ -83,11 +94,11 @@ public class OtryxRpcServerStartTest {
     }
 
     @Test
-    void closeShouldNotBlockForeverWhenRegistryUnregisterHangs() {
-        HangingUnregisterRegistry registry =
-                new HangingUnregisterRegistry();
+    void closeShouldNotBlockForeverWhenApplicationUnregisterHangs() {
+        HangingUnregisterRegistrar registry =
+                new HangingUnregisterRegistrar();
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(registry)
+                .applicationMembership(controlPlane.membership(registry, Duration.ofMillis(50)))
                 .transportServer(new TestTransportServer())
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19092))
@@ -99,23 +110,24 @@ public class OtryxRpcServerStartTest {
                         "1.0.0",
                         "default");
 
-        server.start().toCompletableFuture().join();
-        long startedAt = System.nanoTime();
-        server.close();
-        long elapsedMillis =
-                Duration.ofNanos(System.nanoTime() - startedAt)
-                        .toMillis();
-
-        org.junit.jupiter.api.Assertions.assertTrue(
-                elapsedMillis < 1_000L);
+        try {
+            server.start().toCompletableFuture().join();
+            long startedAt = System.nanoTime();
+            server.close();
+            long elapsedMillis = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+            assertTrue(elapsedMillis < 1_000L);
+        } finally {
+            registry.release.complete(null);
+            server.close();
+        }
     }
 
     @Test
     void concurrentCloseMustBeIdempotent() throws Exception {
-        BlockingUnregisterRegistry registry = new BlockingUnregisterRegistry();
+        BlockingUnregisterRegistrar registry = new BlockingUnregisterRegistrar();
         TestTransportServer transport = new TestTransportServer();
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(registry)
+                .applicationMembership(controlPlane.membership(registry, CONTROL_TIMEOUT))
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19103))
@@ -149,8 +161,9 @@ public class OtryxRpcServerStartTest {
     void shutdownMustReturnWithinTotalBudgetWhenUnregisterNeverCompletes()
             throws Exception {
         TestTransportServer transport = new TestTransportServer();
+        HangingUnregisterRegistrar registry = new HangingUnregisterRegistrar();
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new HangingUnregisterRegistry())
+                .applicationMembership(controlPlane.membership(registry, CONTROL_TIMEOUT))
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19104))
@@ -168,6 +181,7 @@ public class OtryxRpcServerStartTest {
             assertFalse(report.registrationsRemoved());
             assertTrue(report.deadlineExceeded());
         } finally {
+            registry.release.complete(null);
             server.close();
         }
     }
@@ -176,7 +190,7 @@ public class OtryxRpcServerStartTest {
     void closeFailureMustNotSkipOtherResources() throws Exception {
         FailingCloseTransport transport = new FailingCloseTransport();
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistry())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19105))
@@ -198,12 +212,14 @@ public class OtryxRpcServerStartTest {
             throws Exception {
         DeferredStartTransport transport = new DeferredStartTransport();
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistry())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19106))
-                .build();
+                .build()
+                .registerService(ServiceOne.class, new ServiceOneImpl(), "1.0.0", "default");
         CompletionStage<RpcEndpoint> starting = server.start();
+        assertTrue(transport.entered.await(1, TimeUnit.SECONDS));
         CompletionStage<RpcShutdownReport> closing =
                 server.shutdown(new RpcShutdownOptions(Duration.ofSeconds(1)));
         transport.started.complete(new RpcEndpoint("127.0.0.1", 19106));
@@ -219,11 +235,12 @@ public class OtryxRpcServerStartTest {
     @Test
     void wildcardBindShouldRequireAdvertisedHost() {
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistry())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(new TestTransportServer())
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("0.0.0.0", 19090))
-                .build();
+                .build()
+                .registerService(ServiceOne.class, new ServiceOneImpl(), "1.0.0", "default");
 
         try {
             CompletionException error = assertThrows(
@@ -241,9 +258,9 @@ public class OtryxRpcServerStartTest {
 
     @Test
     void dynamicPortShouldPublishActualTransportPort() {
-        CapturingRegistry registry = new CapturingRegistry();
+        CapturingRegistrar registry = new CapturingRegistrar();
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(registry)
+                .applicationMembership(controlPlane.membership(registry, CONTROL_TIMEOUT))
                 .transportServer(new DynamicPortTransportServer(24567))
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 0))
@@ -259,19 +276,19 @@ public class OtryxRpcServerStartTest {
 
             assertEquals(
                     new RpcEndpoint("127.0.0.1", 24567),
-                    registry.registered.get().endpoint());
+                    registry.registered.get().rpcEndpoint());
         } finally {
             server.close();
         }
     }
 
     @Test
-    void shouldRollbackRegistrationsWhenRegistryStartupFails() {
-        FailingRegistry registry = new FailingRegistry();
+    void shouldRollbackMappingsWhenApplicationRegistrationFails() {
+        FailingRegistrar registry = new FailingRegistrar();
         TestTransportServer transport = new TestTransportServer();
         RpcCodec codec = new NoopCodec();
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(registry)
+                .applicationMembership(controlPlane.membership(registry, CONTROL_TIMEOUT))
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(codec))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19090))
@@ -283,10 +300,55 @@ public class OtryxRpcServerStartTest {
             assertThrows(
                     CompletionException.class,
                     () -> server.start().toCompletableFuture().join());
-            assertEquals(2, registry.unregisterCount.get());
+            assertEquals(1, registry.registerCount.get(),
+                    "Multiple interfaces must publish one application member");
+            assertEquals(0, registry.unregisterCount.get(),
+                    "Rejected application registration must not fabricate a live member");
+            for (Class<?> api : new Class<?>[] {ServiceOne.class, ServiceTwo.class}) {
+                ServiceMappingKey key = new ServiceMappingKey(ApplicationTestControlPlane.NAMESPACE,
+                        new ServiceKey(api.getName(), "1.0.0", "default"));
+                assertTrue(controlPlane.mappings.lookup(key).toCompletableFuture().join().applications().isEmpty(),
+                        "Application startup failure must revoke every exported service mapping");
+            }
             assertEquals(1, transport.closeCount.get());
         } finally {
             server.close();
+        }
+    }
+
+    @Test
+    void applicationRegistrationFailureMustCompleteStartupWhenTransportCloseThrows() throws Exception {
+        FailingRegistrar registry = new FailingRegistrar();
+        FailingCloseTransport transport = new FailingCloseTransport();
+        OtryxRpcServer server = OtryxRpcServer.builder()
+                .applicationMembership(controlPlane.membership(registry, CONTROL_TIMEOUT))
+                .transportServer(transport)
+                .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
+                .bindEndpoint(new RpcEndpoint("127.0.0.1", 19107))
+                .build()
+                .registerService(ServiceOne.class, new ServiceOneImpl(), "1.0.0", "default");
+        try {
+            CompletableFuture<Throwable> outcome = server.start()
+                    .handle((endpoint, error) -> error).toCompletableFuture();
+            Throwable failure = assertDoesNotThrow(() -> outcome.get(2, TimeUnit.SECONDS),
+                    "Startup failure must complete even when transport cleanup throws");
+            assertNotNull(failure);
+            Throwable primary = failure;
+            while (primary instanceof CompletionException && primary.getCause() != null) {
+                primary = primary.getCause();
+            }
+            assertSame(registry.failure, primary,
+                    "Registration failure must remain the startup failure cause");
+            assertEquals(1, failure.getSuppressed().length);
+            assertSame(transport.failure, failure.getSuppressed()[0]);
+            assertEquals(1, transport.closeCalls.get());
+            ServiceMappingKey key = new ServiceMappingKey(ApplicationTestControlPlane.NAMESPACE,
+                    new ServiceKey(ServiceOne.class.getName(), "1.0.0", "default"));
+            assertTrue(controlPlane.mappings.lookup(key).toCompletableFuture().join().applications().isEmpty(),
+                    "Transport cleanup failure must not restore revoked application mappings");
+        } finally {
+            server.shutdown(new RpcShutdownOptions(Duration.ofSeconds(1)))
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
         }
     }
 
@@ -342,45 +404,34 @@ public class OtryxRpcServerStartTest {
         }
     }
 
-    private static final class NoopRegistry implements ServiceRegistrar {
+    private static final class HangingUnregisterRegistrar
+            implements ApplicationRegistrar {
+        private final CompletableFuture<Void> release = new CompletableFuture<>();
+
         @Override
-        public CompletionStage<Void> register(ServiceInstance instance) {
+        public CompletionStage<Void> register(ApplicationInstance instance) {
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
-        public CompletionStage<Void> unregister(ServiceInstance instance) {
-            return CompletableFuture.completedFuture(null);
+        public CompletionStage<Void> unregister(ApplicationInstance instance) {
+            return release;
         }
     }
 
-    private static final class HangingUnregisterRegistry
-            implements ServiceRegistrar {
-
-        @Override
-        public CompletionStage<Void> register(ServiceInstance instance) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public CompletionStage<Void> unregister(ServiceInstance instance) {
-            return new CompletableFuture<>();
-        }
-    }
-
-    private static final class CapturingRegistry
-            implements ServiceRegistrar {
-        private final AtomicReference<ServiceInstance> registered =
+    private static final class CapturingRegistrar
+            implements ApplicationRegistrar {
+        private final AtomicReference<ApplicationInstance> registered =
                 new AtomicReference<>();
 
         @Override
-        public CompletionStage<Void> register(ServiceInstance instance) {
+        public CompletionStage<Void> register(ApplicationInstance instance) {
             registered.set(instance);
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
-        public CompletionStage<Void> unregister(ServiceInstance instance) {
+        public CompletionStage<Void> unregister(ApplicationInstance instance) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -406,40 +457,39 @@ public class OtryxRpcServerStartTest {
         }
     }
 
-    private static final class FailingRegistry implements ServiceRegistrar {
+    private static final class FailingRegistrar implements ApplicationRegistrar {
         private final AtomicInteger registerCount = new AtomicInteger();
         private final AtomicInteger unregisterCount = new AtomicInteger();
+        private final IllegalStateException failure =
+                new IllegalStateException("Synthetic application registration failure");
 
         @Override
-        public CompletionStage<Void> register(ServiceInstance instance) {
-            if (registerCount.incrementAndGet() == 2) {
-                return CompletableFuture.failedFuture(
-                        new IllegalStateException("synthetic registry failure"));
-            }
-            return CompletableFuture.completedFuture(null);
+        public CompletionStage<Void> register(ApplicationInstance instance) {
+            registerCount.incrementAndGet();
+            return CompletableFuture.failedFuture(failure);
         }
 
         @Override
-        public CompletionStage<Void> unregister(ServiceInstance instance) {
+        public CompletionStage<Void> unregister(ApplicationInstance instance) {
             unregisterCount.incrementAndGet();
             return CompletableFuture.completedFuture(null);
         }
 
     }
 
-    private static final class BlockingUnregisterRegistry
-            implements ServiceRegistrar {
+    private static final class BlockingUnregisterRegistrar
+            implements ApplicationRegistrar {
         private final CountDownLatch entered = new CountDownLatch(1);
         private final CompletableFuture<Void> release = new CompletableFuture<>();
         private final AtomicInteger unregisters = new AtomicInteger();
 
         @Override
-        public CompletionStage<Void> register(ServiceInstance instance) {
+        public CompletionStage<Void> register(ApplicationInstance instance) {
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
-        public CompletionStage<Void> unregister(ServiceInstance instance) {
+        public CompletionStage<Void> unregister(ApplicationInstance instance) {
             unregisters.incrementAndGet();
             entered.countDown();
             return release;
@@ -449,6 +499,7 @@ public class OtryxRpcServerStartTest {
     private static final class FailingCloseTransport
             implements RpcTransportServer {
         private final AtomicInteger closeCalls = new AtomicInteger();
+        private final IllegalStateException failure = new IllegalStateException("synthetic close failure");
 
         @Override
         public CompletionStage<RpcEndpoint> start(
@@ -465,7 +516,7 @@ public class OtryxRpcServerStartTest {
         @Override
         public void close() {
             closeCalls.incrementAndGet();
-            throw new IllegalStateException("synthetic close failure");
+            throw failure;
         }
     }
 
@@ -473,11 +524,13 @@ public class OtryxRpcServerStartTest {
             implements RpcTransportServer {
         private final CompletableFuture<RpcEndpoint> started =
                 new CompletableFuture<>();
+        private final CountDownLatch entered = new CountDownLatch(1);
 
         @Override
         public CompletionStage<RpcEndpoint> start(
                 RpcEndpoint bind,
                 RpcRequestHandler handler) {
+            entered.countDown();
             return started;
         }
 

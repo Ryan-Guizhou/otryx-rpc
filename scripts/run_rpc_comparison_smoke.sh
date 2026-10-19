@@ -11,6 +11,23 @@ CONCURRENCY="${RPC_COMPARISON_CONCURRENCY:-16}"
 WARMUP="${RPC_COMPARISON_WARMUP_SECONDS:-2}"
 DURATION="${RPC_COMPARISON_DURATION_SECONDS:-3}"
 PAYLOAD="${RPC_COMPARISON_PAYLOAD_BYTES:-256}"
+readonly DEFAULT_STOP_SECONDS=35
+readonly DEFAULT_CLIENT_OVERHEAD_SECONDS=120
+readonly PROCESS_POLL_SECONDS=0.1
+STOP_SECONDS="${RPC_COMPARISON_STOP_SECONDS:-$DEFAULT_STOP_SECONDS}"
+CLIENT_OVERHEAD_SECONDS="${RPC_COMPARISON_CLIENT_OVERHEAD_SECONDS:-$DEFAULT_CLIENT_OVERHEAD_SECONDS}"
+
+if [[ ! "$STOP_SECONDS" =~ ^[1-9][0-9]?$ ]] || (( STOP_SECONDS > DEFAULT_STOP_SECONDS )); then
+  echo "RPC_COMPARISON_STOP_SECONDS must be an integer from 1 to 35" >&2
+  exit 1
+fi
+if [[ ! "$CLIENT_OVERHEAD_SECONDS" =~ ^[1-9][0-9]{0,2}$ ]] \
+    || (( CLIENT_OVERHEAD_SECONDS > DEFAULT_CLIENT_OVERHEAD_SECONDS )); then
+  echo "RPC_COMPARISON_CLIENT_OVERHEAD_SECONDS must be an integer from 1 to 120" >&2
+  exit 1
+fi
+# Test overrides only shorten shell budgets; they are not JVM configuration.
+unset RPC_COMPARISON_STOP_SECONDS RPC_COMPARISON_CLIENT_OVERHEAD_SECONDS
 
 if [[ ! "$CONCURRENCY" =~ ^[0-9]+$ ]] ||
    [[ ! "$WARMUP" =~ ^[0-9]+$ ]] ||
@@ -20,15 +37,51 @@ if [[ ! "$CONCURRENCY" =~ ^[0-9]+$ ]] ||
   exit 1
 fi
 
+CLIENT_SECONDS="$(python3 - "$WARMUP" "$DURATION" "$CLIENT_OVERHEAD_SECONDS" <<'PY'
+import sys
+
+warmup, measurement, overhead = map(int, sys.argv[1:])
+if not all(1 <= value <= 2_147_483_647 for value in (warmup, measurement)):
+    raise SystemExit("Comparison warmup and measurement must be positive Java integer seconds")
+print(warmup + measurement + overhead)
+PY
+)"
+
 export RPC_COMPARISON_EVIDENCE_CLASS="smoke"
 export RPC_COMPARISON_GIT_SHA="$(git rev-parse HEAD)"
 export RPC_COMPARISON_RUN_ID="${RPC_COMPARISON_RUN_ID:-smoke-${RPC_COMPARISON_GIT_SHA:0:12}}"
+export RPC_COMPARISON_REGISTRY_ENDPOINT="${RPC_COMPARISON_REGISTRY_ENDPOINT:-http://127.0.0.1:2379}"
+export RPC_COMPARISON_REGISTRY_NAMESPACE="${RPC_COMPARISON_REGISTRY_NAMESPACE:-comparison-$(date -u +%Y%m%d%H%M%S)-$$}"
+
+# Use an explicitly selected, already running shared Etcd. No process-local mirror is valid evidence.
+python3 - <<'PY'
+import json
+import os
+import re
+import urllib.parse
+import urllib.request
+
+endpoint = os.environ["RPC_COMPARISON_REGISTRY_ENDPOINT"].rstrip("/")
+parsed = urllib.parse.urlsplit(endpoint)
+if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password \
+        or parsed.query or parsed.fragment or parsed.path:
+    raise SystemExit("RPC_COMPARISON_REGISTRY_ENDPOINT must be one explicit Etcd HTTP origin without credentials")
+if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", os.environ["RPC_COMPARISON_REGISTRY_NAMESPACE"]):
+    raise SystemExit("RPC_COMPARISON_REGISTRY_NAMESPACE must be a valid isolated application namespace")
+try:
+    with urllib.request.urlopen(endpoint + "/health", timeout=5) as response:
+        healthy = json.load(response).get("health")
+    if healthy not in (True, "true"):
+        raise ValueError("Etcd is not healthy")
+except Exception as error:
+    raise SystemExit("Shared Etcd readiness failed: " + type(error).__name__) from None
+PY
 
 mkdir -p "$OUTPUT_DIR"
 
 echo "Building the installed OTRYX RPC dependency graph"
 mvn -B -ntp -DskipTests \
-  -pl otryx-codegen,otryx-serialization/otryx-serialization-fory,otryx-transport/otryx-transport-vertx \
+  -pl otryx-codegen,otryx-registry/otryx-registry-etcd,otryx-serialization/otryx-serialization-fory,otryx-transport/otryx-transport-vertx \
   -am install
 
 echo "Building isolated Maven runtimes"
@@ -62,6 +115,9 @@ environment = {
     "runner_id": os.getenv("RUNNER_NAME", "local-uncontrolled"),
     "physical_host_fingerprint": None,
     "jvm_flags": os.getenv("JAVA_TOOL_OPTIONS", ""),
+    "otryx_registry_backend": "etcd",
+    "otryx_registry_namespace": os.environ["RPC_COMPARISON_REGISTRY_NAMESPACE"],
+    "registry_traffic_measurement": "not-measured",
 }
 with open(sys.argv[1], "w", encoding="utf-8") as stream:
     json.dump(environment, stream, indent=2)
@@ -77,14 +133,51 @@ PY
 }
 
 provider_pid=""
-cleanup() {
-  if [[ -n "$provider_pid" ]]; then
-    kill "$provider_pid" 2>/dev/null || true
-    wait "$provider_pid" 2>/dev/null || true
-    provider_pid=""
+client_pid=""
+
+stop_owned_process() {
+  local pid="$1" deadline=$((SECONDS + STOP_SECONDS))
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null && (( SECONDS < deadline )); do
+    sleep "$PROCESS_POLL_SECONDS"
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Comparison process stop budget exhausted; forcing termination." >&2
+    kill -KILL "$pid" 2>/dev/null || true
   fi
+  wait "$pid" 2>/dev/null || true
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  trap '' INT TERM
+  stop_owned_process "$client_pid"
+  stop_owned_process "$provider_pid"
+  client_pid=""
+  provider_pid=""
+  exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+wait_client() {
+  local framework="$1" deadline=$((SECONDS + CLIENT_SECONDS)) status=0
+  while kill -0 "$client_pid" 2>/dev/null; do
+    if (( SECONDS >= deadline )); then
+      echo "${framework} client exceeded its overall budget of ${CLIENT_SECONDS}s." >&2
+      stop_owned_process "$client_pid"
+      client_pid=""
+      return 124
+    fi
+    sleep "$PROCESS_POLL_SECONDS"
+  done
+  wait "$client_pid" || status=$?
+  client_pid=""
+  return "$status"
+}
 
 run_one() {
   local framework="$1"
@@ -114,8 +207,13 @@ run_one() {
 
   java -jar "$jar" client 127.0.0.1 "$port" \
     "$CONCURRENCY" "$WARMUP" "$DURATION" "$PAYLOAD" \
-    "$OUTPUT_DIR/${framework}.json"
-  cleanup
+    "$OUTPUT_DIR/${framework}.json" &
+  client_pid=$!
+  local client_status=0
+  wait_client "$framework" || client_status=$?
+  stop_owned_process "$provider_pid"
+  provider_pid=""
+  return "$client_status"
 }
 
 run_one otryx "$OTRYX_JAR"

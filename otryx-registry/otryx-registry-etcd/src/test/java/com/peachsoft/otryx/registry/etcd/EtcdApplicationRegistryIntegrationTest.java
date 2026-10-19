@@ -2,8 +2,10 @@ package com.peachsoft.otryx.registry.etcd;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
@@ -13,6 +15,8 @@ import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.observability.RpcObserver;
+import com.peachsoft.otryx.registry.ApplicationRegistryContractTestKit;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
 import com.peachsoft.otryx.registry.RegistrySubscription;
@@ -22,26 +26,30 @@ import io.etcd.jetcd.ByteSequence;
 import io.etcd.jetcd.Client;
 import io.etcd.jetcd.options.GetOption;
 import io.etcd.jetcd.test.EtcdClusterExtension;
+import io.vertx.core.Vertx;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.BeforeAllCallback;
+import org.junit.jupiter.api.extension.Extension;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 /**
  * 使用真实 Etcd 验证应用级 Lease、Mapping CAS、Manifest 与 Watch 恢复。
  *
- * <p>不允许用旧 ServiceKey Registry SPI 或伪造的纯 Consumer 端点通过验收。
+ * <p>默认创建真实 Docker 集群；显式设置 ETCD_TEST_ENDPOINT 时复用真实外部后端。
+ * 外部后端仍执行租约到期、撤销与 Watch 恢复测试，只有需要控制集群进程的重启场景不适用。
  *
  * @Author OpenAI
  * @Version 1.0.0-SNAPSHOT
@@ -50,12 +58,48 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 @Timeout(value = 90, unit = TimeUnit.SECONDS)
 class EtcdApplicationRegistryIntegrationTest {
 
-    @RegisterExtension
-    static final EtcdClusterExtension CLUSTER = EtcdClusterExtension.builder()
+    private static final String EXTERNAL_ENDPOINT = System.getenv("ETCD_TEST_ENDPOINT");
+    private static final boolean EXTERNAL_CLUSTER = EXTERNAL_ENDPOINT != null && !EXTERNAL_ENDPOINT.isBlank();
+    private static final EtcdClusterExtension CLUSTER = EXTERNAL_CLUSTER ? null : EtcdClusterExtension.builder()
             .withClusterName("otryx-etcd-v2-it")
             .withNodes(1)
             .withSsl(false)
             .build();
+
+    @RegisterExtension
+    static final Extension BACKEND = EXTERNAL_CLUSTER ? (BeforeAllCallback) context -> { } : CLUSTER;
+
+    @Test
+    void registrationFromVertxEventLoopMustUseCompatibleClient() throws Exception {
+        String namespace = unique("event-loop");
+        ApplicationKey application = new ApplicationKey(namespace, "orders");
+        ApplicationInstance instance = provider(application, "event-loop-provider", 18101);
+        Vertx vertx = Vertx.vertx();
+        try (EtcdApplicationRegistry registry = registry(namespace)) {
+            CompletableFuture<Void> registered = new CompletableFuture<>();
+            vertx.runOnContext(ignored -> {
+                try {
+                    assertNotNull(Vertx.currentContext());
+                    assertTrue(Vertx.currentContext().isEventLoopContext());
+                    registry.register(instance).whenComplete((result, error) -> {
+                        if (error == null) {
+                            registered.complete(null);
+                        } else {
+                            registered.completeExceptionally(error);
+                        }
+                    });
+                } catch (Throwable error) {
+                    registered.completeExceptionally(error);
+                }
+            });
+            registered.get(10, TimeUnit.SECONDS);
+            assertEquals(List.of(instance), registry.lookup(application)
+                    .toCompletableFuture().get(10, TimeUnit.SECONDS).instances());
+            registry.unregister(instance).toCompletableFuture().get(10, TimeUnit.SECONDS);
+        } finally {
+            vertx.close().toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+        }
+    }
 
     @Test
     void providerAndConsumerRegisterRealApplicationMembersNotServiceKeys() throws Exception {
@@ -190,6 +234,52 @@ class EtcdApplicationRegistryIntegrationTest {
     }
 
     @Test
+    void clusterRestartRestoresRegistrationAndApplicationSubscription() throws Exception {
+        assumeFalse(EXTERNAL_CLUSTER, "Cluster restart requires the managed Docker backend");
+        String namespace = unique("restart");
+        ApplicationKey application = new ApplicationKey(namespace, "restart");
+        ApplicationInstance provider = provider(application, "restart-provider", 18111);
+        ApplicationInstance consumer = consumer(application, "restart-consumer");
+        AtomicReference<ApplicationDirectorySnapshot> latest = new AtomicReference<>();
+        Client client = Client.builder().target("cluster://" + CLUSTER.clusterName()).build();
+        try (EtcdApplicationRegistry registry = new EtcdApplicationRegistry(client, 2, namespace, RpcObserver.noop());
+             RegistrySubscription ignored = registry.subscribe(application, latest::set)) {
+            registry.register(provider).toCompletableFuture().get(10, TimeUnit.SECONDS);
+            assertTrue(await(Duration.ofSeconds(10), () -> latest.get() != null
+                    && latest.get().instances().contains(provider)));
+            CLUSTER.restart(2, TimeUnit.SECONDS);
+            assertTrue(await(Duration.ofSeconds(20), () -> registry.lookup(application)
+                    .toCompletableFuture().get(5, TimeUnit.SECONDS).instances().contains(provider)));
+            assertTrue(await(Duration.ofSeconds(20), () -> {
+                registry.register(consumer).toCompletableFuture().get(5, TimeUnit.SECONDS);
+                return true;
+            }));
+            assertTrue(await(Duration.ofSeconds(20), () -> latest.get() != null
+                    && Set.copyOf(latest.get().instances()).equals(Set.of(provider, consumer))));
+        }
+    }
+
+    @Test
+    void abandonedClientLeaseExpiresWithoutRemovingAnotherApplicationMember() throws Exception {
+        String namespace = unique("expiry");
+        ApplicationKey application = new ApplicationKey(namespace, "lease-expiry");
+        ApplicationInstance provider = provider(application, "abandoned", 18112);
+        ApplicationInstance consumer = consumer(application, "survivor");
+        Client abandoned = rawClient();
+        try (EtcdApplicationRegistry writer = new EtcdApplicationRegistry(
+                     abandoned, 1, namespace, RpcObserver.noop());
+             EtcdApplicationRegistry reader = registry(namespace)) {
+            writer.register(provider).toCompletableFuture().get(10, TimeUnit.SECONDS);
+            reader.register(consumer).toCompletableFuture().get(10, TimeUnit.SECONDS);
+            assertEquals(Set.of(provider, consumer),
+                    Set.copyOf(reader.lookup(application).toCompletableFuture().join().instances()));
+            abandoned.close();
+            assertTrue(await(Duration.ofSeconds(15), () -> reader.lookup(application)
+                    .toCompletableFuture().get(5, TimeUnit.SECONDS).instances().equals(List.of(consumer))));
+        }
+    }
+
+    @Test
     void invalidApplicationNamespacesAreRejectedBeforeNetworkAccess() {
         String namespace = unique("isolation");
         ApplicationKey foreign = new ApplicationKey(unique("foreign"), "orders");
@@ -203,36 +293,15 @@ class EtcdApplicationRegistryIntegrationTest {
 
 
     @Test
-    void thirtyInterfacesAndTenInstancesRegisterOnlyTenApplicationMembers() throws Exception {
-        String namespace = unique("density");
-        ApplicationKey app = new ApplicationKey(namespace, "batch");
-        List<ServiceKey> services = new ArrayList<>();
-        for (int index = 0; index < 30; index++) {
-            services.add(new ServiceKey("demo.Batch" + index, "1.0.0", "default"));
-        }
-        List<EtcdApplicationRegistry> writers = new ArrayList<>();
+    @Timeout(value = 300, unit = TimeUnit.SECONDS)
+    void thirtyRealContractsAndTenIndependentClientsSatisfySharedApplicationContract() throws Exception {
+        String namespace = unique("contract");
         try (Client raw = rawClient()) {
-            for (int index = 0; index < 10; index++) {
-                EtcdApplicationRegistry writer = registry(namespace);
-                writers.add(writer);
-                String id = "batch-" + index;
-                ServiceMappingOwner owner = writer.serviceMappingRepository()
-                        .claim(app, id).toCompletableFuture().join();
-                writer.serviceMappingRepository().publish(owner, Set.copyOf(services))
-                        .toCompletableFuture().join();
-                writer.register(provider(app, id, 18200 + index)).toCompletableFuture().join();
-            }
-            assertEquals(10, raw.getKVClient().get(
-                    bytes(new EtcdV2Paths(namespace).memberPrefix(app)),
-                    GetOption.builder().isPrefix(true).build()).join().getCount());
-            assertEquals(10, writers.getFirst().lookup(app).toCompletableFuture().join().instances().size());
-            for (ServiceKey service : List.of(services.getFirst(), services.get(15), services.getLast())) {
-                assertEquals(Set.of(app), writers.getFirst().serviceMappingRepository()
-                        .lookup(new ServiceMappingKey(namespace, service))
-                        .toCompletableFuture().join().applications());
-            }
-        } finally {
-            writers.forEach(EtcdApplicationRegistry::close);
+            ApplicationRegistryContractTestKit.verify("etcd", namespace, 10, () -> registry(namespace),
+                    application -> raw.getKVClient().get(
+                            bytes(new EtcdV2Paths(namespace).memberPrefix(application)),
+                            GetOption.builder().isPrefix(true).build()).get(10, TimeUnit.SECONDS).getCount(),
+                    Duration.ofSeconds(20));
         }
     }
 
@@ -244,6 +313,7 @@ class EtcdApplicationRegistryIntegrationTest {
         ApplicationInstance second = consumer(app, "node-second");
         CountDownLatch recovered = new CountDownLatch(1);
         CountDownLatch failed = new CountDownLatch(1);
+        CountDownLatch healthyAfterFailure = new CountDownLatch(1);
         AtomicReference<ApplicationDirectorySnapshot> latest = new AtomicReference<>();
         ApplicationRegistryListener listener = new ApplicationRegistryListener() {
             @Override
@@ -258,6 +328,13 @@ class EtcdApplicationRegistryIntegrationTest {
             public void onSynchronizationFailed(Throwable error) {
                 failed.countDown();
             }
+
+            @Override
+            public void onSynchronizationSucceeded() {
+                if (failed.getCount() == 0) {
+                    healthyAfterFailure.countDown();
+                }
+            }
         };
 
         try (EtcdApplicationRegistry writer = registry(namespace);
@@ -271,6 +348,7 @@ class EtcdApplicationRegistryIntegrationTest {
             try (RegistrySubscription ignored = writer.subscribeFromRevision(app, listener, stale)) {
                 assertTrue(failed.await(15, TimeUnit.SECONDS));
                 assertTrue(recovered.await(15, TimeUnit.SECONDS));
+                assertTrue(healthyAfterFailure.await(15, TimeUnit.SECONDS));
                 assertTrue(latest.get().revision() >= compactAt);
             }
         }
@@ -342,6 +420,9 @@ class EtcdApplicationRegistryIntegrationTest {
     }
 
     private static String[] endpoints() {
+        if (EXTERNAL_CLUSTER) {
+            return new String[] {EXTERNAL_ENDPOINT.trim()};
+        }
         return CLUSTER.clientEndpoints().stream().map(URI::toString).toArray(String[]::new);
     }
 

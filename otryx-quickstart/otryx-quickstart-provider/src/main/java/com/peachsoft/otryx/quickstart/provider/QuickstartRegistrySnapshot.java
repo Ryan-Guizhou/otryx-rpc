@@ -16,6 +16,7 @@ import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
 import com.peachsoft.otryx.registry.ApplicationDiscovery;
 import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
+import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
 import com.peachsoft.otryx.registry.ManifestSnapshotCache;
 import com.peachsoft.otryx.registry.RegistryOptions;
@@ -23,7 +24,7 @@ import com.peachsoft.otryx.registry.ServiceMappingCache;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
 import com.peachsoft.otryx.registry.VerifiedProviderSnapshot;
-import com.peachsoft.otryx.registry.nacos.NacosApplicationRegistryFactory;
+import com.peachsoft.otryx.spi.ExtensionLoader;
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
@@ -64,15 +65,23 @@ public final class QuickstartRegistrySnapshot {
     private static final int MAX_MEMBERS = 128;
     private static final int MAX_MANIFESTS = 16;
     private static final int MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
-    private static final int FIXED_ARGUMENTS = 5;
-    private static final int ENDPOINTS_ARGUMENT = 0;
-    private static final int NACOS_NAMESPACE_ARGUMENT = 1;
-    private static final int NACOS_GROUP_ARGUMENT = 2;
-    private static final int APPLICATION_NAMESPACE_ARGUMENT = 3;
-    private static final int OUTPUT_ARGUMENT = 4;
+    private static final int FIXED_ARGUMENTS = 6;
+    private static final int BACKEND_ARGUMENT = 0;
+    private static final int ENDPOINTS_ARGUMENT = 1;
+    private static final int NAMESPACE_ARGUMENT = 2;
+    private static final int NACOS_GROUP_ARGUMENT = 3;
+    private static final int METADATA_ENDPOINTS_ARGUMENT = 4;
+    private static final int OUTPUT_ARGUMENT = 5;
+    private static final String NACOS = "nacos";
+    private static final String ETCD = "etcd";
+    private static final String CONSUL = "consul";
+    private static final String EUREKA = "eureka";
+    private static final String NO_OPTION = "-";
     private static final String SERVICE_VERSION = "1.0.0";
     private static final String SERVICE_GROUP = "default";
     private static final String GROUP_OPTION = "nacosGroup";
+    private static final String METADATA_BACKEND_OPTION = "eurekaMetadataBackend";
+    private static final String METADATA_ENDPOINTS_OPTION = "eurekaMetadataEndpoints";
     private static final String VALID_GROUP = "[A-Za-z0-9._:-]{1,128}";
     private static final List<Class<?>> CONTRACTS = List.of(
             GreetingService.class, RelayGreetingService.class, GreetingDetailsService.class);
@@ -81,22 +90,24 @@ public final class QuickstartRegistrySnapshot {
     }
 
     /**
-     * 从 Provider 可执行 JAR 独立读取 Nacos，不触发 Spring 应用或成员注册。
+     * 从 Provider 可执行 JAR 独立读取指定应用后端，不触发 Spring 或成员注册。
      *
      * <p>先校验显式目标，再创建 SDK；后端关闭调用返回后才发布新的 JSON 文件。
      * Java 读取预算十五秒，SDK 初始化和关闭由外层脚本的进程总预算约束。
      * 失败时只暴露异常类型，不将 SDK 异常消息或原因链写入命令输出。
      *
-     * @param arguments endpoints、Nacos namespace、group、application namespace、
-     *                  不存在的输出文件，以及一至十六个应用名
+     * @param arguments 后端类型、endpoints、namespace、Nacos group 或短横线、
+     *                  Eureka 的 Consul metadata endpoints 或短横线、新输出文件、一至十六个应用名
      */
     public static void main(String[] arguments) {
         try {
             Command command = parseArguments(arguments);
             Snapshot snapshot;
-            try (ApplicationRegistry registry = new NacosApplicationRegistryFactory().create(command.options())) {
+            ApplicationRegistryFactory factory = ExtensionLoader.getLoader(ApplicationRegistryFactory.class)
+                    .getExtension(command.backend());
+            try (ApplicationRegistry registry = factory.create(command.options())) {
                 if (!(registry instanceof ApplicationMetadataBackend metadata)) {
-                    throw new IllegalStateException("Nacos metadata backend is unavailable");
+                    throw new IllegalStateException("Application metadata backend is unavailable");
                 }
                 snapshot = capture(registry, metadata, command.namespace(),
                         command.applicationNames(), DEFAULT_TIMEOUT);
@@ -137,7 +148,7 @@ public final class QuickstartRegistrySnapshot {
                     metadata.serviceMappingRepository(), Duration.ZERO, Duration.ZERO);
                 ManifestSnapshotCache manifests = new ManifestSnapshotCache(metadata.manifestRepository());
                 ApplicationServiceResolver resolver = new ApplicationServiceResolver(
-                        mappings, discovery, manifests, Duration.ZERO)) {
+                        mappings, discovery, manifests, DEFAULT_TIMEOUT)) {
             List<ApplicationView> views = new ArrayList<>();
             int memberCount = 0;
             int manifestCount = 0;
@@ -218,23 +229,40 @@ public final class QuickstartRegistrySnapshot {
     static Command parseArguments(String[] arguments) throws IOException {
         Objects.requireNonNull(arguments, "arguments");
         if (arguments.length <= FIXED_ARGUMENTS || arguments.length > FIXED_ARGUMENTS + MAX_APPLICATIONS) {
-            throw new IllegalArgumentException("Expected five target arguments and one to sixteen applications");
+            throw new IllegalArgumentException("Expected six target arguments and one to sixteen applications");
         }
         for (String argument : arguments) {
             if (argument == null || argument.isBlank()) {
                 throw new IllegalArgumentException("Snapshot arguments must be explicit and nonblank");
             }
         }
+        String backend = arguments[BACKEND_ARGUMENT].trim();
         String group = arguments[NACOS_GROUP_ARGUMENT].trim();
-        if (!group.matches(VALID_GROUP)) {
-            throw new IllegalArgumentException("Invalid Nacos snapshot group");
-        }
+        String metadataEndpoints = arguments[METADATA_ENDPOINTS_ARGUMENT].trim();
+        Map<String, String> providerOptions = switch (backend) {
+            case NACOS -> {
+                if (!group.matches(VALID_GROUP) || NO_OPTION.equals(group) || !NO_OPTION.equals(metadataEndpoints)) {
+                    throw new IllegalArgumentException("Nacos requires an explicit group and no external metadata");
+                }
+                yield Map.of(GROUP_OPTION, group);
+            }
+            case ETCD, CONSUL -> {
+                requireNoOptions(group, metadataEndpoints);
+                yield Map.of();
+            }
+            case EUREKA -> {
+                if (!NO_OPTION.equals(group) || NO_OPTION.equals(metadataEndpoints)) {
+                    throw new IllegalArgumentException("Eureka snapshot requires explicit Consul metadata endpoints");
+                }
+                requireEndpoints(metadataEndpoints, arguments[NAMESPACE_ARGUMENT]);
+                yield Map.of(METADATA_BACKEND_OPTION, CONSUL, METADATA_ENDPOINTS_OPTION, metadataEndpoints);
+            }
+            default -> throw new IllegalArgumentException("Unsupported application snapshot backend");
+        };
+        requireEndpoints(arguments[ENDPOINTS_ARGUMENT], arguments[NAMESPACE_ARGUMENT]);
         RegistryOptions options = RegistryOptions.fromCsv(arguments[ENDPOINTS_ARGUMENT],
-                arguments[NACOS_NAMESPACE_ARGUMENT], Map.of(GROUP_OPTION, group));
-        if (options.endpoints().isEmpty() || options.endpoints().stream().anyMatch(value -> value.contains("@"))) {
-            throw new IllegalArgumentException("Snapshot endpoint must be explicit and must not embed credentials");
-        }
-        List<ApplicationKey> applications = applicationKeys(arguments[APPLICATION_NAMESPACE_ARGUMENT],
+                arguments[NAMESPACE_ARGUMENT], providerOptions);
+        List<ApplicationKey> applications = applicationKeys(arguments[NAMESPACE_ARGUMENT],
                 Arrays.asList(arguments).subList(FIXED_ARGUMENTS, arguments.length));
         Path output = Path.of(arguments[OUTPUT_ARGUMENT]).toAbsolutePath().normalize();
         if (Files.exists(output, LinkOption.NOFOLLOW_LINKS)) {
@@ -243,8 +271,21 @@ public final class QuickstartRegistrySnapshot {
         if (!Files.isDirectory(output.getParent())) {
             throw new IllegalArgumentException("Snapshot output parent directory must already exist");
         }
-        return new Command(options, applications.getFirst().namespace(), output,
+        return new Command(backend, options, applications.getFirst().namespace(), output,
                 applications.stream().map(ApplicationKey::applicationName).toList());
+    }
+
+    private static void requireNoOptions(String group, String metadataEndpoints) {
+        if (!NO_OPTION.equals(group) || !NO_OPTION.equals(metadataEndpoints)) {
+            throw new IllegalArgumentException("This snapshot backend does not use group or external metadata options");
+        }
+    }
+
+    private static void requireEndpoints(String endpoints, String namespace) {
+        RegistryOptions options = RegistryOptions.fromCsv(endpoints, namespace, Map.of());
+        if (options.endpoints().isEmpty() || options.endpoints().stream().anyMatch(value -> value.contains("@"))) {
+            throw new IllegalArgumentException("Snapshot endpoint must be explicit and must not embed credentials");
+        }
     }
 
     private static List<ApplicationKey> applicationKeys(String namespace, List<String> names) {
@@ -280,7 +321,8 @@ public final class QuickstartRegistrySnapshot {
     }
 
     /** 已校验的独立命令目标；不携带默认后端或隐式应用名。 */
-    record Command(RegistryOptions options, String namespace, Path output, List<String> applicationNames) {
+    record Command(String backend, RegistryOptions options, String namespace,
+            Path output, List<String> applicationNames) {
     }
 
     /**

@@ -43,7 +43,7 @@
 
 **设计原则：** 控制面与数据面分离；可替换实现位于 Adapter/SPI；单次调用热路径不做注册中心 IO、SPI 扫描和动态解析。
 
-**V2 应用级注册改造（进行中）：** Core 已具备统一 Application 身份、共享 Provider/Consumer 成员生命周期、Manifest、按实例 CAS Mapping、服务发现 Resolver 及有界缓存；Memory、Etcd、Nacos、Consul（#135）、Eureka + 外置元数据（#136）的应用级 Adapter 已实现。已合并的 #137 将单一 Spring Starter 接入同一套控制面：一个进程实例共享一条成员记录，纯 Consumer 无 RPC Endpoint，关闭时有界清理 Client/Provider 与共享成员。#138 在原有四个 Quickstart 模块中提供成员诊断、两个真实 Manifest revision 和 mTLS 授权教程；验收以对应准确 Head 的真实结果为准。旧接口级 SPI 的全量删除仍归 #139，**全仓尚不可称已正式完成 V2 迁移**。[设计与进度](docs/design/application-registry-v2.md)。
+**应用级注册（#139 验收中）：** Core、唯一 Starter 和四模块 Quickstart 使用统一 Application 身份、Provider/Consumer/BOTH 共享成员生命周期、Manifest、实例 Owner CAS Mapping、Resolver 与有界缓存。纯 Consumer 真实入册但无 RPC Endpoint；ServiceKey 只表示业务契约，ServiceInstance 仅保留为本地 LB DTO。当前清理门禁拒绝过渡 SPI/路径/配置；四真实后端共享契约和 process/chain/revision 矩阵、完整五组 rolling 均须以准确 Head 实测验收，不能仅凭源码或脚本夹具宣布通过。[设计](docs/design/application-registry-v2.md) · [验收与计数口径](docs/reference/application-registry-acceptance.md)。
 
 <!-- doc-section:compatibility -->
 ## 兼容性与迁移
@@ -52,8 +52,8 @@ Wire Protocol v1 的 32 字节 Header、消息和 Codec 标识保持不变；这
 Java 包名参与类型规范名、Method ID 和 Schema Fingerprint 计算，故本次新命名空间属于**破坏性 API 升级**。
 
 - 老项目仍可使用原稳定分支构建，不覆盖旧 Maven GAV。
-- 滚动检查按 Starter 实际启用的注册代际选择矩阵：同代保留完整 N/N+1 与回滚组合；跨接口级/应用级迁移只要求 N/N 和 N+1/N+1 独立 JVM 配对，不能据此声称混合代际互通。
-- 跨注册代际使用隔离注册域，Provider/Consumer 成对迁移和回滚；旧接口级 Metadata Key 仅属于 #139 前的历史实现范围。
+- rolling 两端必须使用应用级 Starter；N/N、N+1/N、N/N+1、N+1/N+1、rollback 五组全部执行，任一失败阻止通过。旧模式、混合或未知装配在业务进程启动前明确拒绝。
+- 历史注册模型采用隔离注册域成对迁移；Wire v1 或相同 Maven 版本号不能替代完整业务链的互通验证。
 
 [详细兼容协议](docs/wire-compatibility.md) · [迁移与回滚指南](docs/migration.md)
 
@@ -77,7 +77,7 @@ Windows CMD/PowerShell 使用 `mvnw.cmd` 替代 `./mvnw`，无需预装全局 Ma
 NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
 ~~~
 
-跨进程场景自动初始化各自的独立 Nacos group。受限字段的 JSON 快照和 `summary.log` 保存在 `target/quickstart-e2e/`，不会将临时私钥保存为证据。此命令验证当前版本的行为，不代表生产容量、正式发布或 #139 旧路径删除已完成。Consumer 的 `QuickstartCallObserver` 另演示自定义遥测 SPI；装配与扩展见 [Starter 文档](docs/reference/starter.md)。
+Nacos 跨进程场景自动初始化各自独立 group。process、chain、revision 也支持真实 Etcd、Consul、Eureka；通过 `QUICKSTART_REGISTRY` 与 `QUICKSTART_REGISTRY_ENDPOINT` 选择，Eureka 另需 `QUICKSTART_EUREKA_METADATA_ENDPOINT` 指向真实 Consul。受限 JSON 和 `summary.log` 保存在 `target/quickstart-e2e/`，不包含临时私钥。命令结果只证明其实际覆盖范围；#139 的完整验收还须核对共享契约、Chaos、准确 Head CI 与合并后 main。参数见[应用级验收](docs/reference/application-registry-acceptance.md)，遥测示例和装配见 [Starter](docs/reference/starter.md)。
 
 <!-- doc-section:dependency -->
 ## Maven 坐标
@@ -148,4 +148,4 @@ Nacos V2 的 Mapping 分片必须在所有应用启动前、同一 namespace/gro
 
 ## Registry Freshness / 服务发现可靠性
 
-Spring Starter V2 默认 `otryx.rpc.client.directory-max-staleness=30s`，在 Registry **显式同步失败**且 LKG 超时后拒绝过期路由；安静的 Watch 本身不代表失联。`client.enabled=true` 时禁止显式 `0s` 无限 LKG，即使尚无实际引用。Etcd、Nacos、Consul/Eureka 已实现健康通知与有界恢复。真实独立 JVM Nacos 重启验收和边界见 [Registry 健康与故障恢复](docs/reference/registry-freshness.md)。
+Core 与 Spring Starter 的 `otryx.rpc.client.directory-max-staleness` 默认均为 `30s`，只接受严格正的有限预算；Registry **显式同步失败**且 LKG 超时后拒绝过期路由，安静的 Watch 不代表失联。Etcd、Nacos、Consul/Eureka 提供健康通知和有界恢复。状态语义、真实 Nacos 重启及四后端独立进程的验证边界见[目录新鲜度](docs/reference/registry-freshness.md)。

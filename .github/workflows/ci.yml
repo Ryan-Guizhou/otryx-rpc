@@ -26,8 +26,11 @@ jobs:
           - 9848:9848
     env:
       NACOS_TEST_ENDPOINT: 127.0.0.1:8848
+      OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-java@v6
         with:
@@ -50,6 +53,12 @@ jobs:
 
       - name: Repository checks
         run: python3 scripts/check_project.py
+
+      - name: Verify application registry cleanup and rejected legacy modes
+        run: |
+          python3 scripts/test_migration_readiness.py
+          python3 scripts/check_migration_readiness.py
+          python3 scripts/test_registry_generation_boundary.py
 
       - name: Verify the single Starter and runnable Quickstart contract
         run: python3 scripts/test_quickstart_layout.py
@@ -88,6 +97,15 @@ jobs:
       - name: Verify Maven reactor
         run: mvn -B -ntp clean verify -Pquality
 
+      - name: Upload original reactor tests and registry contract counters
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reactor-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: otryx-*/**/target/surefire-reports/**
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Verify single-process Memory Quickstart
         run: bash scripts/run_quickstart_memory.sh
 
@@ -98,7 +116,6 @@ jobs:
           OTRYX_RPC_RUNNER_ID: ci-self-test
           OTRYX_RPC_EXPECT_RUNNER_ID: ci-self-test
           OTRYX_RPC_JVM_FLAGS: "-Xms128m -Xmx128m"
-          OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.sha }}
         run: |
           bash scripts/preflight_v2d2_runner.sh target/v2d2-preflight-self-test
 

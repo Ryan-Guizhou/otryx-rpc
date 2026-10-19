@@ -1,17 +1,11 @@
 package com.peachsoft.otryx.core;
 
 import com.peachsoft.otryx.api.ApplicationInstance;
-import com.peachsoft.otryx.api.RpcCompatibilityMetadata;
 import com.peachsoft.otryx.api.ServiceInstance;
-import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
-import com.peachsoft.otryx.registry.RegistryListener;
-import com.peachsoft.otryx.registry.RegistrySnapshot;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.VerifiedProviderSnapshot;
-import com.peachsoft.otryx.registry.ServiceDiscovery;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.RejectedExecutionException;
@@ -35,6 +29,7 @@ import java.util.function.LongSupplier;
 final class ServiceDirectory implements AutoCloseable {
 
     private static final ServiceInstance[] EMPTY = new ServiceInstance[0];
+    private static final long REFRESH_INTERVAL_SECONDS = 1L;
 
     enum Status {
         NOT_READY,
@@ -48,65 +43,15 @@ final class ServiceDirectory implements AutoCloseable {
     private final AtomicReference<DirectorySnapshot> state =
             new AtomicReference<>(new DirectorySnapshot(
                     EMPTY, 0L, false, false, 0L, 0L));
-    private final String expectedSchemaFingerprint;
     private final RpcDirectoryFreshnessOptions freshnessOptions;
     private final LongSupplier monotonicClock;
     private final RegistrySubscription subscription;
 
-    ServiceDirectory(ServiceDiscovery discovery, ServiceKey key) {
-        this(discovery, key, null);
-    }
-
-    ServiceDirectory(
-            ServiceDiscovery discovery,
-            ServiceKey key,
-            String expectedSchemaFingerprint) {
-        this(discovery, key, expectedSchemaFingerprint,
-                RpcDirectoryFreshnessOptions.UNBOUNDED);
-    }
-
-    ServiceDirectory(
-            ServiceDiscovery discovery,
-            ServiceKey key,
-            String expectedSchemaFingerprint,
-            RpcDirectoryFreshnessOptions freshnessOptions) {
-        this(discovery, key, expectedSchemaFingerprint, freshnessOptions, System::nanoTime);
-    }
-
-    ServiceDirectory(
-            ServiceDiscovery discovery,
-            ServiceKey key,
-            String expectedSchemaFingerprint,
-            RpcDirectoryFreshnessOptions freshnessOptions,
-            LongSupplier monotonicClock) {
-        this.expectedSchemaFingerprint = expectedSchemaFingerprint;
-        this.freshnessOptions = Objects.requireNonNull(freshnessOptions, "freshnessOptions");
-        this.monotonicClock = Objects.requireNonNull(monotonicClock, "monotonicClock");
-        this.subscription = Objects.requireNonNull(discovery, "discovery").subscribe(
-                Objects.requireNonNull(key, "key"),
-                new RegistryListener() {
-                    @Override
-                    public void onSnapshot(RegistrySnapshot snapshot) {
-                        publish(snapshot);
-                    }
-
-                    @Override
-                    public void onSynchronizationSucceeded() {
-                        markHealthy();
-                    }
-
-                    @Override
-                    public void onSynchronizationFailed(Throwable error) {
-                        markUnavailable();
-                    }
-                });
-    }
-
     /**
-     * 绑定 V2 应用级发现，远端刷新仅由共享控制面调度器启动。
+     * 绑定应用级发现，远端刷新仅由共享控制面调度器启动。
      *
      * <p>本地快照仍用 ServiceInstance 作为 DataPlane LB 的中立 Endpoint 载体；
-     * 不查询接口级 Registry，也不会把纯 Consumer 映射为服务实例。
+     * 只有已验证的 Provider/BOTH 成员能映射为服务实例。
      *
      * @param resolver 已验证 Manifest/Schema 的应用服务解析器
      * @param key 带命名空间的业务服务键
@@ -120,13 +65,22 @@ final class ServiceDirectory implements AutoCloseable {
             String expectedSchema,
             RpcDirectoryFreshnessOptions freshnessOptions,
             ScheduledExecutorService scheduler) {
+        this(resolver, key, expectedSchema, freshnessOptions, scheduler, System::nanoTime);
+    }
+
+    ServiceDirectory(
+            ApplicationServiceResolver resolver,
+            ServiceMappingKey key,
+            String expectedSchema,
+            RpcDirectoryFreshnessOptions freshnessOptions,
+            ScheduledExecutorService scheduler,
+            LongSupplier monotonicClock) {
         Objects.requireNonNull(resolver, "resolver");
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(expectedSchema, "expectedSchema");
         Objects.requireNonNull(scheduler, "scheduler");
-        this.expectedSchemaFingerprint = null;
         this.freshnessOptions = Objects.requireNonNull(freshnessOptions, "freshnessOptions");
-        this.monotonicClock = System::nanoTime;
+        this.monotonicClock = Objects.requireNonNull(monotonicClock, "monotonicClock");
         AtomicBoolean refreshing = new AtomicBoolean();
         ScheduledFuture<?> task = scheduler.scheduleWithFixedDelay(() -> {
             if (closed.get() || !refreshing.compareAndSet(false, true)) {
@@ -155,15 +109,21 @@ final class ServiceDirectory implements AutoCloseable {
                 refreshing.set(false);
                 markUnavailable();
             }
-        }, 0L, 1L, TimeUnit.SECONDS);
+        }, 0L, REFRESH_INTERVAL_SECONDS, TimeUnit.SECONDS);
         this.subscription = () -> task.cancel(false);
     }
 
-    private void publishVerified(ServiceMappingKey key, VerifiedProviderSnapshot snapshot) {
-        List<ServiceInstance> nodes = snapshot.providers().stream()
+    private void publishVerified(ServiceMappingKey key, VerifiedProviderSnapshot candidate) {
+        long now = monotonicClock.getAsLong();
+        ServiceInstance[] endpoints = candidate.providers().stream()
                 .map(instance -> verifiedEndpoint(key, instance))
-                .toList();
-        publish(new RegistrySnapshot(nodes, snapshot.mappingRevision()));
+                .toArray(ServiceInstance[]::new);
+        state.updateAndGet(current -> {
+            if (closed.get() || candidate.mappingRevision() < current.revision()) {
+                return current;
+            }
+            return new DirectorySnapshot(endpoints, candidate.mappingRevision(), true, false, now, 0L);
+        });
     }
 
     private static ServiceInstance verifiedEndpoint(ServiceMappingKey key, ApplicationInstance instance) {
@@ -171,32 +131,6 @@ final class ServiceDirectory implements AutoCloseable {
                 + instance.application().applicationName() + "/" + instance.instanceId();
         return new ServiceInstance(id, key.serviceKey(),
                 instance.rpcEndpoint(), instance.weight(), Map.of());
-    }
-
-    private void publish(RegistrySnapshot candidate) {
-        Objects.requireNonNull(candidate, "candidate");
-        long now = monotonicClock.getAsLong();
-        state.updateAndGet(current -> {
-            if (closed.get() || candidate.revision() < current.revision()) {
-                return current;
-            }
-            ServiceInstance[] compatible = candidate.instances().stream()
-                    .filter(this::compatible)
-                    .toArray(ServiceInstance[]::new);
-            return new DirectorySnapshot(compatible, candidate.revision(),
-                    true, false, now, 0L);
-        });
-    }
-
-    private void markHealthy() {
-        long now = monotonicClock.getAsLong();
-        state.updateAndGet(current -> {
-            if (closed.get() || !current.initialized()) {
-                return current;
-            }
-            return new DirectorySnapshot(current.instances(), current.revision(),
-                    true, false, now, 0L);
-        });
     }
 
     private void markUnavailable() {
@@ -210,15 +144,6 @@ final class ServiceDirectory implements AutoCloseable {
         });
     }
 
-    private boolean compatible(ServiceInstance instance) {
-        if (expectedSchemaFingerprint == null) {
-            return true;
-        }
-        return RpcCompatibilityMetadata.compatibility(
-                instance, expectedSchemaFingerprint)
-                == RpcCompatibilityMetadata.Compatibility.COMPATIBLE;
-    }
-
     Status status() {
         if (closed.get()) {
             return Status.CLOSED;
@@ -230,8 +155,7 @@ final class ServiceDirectory implements AutoCloseable {
         if (!current.unhealthy()) {
             return Status.HEALTHY;
         }
-        if (!freshnessOptions.limited()
-                || monotonicClock.getAsLong() - current.unhealthySinceNanos()
+        if (monotonicClock.getAsLong() - current.unhealthySinceNanos()
                         < freshnessOptions.maxStaleness().toNanos()) {
             return Status.LAST_KNOWN_GOOD;
         }
@@ -246,7 +170,7 @@ final class ServiceDirectory implements AutoCloseable {
         if (!current.initialized()) {
             return EMPTY;
         }
-        if (!current.unhealthy() || !freshnessOptions.limited()
+        if (!current.unhealthy()
                 || monotonicClock.getAsLong() - current.unhealthySinceNanos()
                         < freshnessOptions.maxStaleness().toNanos()) {
             return current.instances();

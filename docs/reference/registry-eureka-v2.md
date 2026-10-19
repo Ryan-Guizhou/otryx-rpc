@@ -1,6 +1,6 @@
-# Eureka V2 应用级注册（开发中）
+# Eureka V2 应用级注册
 
-> Issue [#136](https://github.com/Ryan-Guizhou/otryx-rpc/issues/136) · `1.0.0-SNAPSHOT` · 本功能仍需以最终 PR Head、真实 Eureka 集成测试及 main CI 为准。
+> Issue [#136](https://github.com/Ryan-Guizhou/otryx-rpc/issues/136) · `1.0.0-SNAPSHOT` · 当前应用级后端；#139 集成验收仍须以准确 PR Head、真实后端执行和 main CI 为准。
 
 ## 设计与边界
 
@@ -45,8 +45,8 @@ Eureka 只发布实际应用成员，不声明全局持久 Revision，也没有�
 
 ## 验证
 
-`.github/workflows/eureka-v2.yml` 在 CI 运行使用 JDK 21、Spring Boot 3.5.4、Spring Cloud 2025.0.0 的独立真实 Eureka Server 测试夹具及真实 Consul KV。测试包括 Provider/Consumer/BOTH、原生 Port disabled、30 接口×10 进程、多实例冲突、Manifest/Mapping CAS、Server Lease 丢失、Eureka JVM 重启及恢复。
+`.github/workflows/eureka-v2.yml` 在 CI 运行使用 JDK 21、Spring Boot 3.5.4、Spring Cloud 2025.0.0 的独立真实 Eureka Server 测试夹具及真实 Consul KV。测试包括 Provider/Consumer/BOTH、原生 Port disabled、30 个真实 Java 接口×10 个独立 Registry client 对象（同一个测试 JVM）、多实例冲突、Manifest/Mapping CAS、Server Lease 丢失、Eureka JVM 重启及恢复。
 
-测试服务器位于 `.github/test-fixtures/eureka-server`，不属于 RPC Maven Reactor，不会产生第二个生产 Starter。历史 ServiceKey 级别 Eureka Adapter 见 [旧版说明](registry-eureka.md)，将在 #139 最终移除。#137–#138 负责完整 Starter/Quickstart 应用级接线和演示。
+测试服务器位于 `.github/test-fixtures/eureka-server`，不属于 RPC Maven Reactor，不会产生第二个生产 Starter。Starter/Quickstart 只使用应用控制面；独立业务 JVM 的 process/chain/revision 矩阵另由 `.github/workflows/application-registry-e2e.yml` 使用真实 Eureka + Consul 执行。原生成员数、SPI 方法入口调用数、订阅创建调用数及快照/健康通知与收敛时间分别计量，不是后端全部 HTTP、续租或服务端 Watch 流量，见[验收口径](application-registry-acceptance.md)。
 
 隔离 Eureka Server 测试会关闭只读 Response Cache，缩短写入后目录收敛时间。生产环境 Eureka 的默认缓存刷新间隔及租约策略不应混淆：短期旧目录应由 Core 的新鲜度、安全认证及连接失败策略处理。

@@ -1,9 +1,8 @@
-# Registry 健康状态、Last-Known-Good 与故障恢复（U09）
+# 应用目录新鲜度与故障恢复
 
-## 使用和边界
+## 1. 使用和边界
 
-Consumer 的请求热路径只读取本地服务目录，不执行远端 Registry IO。默认保留最近已知有效快照
-（Last-Known-Good，LKG），避免短暂控制面失联直接清空可路由实例。显式正数预算可禁止无限期使用过期节点：
+Consumer 请求热路径只读取本地已验证服务目录，不访问远端 Registry。应用控制面完成 ServiceMapping、应用成员、实例 Manifest 和业务契约校验后发布候选；同步失败时仅在有限预算内使用最近已知有效快照（Last-Known-Good，LKG）。
 
 ```yaml
 otryx:
@@ -12,85 +11,62 @@ otryx:
       directory-max-staleness: 10s
 ```
 
-`directory-max-staleness` 默认 `0s`（不限制）。只有 Adapter 明确报告
-`RegistryListener.onSynchronizationFailed(error)`，Core 才启动本地单调计时。
-安静且无变更的健康 Watch 不能被判为失联；成功的远端校对即使内容未变，也可报告
-`onSynchronizationSucceeded()`。程序化入口：
-`OtryxRpcClient.builder().directoryFreshnessOptions(
-new RpcDirectoryFreshnessOptions(Duration.ofSeconds(10)))`。
+Core 与 Starter 的默认预算均为 `30s`，配置必须严格为正且可表示为有限计时预算。`0s`、负值和无法表示的超大时长直接失败，不能变成永久保留过期节点。程序化入口为 `OtryxRpcClient.builder().directoryFreshnessOptions(new RpcDirectoryFreshnessOptions(Duration.ofSeconds(10)))`；Resolver 的 `maxStale` 也必须有限且为正。
 
-## 状态机
+`ApplicationRegistryListener` 区分快照更新、同步成功与同步失败。安静且内容未变的健康 Watch 不代表断网；一次明确成功的校对可恢复健康，但单独健康通知不能将非空成员目录清空。首次读取失败不能伪造健康空快照。
+
+## 2. 本地目录状态
+
+以下状态用于解释路由行为，不是额外的公共 Java enum 或配置选项。
 
 ```mermaid
 stateDiagram-v2
     [*] --> NOT_READY
-    NOT_READY --> HEALTHY: 首个有效快照，包括空快照
-    HEALTHY --> LAST_KNOWN_GOOD: 显式同步失败
-    LAST_KNOWN_GOOD --> HEALTHY: 有效快照或同步恢复
-    LAST_KNOWN_GOOD --> STALE: 正数预算耗尽
-    STALE --> HEALTHY: 有效快照或同步恢复
-    NOT_READY --> CLOSED: close()
-    HEALTHY --> CLOSED: close()
-    LAST_KNOWN_GOOD --> CLOSED: close()
-    STALE --> CLOSED: close()
+    NOT_READY --> HEALTHY: 首个有效快照
+    HEALTHY --> LAST_KNOWN_GOOD: 明确同步失败
+    LAST_KNOWN_GOOD --> HEALTHY: 有效同步恢复
+    LAST_KNOWN_GOOD --> STALE: 有限预算耗尽
+    STALE --> HEALTHY: 有效同步恢复
+    NOT_READY --> CLOSED: close
+    HEALTHY --> CLOSED: close
+    LAST_KNOWN_GOOD --> CLOSED: close
+    STALE --> CLOSED: close
 ```
 
-状态在读取时判断，`STALE` 不依赖额外的超时线程。默认 0s 永远不因陈旧预算进入 `STALE`。
+状态由本地单调时钟和当前应用控制面结果决定，不能通过墙上时钟回拨延长预算。健康空目录表示当前无可用 Provider；纯 Consumer 成员可以继续存在。
 
-| 状态 | 原因 | 路由 |
+| 状态 | 路由行为 |
+| --- | --- |
+| NOT_READY | 不路由，等待首个完整成功的发现结果 |
+| HEALTHY | 只路由通过成员、Manifest 和业务契约校验的 Provider/BOTH |
+| LAST_KNOWN_GOOD | 在剩余陈旧预算内保留最近有效候选 |
+| STALE | 拒绝使用预算已耗尽的候选 |
+| CLOSED | 不路由，丢弃迟到更新和回调 |
+
+Etcd Revision 来自服务端；Nacos、Consul、Eureka 的目录 Revision 是 Adapter 进程内的顺序，不是跨主机全局时钟。应用、Namespace、业务 ServiceKey 和 Mapping Owner 的隔离共同限制候选范围。
+
+## 3. 后端恢复
+
+| 后端 | 当前应用级机制 | 外部验收 |
 | --- | --- | --- |
-| `NOT_READY` | 尚未获得首个有效快照 | 不路由；同步失败不能伪造空快照 |
-| `HEALTHY` | 快照可用且同步健康 | 正常路由；真实健康空列表代表没有节点 |
-| `LAST_KNOWN_GOOD` | 后续同步失败且未超出启用的窗口 | 保留最近的有效节点 |
-| `STALE` | 显式失败且启用的窗口耗尽 | 拒绝向旧节点发送请求 |
-| `CLOSED` | 订阅关闭 | 不路由、丢弃迟到更新 |
+| Etcd | Range/Watch、Compaction 重建、租约恢复和代次隔离 | 三节点 leader transfer、成员 Lease 丢失、恢复 |
+| Nacos | Naming 事件与定期健康校对、失败重订阅、SDK 临时成员恢复 | pause/unpause、服务端重启、Provider 端点变化 |
+| Consul | Agent TTL + Session Claim、有界轮询、失败/恢复通知 | Agent pause/recovery、ACL 拒绝、TTL/Session 丢失 |
+| Eureka | Lease 续约、404 重注册、健康轮询，独立 Consul Metadata | 真实 Eureka JVM 重启、恢复与 Owner 健康交叉校验 |
 
-Etcd Revision 来自服务端，Nacos、Consul、Eureka 的 Revision 仅在适配器进程内递增，
-不得当作跨机全局时钟；乱序快照不会覆盖新快照。ServiceKey / Namespace 均独立隔离。
+短时 RPC 恢复不证明每次故障都经过 STALE：断网可能短于失败检测周期。状态、陈旧截止点和关闭后迟到事件由确定性 Core 测试验证；SDK 自行续约成功也不等于 RPC 零停顿。
 
-## 适配器故障恢复
+## 4. 诊断与实测
 
-| 适配器 | 当前实现 | 限制 |
-| --- | --- | --- |
-| Etcd（U09-B） | Range/Watch 失败和成功通知、Compaction 重建、代次隔离、单飞刷新与 Lease 恢复 | 真实远端 Revision |
-| Nacos（U09-C） | 订阅失败后低频重试、NamingEvent 合并、查询失败保持 LKG、静默成功恢复 | Ephemeral Provider 主要依赖 Nacos SDK 恢复 |
-| Consul/Eureka（U09-D） | 有界线程/队列、单飞轮询、同步失败/恢复通知、指数退避 | 无原生 Watch 和跨机 Revision |
+无可用候选时 Client 通过 `RpcUnavailableException`、`RpcStatus.UNAVAILABLE` 和 `RpcObserver` 报告失败。动态异常、Metadata、应用输入和具体 Endpoint 不能作为高基数 Metrics 标签。具体异常文案用于开发排错，不是稳定机器协议。
 
-首次发现失联保持 `NOT_READY`，不会把失败解释为健康空目录。SDK 自行续约成功不等于 RPC 数据面
-零停顿；默认无限 LKG 也可能路由到已退役节点，需要联合配置 Timeout、熔断与业务级故障恢复策略。
-
-## 诊断契约
-
-Consumer `OtryxRpcClient.attempt()` 无可选节点时生成 `RpcUnavailableException`，
-通过 `RpcObserver.onClientAttemptCompleted()` 暴露 `RpcStatus.UNAVAILABLE` 和异常。
-以下文案可用于开发排错，不是稳定 Machine-Readable Code：
-
-- `Registry directory has no initial snapshot for ...`：初始未就绪
-- `Registry directory freshness budget exceeded for ...`：LKG 超出预算
-- `Registry directory has been closed for ...`：目录关闭
-- `No available instance for ...`：健康目录中没有可选实例
-
-当前**没有**单独的 Directory Status 指标。不要把动态异常、Metadata、用户输入或具体 Endpoint
-当作指标标签；后续如需分类指标应先定义低基数枚举。
-
-## 真实独立 JVM 复现
-
-在**隔离测试环境**启动 Nacos 3.2.4（Docker）、使用 JDK 21 和 Maven，在仓库根目录执行：
+已有 Nacos 重启场景仍使用原命令，保持同一个长生命周期 Consumer JVM：
 
 ```bash
-mvn -B -ntp clean verify -Pquality
-mvn -B -ntp -pl otryx-quickstart -am clean package
 OTRYX_RPC_E2E_RESTART_NACOS=true OTRYX_RPC_E2E_MAX_STALENESS=3s \
   bash scripts/run_quickstart_process_e2e.sh
 ```
 
-E2E 保持两个独立 Java 进程中的长生命周期 Consumer/Provider，包含 Provider 重启、
-Nacos 容器重启、对仍运行 Provider 注册的全新 Consumer 探测，以及 Provider
-19090→19091 端口迁移后旧 Consumer 的恢复。脚本成功等待有限；失败时打印受控进程日志。
-它**不能**证明每次故障都进入 `STALE`：短暂失联可能快于同步失败检测周期。
-`ServiceDirectoryTest` / `OtryxRpcClientResilienceTest` 的确定性时间与故障注入
-才验证拒绝和恢复；`EtcdRegistryIntegrationTest` 验证 Lease/Compaction，
-`NacosRegistrySubscriptionHealthTest` 与 `HttpRegistryTest` 验证明确健康通知。
-真实 Consul/Eureka Server 故障转移和集群条件属于额外外部验收，不以 Mock 声称已验证。
+该命令要求唯一受控本地 Nacos 3.2.4 Docker 容器；它依次验证 Provider 停止/恢复、Nacos 重启、全新 Consumer 探测和 Provider `19090→19091` 端点迁移。受控测试脚本不会用观察读取失败冒充空目录。
 
-该任务保持 JDK 21、`1.0.0-SNAPSHOT`、Wire v1 不变，不实际发布。
+Etcd、Consul、Eureka 独立进程运行与 Chaos 门禁见 [应用级注册验收](application-registry-acceptance.md)。观察脚本记录的 `convergenceSeconds` 包含进程启动、读取与重试开销，是该阶段外部观察的耗时；共享契约测试中的收敛计时具有不同起点。二者不能替换成全部后端流量、生产延迟分布或正式容量结论。

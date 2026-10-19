@@ -10,12 +10,10 @@ import com.peachsoft.otryx.api.RpcExecutionMode;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcStatus;
-import com.peachsoft.otryx.api.ServiceInstance;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.codec.RpcCodec;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
-import com.peachsoft.otryx.registry.ServiceRegistrar;
 import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportServer;
 import java.lang.reflect.Method;
@@ -29,6 +27,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -41,6 +40,12 @@ import org.junit.jupiter.api.Test;
 class OtryxRpcAuthorizationTest {
 
     private static final RpcEndpoint REMOTE = new RpcEndpoint("127.0.0.1", 20000);
+    private final ApplicationTestControlPlane controlPlane = new ApplicationTestControlPlane();
+
+    @AfterEach
+    void closeApplicationControlPlane() {
+        controlPlane.close();
+    }
 
     @Test
     void authorizationDeniedMustNotInvokeOrDecodeBusinessPayload()
@@ -236,18 +241,18 @@ class OtryxRpcAuthorizationTest {
     void authorizationMustNotExtendRelativeRequestDeadline()
             throws Exception {
         assertAuthorizationDeadlineExpires(
-                System.currentTimeMillis() + 10_000L, 20L);
+                10_000L, 20L);
     }
 
     @Test
     void authorizationMustRecheckLegacyEpochOnlyDeadline()
             throws Exception {
         assertAuthorizationDeadlineExpires(
-                System.currentTimeMillis() + 30L, 0L);
+                30L, 0L);
     }
 
-    private static void assertAuthorizationDeadlineExpires(
-            long epochDeadline, long remainingBudgetMillis) throws Exception {
+    private void assertAuthorizationDeadlineExpires(
+            long epochDeadlineOffsetMillis, long remainingBudgetMillis) throws Exception {
         TestTransport transport = new TestTransport();
         TestCodec codec = new TestCodec();
         CountingService service = new CountingService();
@@ -263,7 +268,7 @@ class OtryxRpcAuthorizationTest {
                     (byte) 1,
                     RpcIds.serviceId(serviceKey()),
                     RpcIds.methodId(Api.class.getMethod("call")),
-                    epochDeadline,
+                    System.currentTimeMillis() + epochDeadlineOffsetMillis,
                     remainingBudgetMillis,
                     Map.of(),
                     new byte[] {1, 2, 3});
@@ -331,7 +336,7 @@ class OtryxRpcAuthorizationTest {
         CompletableFuture<Boolean> authorization = new CompletableFuture<>();
         DirectService implementation = new DirectServiceImpl(executedThread);
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistrar())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(codec))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19091))
@@ -400,10 +405,10 @@ class OtryxRpcAuthorizationTest {
         }
     }
 
-    private static OtryxRpcServer.Builder server(
+    private OtryxRpcServer.Builder server(
             TestTransport transport, TestCodec codec, CountingService service) {
         return OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistrar())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(codec))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19091));
@@ -480,18 +485,6 @@ class OtryxRpcAuthorizationTest {
                 return type.cast(new Object[0]);
             }
             return null;
-        }
-    }
-
-    private static final class NoopRegistrar implements ServiceRegistrar {
-        @Override
-        public CompletionStage<Void> register(ServiceInstance instance) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public CompletionStage<Void> unregister(ServiceInstance instance) {
-            return CompletableFuture.completedFuture(null);
         }
     }
 

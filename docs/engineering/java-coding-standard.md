@@ -26,7 +26,7 @@ OTRYX 尚未 GA，不对历史开发版本承担 Java API、SPI、配置、Wire�
 | 布尔方法 | is/has/can/supports 等正向语义，遵守 Bean 约定 |
 | 数值及超时 | 明示单位：Millis/Nanos/Bytes、maxInflightBytes 等 |
 | 错误类型 | 以具体失败原因命名，拒绝模糊 SystemException |
-| SPI 实现 | 技术名 + 契约名，如 NacosRegistry、VertxRpcTransportFactory |
+| SPI 实现 | 技术名 + 契约名，如 NacosApplicationRegistry、VertxRpcTransportFactory |
 
 ### 协议字面量与魔法值
 

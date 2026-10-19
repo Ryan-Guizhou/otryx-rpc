@@ -4,6 +4,17 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - 'otryx-core/**'
+      - 'otryx-spring-boot/**'
+      - 'pom.xml'
+      - 'otryx-registry/otryx-registry-nacos/**'
+      - '.github/workflows/nacos-chaos.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'otryx-core/**'
+      - 'otryx-spring-boot/**'
+      - 'pom.xml'
       - 'otryx-registry/otryx-registry-nacos/**'
       - '.github/workflows/nacos-chaos.yml'
 
@@ -20,6 +31,8 @@ jobs:
       NACOS_CHAOS_CONTAINER: otryx-nacos-chaos
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-java@v6
         with:
@@ -61,9 +74,23 @@ jobs:
           test
           -Pnacos-chaos
 
-      - name: Nacos logs
-        if: failure()
-        run: docker logs "$NACOS_CHAOS_CONTAINER" || true
+      - name: Capture Nacos server diagnostics
+        if: always()
+        run: |
+          mkdir -p target/registry-ci/nacos
+          docker logs "$NACOS_CHAOS_CONTAINER" > target/registry-ci/nacos/server.log 2>&1 || true
+
+      - name: Upload original Nacos chaos test reports and server diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nacos-chaos-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            otryx-core/target/surefire-reports/**
+            otryx-registry/otryx-registry-nacos/target/surefire-reports/**
+            target/registry-ci/nacos/server.log
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Cleanup
         if: always()

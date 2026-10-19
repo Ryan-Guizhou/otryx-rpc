@@ -23,7 +23,7 @@ flowchart LR
     A[Quickstart API] --> M["Memory: Provider + Consumer"]
     A --> P[Provider JVM]
     A --> C[Consumer JVM]
-    P --> N[(Nacos / Consul / Eureka)]
+    P --> N[(Nacos / Etcd / Consul / Eureka)]
     C --> N
     C -->|Unary RPC / Vert.x TCP| P
     M -->|Memory Registry / loopback| M
@@ -367,7 +367,26 @@ Provider 声明 `@OtryxRpcService(interfaceClass = GreetingService.class, versio
 其他可按需选择 `otryx-registry-etcd`、`otryx-registry-consul`、`otryx-registry-eureka`、`otryx-proxy-cglib`、`otryx-proxy-bytebuddy` 或 Observability Adapter；无需重新换 Starter。完整属性与 SPI 覆盖见 [Starter 参考](../docs/reference/starter.md)。
 
 <!-- doc-section:other-registries -->
-## 7. 进一步验证 Registry：Consul / Eureka
+## 7. 进一步验证 Registry：Etcd / Consul / Eureka
+
+Provider/Consumer 可执行 JAR 已显式包含 Nacos、Etcd、Consul、Eureka Adapter；Memory 模块仍不引入任何网络 Registry。下面三个场景复用同一 Starter 和只读观察 CLI，对四个后端执行相同的真实成员、路由和 RPC 断言：
+
+```bash
+# 已启动真实 Etcd；每个场景自动生成独立 namespace。
+export QUICKSTART_REGISTRY=etcd
+export QUICKSTART_REGISTRY_ENDPOINT=http://127.0.0.1:2379
+bash scripts/run_quickstart_process_e2e.sh
+bash scripts/run_three_process_deadline_e2e.sh
+bash scripts/run_quickstart_revision_e2e.sh
+```
+
+Consul 使用 `QUICKSTART_REGISTRY=consul` 和 `http://127.0.0.1:8500`。Eureka 使用 `QUICKSTART_REGISTRY=eureka`、`http://127.0.0.1:8761/eureka`，并必须显式提供 `QUICKSTART_EUREKA_METADATA_ENDPOINT=http://127.0.0.1:8500`；元数据来自实际 Consul，缺失配置会在启动应用前失败。Nacos 保持 public namespace + 新隔离 group 和先初始化后启动的顺序。非 Nacos 场景不默认重启服务端；对应故障门禁另行运行。
+
+统一观察入口为 `scripts/observe_quickstart_registry.sh`。参数顺序是 Provider JAR、backend、endpoint、namespace、Nacos group 或 `-`、Eureka 的 Consul metadata endpoint 或 `-`、新 JSON 文件、应用名。既有 Nacos 专用入口仍可用；两个 namespace 参数必须匹配。CI 四后端矩阵、固定服务端版本、完整参数及证据边界见[应用级注册验收](../docs/reference/application-registry-acceptance.md)。
+
+观察器记录的 `convergenceSeconds` 包括观察进程启动、读取及重试耗时。共享契约报告的成员数、SPI 方法入口调用数、订阅创建调用数及快照/健康通知分别计量；它们不是后端全部 HTTP、keepalive 或服务端 Watch 流量，也不将 10 个 SDK client 对象称为 10 个业务 JVM。
+
+### 手工 Consul / Eureka Profile
 
 Provider、Consumer 当前的 POM 已声明可选演示所需的 Consul/Eureka Adapter。先自己部署对应服务后，**两个进程使用同一 Profile**，不要尝试与 Memory Registry 跨 JVM 连接：
 
@@ -411,7 +430,7 @@ Consul Profile 的认证通过 `CONSUL_HTTP_TOKEN` 传递，Eureka 成员面的�
 | Maven 解析不了 OTRYX `1.0.0-SNAPSHOT` | 尚未发布 Central；先本地运行 `./mvnw -B -ntp clean install -DskipTests` |
 | 无法连接 Nacos | 检查 `docker compose ... up -d`、8848/9848、Registry type、namespace 与 Provider/Consumer 配置是否一致 |
 | 缺少 Mapping 分片 | 停止该 scope 的所有业务写入，再独占运行 bootstrap；自动脚本已在应用启动前执行 |
-| Memory 模式双进程互相看不到 | Memory Registry **不跨 JVM**；使用 Nacos / Consul / Eureka 等共享注册中心 |
+| Memory 模式双进程互相看不到 | Memory Registry **不跨 JVM**；使用 Nacos / Etcd / Consul / Eureka 等共享注册中心 |
 | Consumer 成员存在却无法调用 | 成员入册不等于 Provider 路由就绪；检查 Mapping、该实例 Manifest、角色与 `verifiedProviders` |
 | 观察器拒绝写文件 | 输出必须是新文件；每轮观察改用新文件名，检查 namespace/group/applicationName 是否一致 |
 | `NETWORK_MTLS` 拒绝调用 | 分清握手失败和 `RPC authorization denied`；再查指纹、ServiceKey、MethodId 与严格 Fory 白名单 |
@@ -437,14 +456,6 @@ docker compose -f otryx-quickstart/docker-compose.yml down
 <!-- doc-section:migration-status -->
 ## V2 应用级注册迁移状态
 
-Core 编程式 `ApplicationMembershipCoordinator`、`ApplicationServiceResolver` 与
-`OtryxRpcClient.applicationControlPlane(...)` / `OtryxRpcServer.applicationMembership(...)`
-已经建立独立的应用级 RPC 路径。可运行的 **Core 单 JVM Wire v1 E2E**
-在 `ApplicationRuntimeEndToEndTest` 中验证三接口、独立 Consumer 与同进程 BOTH。
-#137 已将唯一 Spring Starter 接入同一套应用级控制面并合并，
-本目录的 Spring Quickstart 通过该 Starter 注册 Provider、Consumer 或 BOTH 成员；
-纯 Consumer 不注册 RPC Endpoint。Nacos 独立进程脚本在启动应用前初始化本轮独立 scope。
-#138 的范围是本页的成员诊断、两个真实 Manifest revision 滚动和 mTLS 授权教程，
-复用原有四模块和单一 Starter；验收须核对该 PR 准确 Head 与合并后 main CI 的实际结果。
-旧接口级 SPI 的全量删除仍归 #139，尚未完成。Quickstart 成功不能作为全仓 V2 迁移完成或
-生产就绪的证明。各阶段范围与剩余工作见 [V2 设计与状态](../docs/design/application-registry-v2.md)。
+Core `ApplicationMembershipCoordinator`、`ApplicationServiceResolver`、Client `applicationControlPlane(...)` 和 Server `applicationMembership(...)` 是当前唯一应用级链路。Provider、Consumer、BOTH 均真实入册，纯 Consumer 无 RPC Endpoint；ServiceInstance 只保留为本地 LB DTO。
+
+#139 将源码/配置/当前用法清理、共享契约、四真实后端独立 JVM 与完整五组 rolling 作为一个纵向验收包。旧注册模式不能作为 rolling baseline。当前准确 Head 的后端与 CI 状态见[断点](../docs/engineering/agent-governance-checkpoint.md)；教程、静态扫描或脚本夹具不能替代真实通过结果，也不构成生产容量或正式发行证明。设计与约束见 [V2 设计](../docs/design/application-registry-v2.md)。

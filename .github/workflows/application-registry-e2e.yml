@@ -1,0 +1,143 @@
+name: Application Registry Independent JVM Matrix
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'otryx-core/**'
+      - 'otryx-codegen/**'
+      - 'otryx-registry/**'
+      - 'otryx-transport/**'
+      - 'otryx-serialization/**'
+      - 'otryx-spring-boot/**'
+      - 'otryx-quickstart/**'
+      - 'scripts/*quickstart*'
+      - 'scripts/run_three_process_deadline_e2e.sh'
+      - 'pom.xml'
+      - '.github/test-fixtures/eureka-server/**'
+      - '.github/workflows/application-registry-e2e.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'otryx-core/**'
+      - 'otryx-codegen/**'
+      - 'otryx-registry/**'
+      - 'otryx-transport/**'
+      - 'otryx-serialization/**'
+      - 'otryx-spring-boot/**'
+      - 'otryx-quickstart/**'
+      - 'scripts/*quickstart*'
+      - 'scripts/run_three_process_deadline_e2e.sh'
+      - 'pom.xml'
+      - '.github/test-fixtures/eureka-server/**'
+      - '.github/workflows/application-registry-e2e.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  independent-jvm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [nacos, etcd, consul, eureka]
+    env:
+      QUICKSTART_REGISTRY: ${{ matrix.backend }}
+      QUICKSTART_EUREKA_METADATA_ENDPOINT: http://127.0.0.1:8500
+      # Container restart is separately required by CI and backend chaos jobs.
+      OTRYX_RPC_E2E_RESTART_NACOS: 'false'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Start real Nacos
+        if: matrix.backend == 'nacos'
+        run: |
+          docker run -d --name otryx-matrix-nacos -p 8848:8848 -p 9848:9848 \
+            -e MODE=standalone -e NACOS_AUTH_ENABLE=false \
+            -e NACOS_AUTH_TOKEN=UGVhY2hScGNDb250cm9sUGxhbmVTZWNyZXRLZXkxMjM0NTY3ODkwMTIzNDU2Nzg5MA== \
+            -e NACOS_AUTH_IDENTITY_KEY=otryx-ci -e NACOS_AUTH_IDENTITY_VALUE=otryx-ci-secret \
+            nacos/nacos-server:v3.2.4
+          for attempt in {1..90}; do
+            if curl --silent --fail http://127.0.0.1:8848/nacos/v3/admin/core/state/readiness >/dev/null \
+                && timeout 1 bash -c '</dev/tcp/127.0.0.1/9848' 2>/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs otryx-matrix-nacos
+          exit 1
+      - name: Start real Etcd
+        if: matrix.backend == 'etcd'
+        run: |
+          docker run -d --name otryx-matrix-etcd -p 2379:2379 \
+            gcr.io/etcd-development/etcd:v3.5.21 /usr/local/bin/etcd \
+            --name=otryx-matrix --data-dir=/etcd-data \
+            --listen-client-urls=http://0.0.0.0:2379 \
+            --advertise-client-urls=http://127.0.0.1:2379
+          for attempt in {1..60}; do
+            if docker exec otryx-matrix-etcd /usr/local/bin/etcdctl endpoint health; then exit 0; fi
+            sleep 2
+          done
+          docker logs otryx-matrix-etcd
+          exit 1
+      - name: Start real Consul for membership or Eureka metadata
+        if: matrix.backend == 'consul' || matrix.backend == 'eureka'
+        run: |
+          docker run -d --name otryx-matrix-consul -p 8500:8500 \
+            hashicorp/consul:1.20.6 agent -dev -client=0.0.0.0
+          for attempt in {1..60}; do
+            if curl --silent --fail http://127.0.0.1:8500/v1/status/leader | grep -Eq ':[0-9]+'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs otryx-matrix-consul
+          exit 1
+      - name: Build and start real Eureka
+        if: matrix.backend == 'eureka'
+        run: |
+          mvn -B -ntp -f .github/test-fixtures/eureka-server/pom.xml -DskipTests package
+          bash .github/test-fixtures/eureka-server/control.sh start
+      - name: Build both executable Quickstart JVMs
+        run: |
+          mvn -B -ntp -pl otryx-codegen -am install -DskipTests
+          mvn -B -ntp -pl otryx-quickstart/otryx-quickstart-provider,otryx-quickstart/otryx-quickstart-consumer \
+            -am package -DskipTests
+      - name: Verify Provider recovery with the original Consumer JVM
+        run: bash scripts/run_quickstart_process_e2e.sh
+      - name: Verify Consumer to BOTH to Provider deadline chain
+        run: bash scripts/run_three_process_deadline_e2e.sh
+      - name: Verify real export revisions, promotion and rollback
+        run: bash scripts/run_quickstart_revision_e2e.sh
+      - name: Upload application snapshots and bounded convergence observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-registry-${{ matrix.backend }}-${{ github.run_id }}
+          path: target/quickstart-e2e
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Backend diagnostics
+        if: failure()
+        run: |
+          for container in otryx-matrix-nacos otryx-matrix-etcd otryx-matrix-consul; do
+            docker logs "$container" 2>/dev/null || true
+          done
+          test ! -f .github/test-fixtures/eureka-server/target/server.log \
+            || tail -n 80 .github/test-fixtures/eureka-server/target/server.log
+      - name: Cleanup owned test servers
+        if: always()
+        run: |
+          if [ "$QUICKSTART_REGISTRY" = eureka ]; then
+            bash .github/test-fixtures/eureka-server/control.sh stop || true
+          fi
+          docker rm -f otryx-matrix-nacos otryx-matrix-etcd otryx-matrix-consul 2>/dev/null || true

@@ -61,8 +61,10 @@ def endpoint(value: dict, port: int | None = None) -> None:
 class Snapshot:
     """Validate internal consistency before any scenario-specific assertion."""
 
-    def __init__(self, data: dict):
-        require(isinstance(data, dict) and data.get("applicationNamespace") == "public",
+    def __init__(self, data: dict, namespace: str = "public"):
+        require(isinstance(namespace, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,128}", namespace) is not None,
+                "Invalid expected application namespace")
+        require(isinstance(data, dict) and data.get("applicationNamespace") == namespace,
                 "Unexpected application namespace")
         self.applications = keyed(data.get("applications"), "applicationName")
         self.members = {}
@@ -154,10 +156,11 @@ class Snapshot:
                     "Mapping has not converged to live contract owners")
 
 
-def assert_snapshot(scenario: str, stage: str, data: dict, previous: dict | None = None) -> None:
+def assert_snapshot(scenario: str, stage: str, data: dict, previous: dict | None = None,
+                    namespace: str = "public") -> None:
     """Assert named real deployment phases; no synthetic revision labels are accepted."""
-    snapshot = Snapshot(data)
-    prior = Snapshot(previous) if previous is not None else None
+    snapshot = Snapshot(data, namespace)
+    prior = Snapshot(previous, namespace) if previous is not None else None
     expected = {}
     routes = {}
     if scenario == "process":
@@ -247,11 +250,12 @@ def main() -> int:
     parser.add_argument("stage")
     parser.add_argument("snapshot", type=Path)
     parser.add_argument("--previous", type=Path)
+    parser.add_argument("--namespace", default="public")
     args = parser.parse_args()
     try:
         data = json.loads(args.snapshot.read_text(encoding="utf-8"))
         previous = json.loads(args.previous.read_text(encoding="utf-8")) if args.previous else None
-        assert_snapshot(args.scenario, args.stage, data, previous)
+        assert_snapshot(args.scenario, args.stage, data, previous, args.namespace)
     except (OSError, ValueError, TypeError, KeyError) as error:
         print(f"Quickstart snapshot rejected: {type(error).__name__}: {error}", file=sys.stderr)
         return 1

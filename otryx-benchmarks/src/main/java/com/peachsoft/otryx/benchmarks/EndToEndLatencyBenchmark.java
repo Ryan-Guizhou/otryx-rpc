@@ -4,9 +4,6 @@ import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
-import com.peachsoft.otryx.registry.Registry;
-import com.peachsoft.otryx.registry.RegistryFactory;
-import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.peachsoft.otryx.transport.RpcTransportFactory;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
@@ -17,8 +14,6 @@ import io.vertx.core.net.NetServer;
 import io.vertx.core.net.NetSocket;
 import java.net.ServerSocket;
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -65,7 +60,7 @@ public class EndToEndLatencyBenchmark {
     private final AtomicReference<CompletableFuture<Void>> rawPending =
             new AtomicReference<>();
 
-    private Registry registry;
+    private BenchmarkApplicationControlPlane controlPlane;
     private OtryxRpcServer rpcServer;
     private OtryxRpcClient rpcClient;
     private BenchmarkService rpcService;
@@ -108,12 +103,7 @@ public class EndToEndLatencyBenchmark {
 
     private void setupOtryxRpc() throws Exception {
         int port = freePort();
-        registry = ExtensionLoader.getLoader(RegistryFactory.class)
-                .getExtension("memory")
-                .create(new RegistryOptions(
-                        List.of(),
-                        "benchmark",
-                        Map.of()));
+        controlPlane = new BenchmarkApplicationControlPlane("benchmark");
         RpcCodecRegistry codecs = RpcCodecRegistry.fromSpi();
         RpcTransportFactory transportFactory =
                 ExtensionLoader.getLoader(RpcTransportFactory.class)
@@ -126,7 +116,7 @@ public class EndToEndLatencyBenchmark {
                         Duration.ofSeconds(3));
 
         rpcServer = OtryxRpcServer.builder()
-                .serviceRegistrar(registry.registrar().orElseThrow())
+                .applicationMembership(controlPlane.provider())
                 .transportServer(
                         transportFactory.createServer(transportOptions))
                 .codecRegistry(codecs)
@@ -140,8 +130,7 @@ public class EndToEndLatencyBenchmark {
                         "benchmark");
         rpcServer.start().toCompletableFuture().join();
 
-        rpcClient = OtryxRpcClient.builder()
-                .serviceDiscovery(registry)
+        rpcClient = controlPlane.clientBuilder()
                 .transportClient(
                         transportFactory.createClient(transportOptions))
                 .codecRegistry(codecs)
@@ -151,7 +140,7 @@ public class EndToEndLatencyBenchmark {
                 BenchmarkService.class,
                 "1.0.0",
                 "benchmark");
-        rpcService.echo(PAYLOAD);
+        controlPlane.warmup(rpcClient, () -> rpcService.echo(PAYLOAD));
     }
 
     /**
@@ -193,8 +182,8 @@ public class EndToEndLatencyBenchmark {
         if (rpcServer != null) {
             rpcServer.close();
         }
-        if (registry != null) {
-            registry.close();
+        if (controlPlane != null) {
+            controlPlane.close();
         }
         if (rawSocket != null) {
             rawSocket.close();
