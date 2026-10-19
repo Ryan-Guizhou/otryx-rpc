@@ -469,6 +469,12 @@ class OtryxRpcClientResilienceTest {
     @Test
     void hangingTransportShouldFinishAtLogicalDeadline() throws Exception {
         CompletableFuture<byte[]> neverFinishes = new CompletableFuture<>();
+        CountDownLatch cancellationObserved = new CountDownLatch(1);
+        neverFinishes.whenComplete((value, error) -> {
+            if (neverFinishes.isCancelled()) {
+                cancellationObserved.countDown();
+            }
+        });
         try (OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(new TestTransport(
                         (endpoint, frame, timeout) -> neverFinishes))
@@ -479,6 +485,8 @@ class OtryxRpcClientResilienceTest {
             CompletionException failure = assertThrows(CompletionException.class,
                     () -> service.find("test"));
             assertInstanceOf(RpcTimeoutException.class, failure.getCause());
+            assertTrue(cancellationObserved.await(2, TimeUnit.SECONDS),
+                    "Deadline must propagate cancellation to the transport");
             assertTrue(neverFinishes.isCancelled(), "Deadline must cancel the pending transport");
         }
     }
@@ -537,6 +545,12 @@ class OtryxRpcClientResilienceTest {
             throws Exception {
         CountDownLatch dispatched = new CountDownLatch(1);
         CompletableFuture<byte[]> pendingTransport = new CompletableFuture<>();
+        CountDownLatch cancellationObserved = new CountDownLatch(1);
+        pendingTransport.whenComplete((value, error) -> {
+            if (pendingTransport.isCancelled()) {
+                cancellationObserved.countDown();
+            }
+        });
         OtryxRpcClient client = client((endpoint, frame, timeout) -> {
             dispatched.countDown();
             return pendingTransport;
@@ -557,6 +571,8 @@ class OtryxRpcClientResilienceTest {
             client.close();
             invocation.join(2_000L);
             assertFalse(invocation.isAlive(), "Client close must settle pending calls");
+            assertTrue(cancellationObserved.await(2, TimeUnit.SECONDS),
+                    "Client close must propagate cancellation to the transport");
             assertTrue(pendingTransport.isCancelled(),
                     "Client close must propagate cancellation to the transport");
             Throwable error = failure.get();

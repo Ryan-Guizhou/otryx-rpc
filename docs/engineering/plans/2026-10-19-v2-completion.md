@@ -40,7 +40,11 @@
 
 本地两组真实 Etcd 分别完成 19 项 fixture 自检及 9/2 项 Java IT。Etcd 分类修复后的 `build-34` 完整 reactor 已达 29 模块、821 tests、0 failures/errors、27 条件 skips，style 严格聚合 29 报告、400 Java、零发现；86 Markdown、54 Mermaid 和 5 SVG 已实际检查/渲染，当前图源不变。前一批真实 exec JAR 完成 17 个安全阶段，自有进程清理已复核。旧 TLS 正常连接用例的一次超时保留，两次有限诊断未复现，不放宽期限或臆造原因。
 
-独立审查补齐 Registry 安全原因传播、namespace 原因码和 E12 重复参数的 RED/GREEN；Consumer 快照核验后的存活检查已有 17 项 mock GREEN，默认身份在 Registry 副作用前的 10 个准确 RED 已经修复，完整身份配置 38 项均通过。最终同一冻结输入在 `build-35/36` 再次通过两组真实 Etcd 19 项自检与 9/2 项 IT，在 `build-37` 独立 quality 完成 29 模块、源 Javadoc 零警告。`build-38` 使用最终 JAR 完成全部 17 阶段，62 个采样进程全部退出；样式与 Javadoc 分开验证。准确 Head/main 的相关 CI 尚未形成；本地完整通过不等于 #140 completed。详见[工程断点](../agent-governance-checkpoint.md)。
+独立审查补齐 Registry 安全原因传播、namespace 原因码和 E12 重复参数的 RED/GREEN；Consumer 快照核验后的存活检查已有 17 项 mock GREEN，默认身份在 Registry 副作用前的 10 个准确 RED 已经修复，完整身份配置 38 项均通过。最终同一冻结输入在 `build-35/36` 再次通过两组真实 Etcd 19 项自检与 9/2 项 IT，在 `build-37` 独立 quality 完成 29 模块、源 Javadoc 零警告。`build-38` 使用最终 JAR 完成全部 17 阶段，62 个采样进程全部退出；样式与 Javadoc 分开验证。本地完整通过不等于 #140 completed，准确最新 Head 和合并后的 main 均须独立验证。详见[工程断点](../agent-governance-checkpoint.md)。
+
+[PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 首次 Head `4a147880983a53cab587980230276878155c84b9` 的 14 条工作流已结束，10 成功、4 失败。原因分别为共用 bootstrap 测试仍解包三项、Consul 两处 IT 夹具未显式选择安全 profile、Core 关闭测试未等待异步取消事件；在同一 PR 修复对应测试。21 项参数回归及 CI 全部 16 组 Python 自测已通过，两项取消测试正常实现通过，移除实际取消动作的隔离副本则两项准确失败。真实 Consul 随后实际运行九项 IT，暴露两项恢复失败：404 文本正文被提前当作 Metadata JSON 解析。新增回归准确 RED，最小修复后的 HTTP 安全/字节测试 10 项全部 GREEN，原字节、期限与安全拒绝边界保留。四后端矩阵实际完成 44 份快照和 12 份 summary；首轮普通 CI、rolling、Consul Chaos 与 Nacos Chaos 未执行的范围仍须由修复后的准确 Head 补齐，不放宽生产默认值或将跳过计为通过。
+
+指定 Consul 文本回归的初次夹具误命中默认 404 已由独立审查纠正，`build-48/49` 用实际 handler 和到达次数断言重新完成准确 RED/GREEN。最小 HTTP 修复后的 `build-47` 真实 Consul 九项全部通过，两个恢复期限未放宽，输入与进程清理已核验；远端 Docker 故障门禁仍须实际执行。
 
 最后 E2E 一次运行在 15 个阶段通过后，错误 Registry 凭据负例出现成员确认超时，未观察到认证原因码，最后只读场景未运行。一次原预算、同批 JAR 的有限真实复现已观察到 AUTHENTICATION_REJECTED，未复现超时；随后 `build-32` 相同输入的完整 17 阶段通过，68 个采样到的进程均已退出。原失败保留，不修改预算或降低断言。追加 SDK 审查确认 AuthCredential 会将任意 Authenticate Future 失败包装成 UNAUTHENTICATED；`build-33` 四个准确 RED 后最小修复，`build-34` 全部八项分类测试 GREEN。历史最终 AUTH marker 本身不能反推服务端真实状态；修复后真实后端与完整 `build-38` 均已通过。
 

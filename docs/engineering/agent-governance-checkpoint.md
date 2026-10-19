@@ -1,6 +1,6 @@
 # OTRYX RPC 工程断点：#140 安全默认值与身份可信
 
-> 更新时间：2026-10-19（UTC）。[#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139) 已由 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合并并完成准确 main 验证。当前工作包为 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140)，实现和文档进入最终验证，尚未提交 PR，不能宣称完成。恢复时查询准确 SHA，再核对冻结输入、自有进程和最新证据。
+> 更新时间：2026-10-19（UTC）。[#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139) 已由 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合并并完成准确 main 验证。当前 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) 已提交 [PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161)，正在同一 PR 修复 CI 测试适配及真实 Consul 暴露的 HTTP 404 恢复问题，尚未合并，不能宣称完成。恢复时查询准确最新 SHA，再核对冻结输入、自有进程和证据。
 
 ## 1. 任务与授权边界
 
@@ -20,7 +20,9 @@ Provider、Consumer、BOTH 均使用真实应用成员身份；纯 Consumer 没�
 | 合并后 main / #140 基线 | `783bf8115c9523e5667023678dafe659315b2b66` |
 | 该 main 门禁 | 独立核验 12 条工作流、16 项检查均成功；[普通 CI](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39242224065) |
 | #140 工作分支 | `feat/v2-13-security-hardening` |
-| #140 提交、PR 和远端门禁 | 尚未形成，不预填 SHA 或成功状态 |
+| #140 PR | [#161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161)，尚未合并 |
+| #140 首次 Head | `4a147880983a53cab587980230276878155c84b9`；14 条工作流结束，10 成功、4 失败，不能合并 |
+| #140 修复后的门禁 | 三处测试适配及 HTTP 404 解析修复在同一 PR 追加提交；最新 Head 与合并后 main 均须重新独立核验，不预填成功 |
 
 #139 最终 main 原始报告为 638 tests、0 failures/errors、18 条件 skips；style 严格聚合 29 模块且无发现，文档实际渲染 52 个 Mermaid 与 5 个 SVG。真实 Registry 合同、四后端独立 JVM 矩阵、常规快照和五组 rolling 均已核验。依赖审查没有新增漏洞差异，但既有依赖告警仍存在；共享 CI 短时 benchmark 不能作为 #146 正式性能证据。
 
@@ -42,7 +44,7 @@ Provider、Consumer、BOTH 均使用真实应用成员身份；纯 Consumer 没�
 
 ## 4. 本地证据与准确边界
 
-隔离工作区和证据位于 `/tmp/otryx-issue140-2d1e5f300fc7/`。每次运行使用独立冻结源码目录和输入 SHA-256；临时日志不是永久 CI artifact，也不是尚未形成的 Git Head 证明。不同阶段测试数不能相加后称为一次全量通过。
+隔离工作区和证据位于 `/tmp/otryx-issue140-2d1e5f300fc7/`。每次运行使用独立冻结源码目录和输入 SHA-256；临时日志不是永久 CI artifact，不能替代准确 Git Head 的 CI 证明。不同阶段测试数不能相加后称为一次全量通过。
 
 | 验证 | 已知结果及限制 |
 | --- | --- |
@@ -77,16 +79,36 @@ Provider、Consumer、BOTH 均使用真实应用成员身份；纯 Consumer 没�
 | `build-38` 最终完整 mTLS | 最终 quality 后的真实 JAR 完成全部 17 个阶段，253.54 秒；685 输入与两份 JAR 哈希不变。17 份成员快照逐项与已核验状态一致，fixture 及 outcomes 齐全；62 个采样进程全部退出、清理无错误。包括修复后精确 Registry 认证拒绝与只读 Observer，未放宽期限或断言 |
 | Python 及文档 | 进程组归属 10、安全快照 11、场景入口 29 项已通过；文档实际检查 86 Markdown、渲染 54 Mermaid 与 5 SVG，中文图已用 CJK 字体复核。当前图源哈希与已渲染输入相同，最终 Head 仍由 CI 再核验 |
 | 静态检查 | 项目布局、差异空白、生产语义字面量 274 文件、改变/新增 Java 186 类型的约定和元数据检查均通过；26 个框架边界 catch-Throwable 提示不冒充零告警。后续修改重新核验对应输入 |
-| 尚待远端门禁 | 本地完整收尾通过；准确 #140 Head/main 的相关 CI 尚未形成，本地结果不替代准确提交的远端验证。发布前只有中英文 README 的验收引用及两份工程记录更新，生产代码、测试、脚本与最终冻结输入一致 |
+| `build-39/40` bootstrap 回归 | 原始参数测试准确复现 21 tests / 1 error：Java 入口已接收四项，旧断言仍解包三项。测试显式断言第四项为 TRUSTED_DEVELOPMENT 后，21 项全部通过；原 namespace/group 和应用 scope 断言保留 |
+| `build-41` Python 门禁 | CI YAML 中全部 16 组 Python 自测命令顺序执行成功，108.052 秒，684 输入不变。该快照早于两处 Java 测试修复；相同脚本仍由最新 Head CI 再验证 |
+| `build-42/43` 取消同步验证 | 正常实现的两项取消测试均通过；隔离副本仅移除实际 transport 取消动作后，两项均在取消事件断言准确失败，0 errors/skips。测试监听器提前注册，等待真实取消事件，保留原异常与取消断言；生产实现不变 |
+| `build-44` 真实 Consul 追加失败 | 显式 profile 使九项 IT 实际运行，7 通过、2 个恢复断言失败，0 errors/skips。实际 Consul 日志反复报告 Session 或 Agent 成员不存在；HTTP 客户端在保留 404 前解析文本正文并拒绝。69.39 秒，684 输入不变，自有 Maven/Consul 均已退出 |
+| `build-45/46` HTTP 404 初次回归 | 原测试确实复现非 JSON 404 被误判 METADATA_INTEGRITY_REJECTED，修复后通过；独立审查发现请求路径命中了 JDK 默认 404，预设的 Consul 文本 handler 未执行。这两次不作为指定 Consul 正文的验证证据，夹具修正后的结果见下行 |
+| `build-48/49` HTTP 正确夹具 RED/GREEN | 使用实际注册路径，handler 发送两类 Consul 文本并逐次断言确实被调用。旧 HTTP 实现为 9 tests / 1 准确 failure，0 errors/skips；相同测试配合最小 404 reader 修复后，完整 HTTP 安全/字节 10 项通过。404 声明/分块超限、401/403、成功响应畸形 JSON、重定向、期限和取消边界保留，684 输入不变、清理无错误 |
+| `build-47` 真实 Consul GREEN | 相同九项 IT 在最小 HTTP 修复后全部通过，0 failures/errors/skips，原有两个 20 秒恢复预算不变；总计 21.696 秒，测试套件 7.283 秒。前后均确认自有 Consul 1.20.6 节点身份与 leader，684 输入不变，两组进程均已退出；不代替远端 Docker Chaos |
+| 尚待远端门禁 | 首次 Head 的失败、已通过与未执行范围见下一节。三处测试适配与 HTTP 404 解析修复具有独立证据；最新 Head 的全部相关门禁通过后才可合并，再核验准确 main |
 
 本地没有 Docker。`build-12` 在 Etcd Testcontainers 初始化时因没有有效 Docker 环境中止，环境错误不作为产品 RED。后续本地全量命令只排除 `EtcdApplicationRegistryIntegrationTest`，保留 Surefire 默认匹配模式；受保护 Etcd 用独立真实 native fixture 补验。容器故障、集群、各后端集成及 ACL 的原有 CI 门禁保持不变，条件跳过不能算通过。
 
-## 5. 恢复与后续动作
+## 5. PR #161 首轮 CI 与修复边界
+
+准确首次 Head 为 `4a147880983a53cab587980230276878155c84b9`。全部 14 条工作流已经结束，10 条成功、4 条失败；以下原始失败不能被后续成功覆盖。
+
+- [普通 CI](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39268700328) 和 [Rolling Compatibility](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39268700355) 均在共用 bootstrap 参数测试解包三项时失败；之后的 reactor、17 阶段安全验收与五组 rolling 尚未执行。真实入口需要第四项显式安全 profile，因此只修测试契约，保留入口行为。
+- [Consul](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39268700440) 九项 IT 均在夹具构造的 UNSPECIFIED 配置上拒绝，实际合同断言未执行，后续 Docker pause/recovery 也未执行。两处夹具改用显式 trustedDevelopment；独立 ACL 项实际通过，不能代替九项 IT 或 Chaos。
+- [Nacos Chaos](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39268700381) 在上游 Core 关闭测试失败：调用线程已退出，但原始 transport Future 的取消仍在异步传播。Nacos 模块实际跳过；以取消事件建立测试同步点，不能把调用 Future 终态当作副作用全部完成的屏障。
+- [四后端独立 JVM 矩阵](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39268700248) 实际通过，逐份核验 44 个快照与 12 份 summary 的真实 RPC、角色、无 Endpoint Consumer、成员/Manifest revision 及 promotion/rollback。Eureka 六项 IT 与真实重启、Etcd leader transfer 均实际通过；这些结果不替代未执行的专项。
+
+测试夹具修复后，真实 Consul 进一步暴露通用 JSON HTTP reader 提前解析 404 文本正文的问题。最小修复仅保留缺失状态，沿用原始字节/期限检查、401/403 分类和成功响应严格解析；Consul 与 Eureka 已有的缺失资源处理继续执行，注册失败不会伪装成功。中英文 Consul 故障说明已同步。
+
+修复后必须在最新 Head 重新检查全部工作流、job 和关键原始 artifact。只读核对确认 Memory、四后端 Quickstart、benchmark 和 Observer 已显式选择开发 profile，mTLS YAML 明确选择 NETWORK_MTLS；未因此放宽生产默认值或安全能力校验。
+
+## 6. 恢复与后续动作
 
 1. 核对分支、远端 main 和自有进程；一次仅一个 Maven/真实后端验证窗口，不改动运行中的冻结输入，不混用不同阶段 JAR。
 2. 保留已核验的身份、存活和 Etcd 分类 RED/GREEN；无法唯一归因的旧 TLS 与成员等待超时仍记录证据不足。
-3. 保留 `build-34` reactor/style、`build-35/36` 两组真实 Etcd、`build-37` quality 和 `build-38` 全部 17 阶段的完整证据；发布输入须与这些代码/测试/脚本逐项一致，文档只追记结果。
-4. 更新实际结果，提交完整 #140 PR。准确 Head 每条相关 workflow/job/关键 artifact 通过后，以预期 Head 合并；再独立核验准确 main，不能从 PR 绿色推断 main 绿色。
+3. 保留 `build-34` reactor/style、`build-35/36` 两组真实 Etcd、`build-37` quality 和 `build-38` 全部 17 阶段的完整证据；后续三处测试适配和 HTTP 404 解析修复的独立证据及最新 Head CI 另行核验，不能将旧全量报告改称最新输入。
+4. 在现有 PR #161 追加修复。准确最新 Head 每条相关 workflow/job/关键 artifact 通过后，以预期 Head 合并；再独立核验准确 main，不能从 PR 绿色推断 main 绿色。
 5. 更新 #140 与 #127，再从新 main 继续 #141–#145 的独立工作包。main 若失败，先修复主线，暂停后续合并。
 6. #146 工具和报告可继续准备，但正式验收必须有固定物理主机、测前确定的 SLO/退化阈值、AB BA AB 六次运行、每次至少 60 分钟 soak 和完整原始指标。条件缺失保持 BLOCKED；#147 只执行已授权发行 dry-run，依赖未完成不能提前关闭。
 

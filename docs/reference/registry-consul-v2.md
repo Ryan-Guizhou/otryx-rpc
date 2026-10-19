@@ -98,6 +98,8 @@ HTTP 总预算包括连接、响应体和 JSON 解析；原始字节在聚合前
 
 合法的 non-passing 或不可路由成员可被健康过滤。声称为 V2 的错误归属、损坏角色/字段、畸形内容，以及 TLS、认证、授权或响应超限会形成稳定 `RegistrySecurityException.reason()`，不附原始 cause 或服务端正文，也不能成为健康空快照。普通网络失败沿用 Core 的有界 LKG；安全失败立即使当前 Resolver 的旧安全 epoch 失效，另一条路由不会因定时器尚未运行而继续使用旧快照。
 
+HTTP 404 保留资源缺失状态；Consul 返回的文本错误正文在完成原有字节与期限检查后丢弃，不作为 Metadata JSON 解析。这样，Agent 成员丢失与 Session 到期可以进入既有的归属复核、重新声明和注册流程。401/403、超限正文及成功响应中的畸形 Metadata 仍按原安全规则拒绝，不能转换成资源缺失。
+
 默认每 10 秒续约 TTL Check 与 Session，丢失 Agent Check 时重新注册。`close()` 停止调度并以最多三秒尝试注销；不可达时由 TTL 最终使成员失效，不删除其他进程成员。Session 结束删除临时 Claim，Owner revoke 保留 generation 墓碑，旧 Manifest 不自动 GC。持久数据清理必须另有权威引用、保护窗口和原子 fencing；不声明全局 revision、跨数据中心事务或无条件强一致。
 
 ## 五、验证与证据范围

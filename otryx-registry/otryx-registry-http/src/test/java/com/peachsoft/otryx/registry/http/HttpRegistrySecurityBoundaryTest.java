@@ -1,6 +1,7 @@
 package com.peachsoft.otryx.registry.http;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -74,7 +75,7 @@ class HttpRegistrySecurityBoundaryTest {
 
     @Test
     void declaredAndChunkedOversizedBodiesRejectOnSuccessAndErrorStatuses() throws Exception {
-        for (int status : new int[] {200, 403, 500}) {
+        for (int status : new int[] {200, 403, 404, 500}) {
             for (boolean chunked : new boolean[] {false, true}) {
                 byte[] body = new byte[33];
                 try (Server server = new Server(exchange -> {
@@ -91,6 +92,32 @@ class HttpRegistrySecurityBoundaryTest {
                             () -> client.request("GET", "/value", null));
                     assertEquals(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED, failure.reason());
                     assertSafe(failure);
+                }
+            }
+        }
+    }
+
+    @Test
+    void missingResourcePreservesStatusWithoutParsingBackendErrorBody() throws Exception {
+        for (String method : List.of("GET", "PUT")) {
+            for (String body : List.of("unknown service ID: " + SECRET,
+                    "Session id '" + SECRET + "' not found")) {
+                byte[] payload = body.getBytes(StandardCharsets.UTF_8);
+                AtomicInteger requests = new AtomicInteger();
+                try (Server server = new Server(exchange -> {
+                    requests.incrementAndGet();
+                    try (exchange) {
+                        exchange.sendResponseHeaders(404, payload.length);
+                        exchange.getResponseBody().write(payload);
+                    }
+                });
+                        HttpRegistryClient client = client(server.endpoint(), 4096)) {
+                    HttpRegistryClient.Response response = assertDoesNotThrow(
+                            () -> client.request(method, "/value", null));
+                    assertEquals(1, requests.get(), "the expected Consul text response must be served");
+                    assertEquals(404, response.status());
+                    assertTrue(response.json().isNull());
+                    assertFalse(response.toString().contains(SECRET));
                 }
             }
         }

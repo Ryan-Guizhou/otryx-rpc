@@ -98,6 +98,8 @@ The total HTTP budget includes connection, response body and JSON parsing. Raw b
 
 Genuine non-passing or unroutable members may be filtered by health. Foreign ownership, damaged V2 roles/fields, malformed content, TLS, authentication, authorization and response-limit failures produce a stable `RegistrySecurityException.reason()` without raw causes or server bodies; they cannot become healthy empty snapshots. Ordinary network failures retain Core's bounded LKG behavior. Security failures invalidate the Resolver's old security epoch immediately, so another route cannot keep using an old snapshot merely because its timer has not run.
 
+HTTP 404 preserves the missing-resource status. After the existing byte and deadline checks, the client discards Consul's text error body instead of parsing it as metadata JSON. A missing Agent member or expired Session can then enter the existing ownership verification, claim and registration recovery path. HTTP 401/403, oversized bodies and malformed metadata in successful responses still fail under the original security rules; they cannot become missing resources.
+
 Default heartbeats renew TTL Checks and Sessions every 10 seconds and reregister missing Agent Checks. `close()` stops scheduling and attempts unregister for at most three seconds. Unreachable registrations expire by TTL; other processes' members are not deleted. Session expiration removes temporary Claims, Owner revoke preserves generation tombstones, and old Manifests are not automatically garbage-collected. Persistent cleanup needs authoritative references, a protection window and atomic fencing. No global revision, cross-datacenter transaction or unconditional strong consistency is claimed.
 
 ## Verification and evidence scope

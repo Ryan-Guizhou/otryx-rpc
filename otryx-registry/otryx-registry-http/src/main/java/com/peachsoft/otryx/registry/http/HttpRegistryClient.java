@@ -160,7 +160,7 @@ public final class HttpRegistryClient implements AutoCloseable {
      * @param method 受支持的 HTTP 方法
      * @param path 以单个 / 开头的服务端相对路径
      * @param payload 可空 JSON 请求对象
-     * @return 不包含凭据和完整 URL 的响应
+     * @return 不包含凭据和完整 URL 的响应；404 保留缺失状态，正文返回 NullNode
      * @throws IOException 普通网络不可用或总预算到期
      * @throws InterruptedException 调用线程被中断且实际请求已取消
      */
@@ -174,7 +174,8 @@ public final class HttpRegistryClient implements AutoCloseable {
             throw integrity();
         }
         return exchange(method, path, bytes, MEDIA_TYPE_JSON,
-                (status, body) -> new Response(status, readJson(body)), deadline);
+                (status, body) -> new Response(status, status == HttpURLConnection.HTTP_NOT_FOUND
+                        ? NullNode.getInstance() : readJson(body)), deadline);
     }
 
     /**
