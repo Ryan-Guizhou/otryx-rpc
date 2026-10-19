@@ -273,6 +273,7 @@ public class OtryxRpcServerAsyncExecutionTest {
 
             CompletionStage<byte[]> slowResponse =
                     transport.handle(request("slow"));
+            assertTrue(service.slowInvoked.await(3, TimeUnit.SECONDS));
             assertFalse(slowResponse.toCompletableFuture().isDone());
 
             byte[] fastResponse = transport.handle(request("fast"))
@@ -576,6 +577,7 @@ public class OtryxRpcServerAsyncExecutionTest {
 
             CompletionStage<byte[]> slowResponse =
                     transport.handle(request("slow"));
+            assertTrue(service.slowInvoked.await(3, TimeUnit.SECONDS));
             assertFalse(slowResponse.toCompletableFuture().isDone());
 
             byte[] overloaded = transport.handle(request("fast"))

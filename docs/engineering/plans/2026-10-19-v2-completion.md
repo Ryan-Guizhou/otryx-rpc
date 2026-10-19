@@ -1,6 +1,6 @@
 # V2 剩余工作连续实施计划
 
-> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。2026-10-19（UTC）revision 3 提交前核验：#140 尚未完成，状态以已结束运行的原始证据为准。
+> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。2026-10-19（UTC）revision 4 提交前核验：#140 尚未完成；准确 Head 的原始执行结果与 run/check API 状态矛盾分别记录。
 
 **目标：** 完成应用级注册唯一入口及其生产化能力，保持可运行、可验证、可追溯的主线。
 
@@ -67,7 +67,17 @@
 
 `build-54` 使用原版 Harness 与官方脚本，保持 16 并发、2 秒预热、3 秒测量、256 字节、15 秒 RPC 期限及 5% 门槛，实际得到 OTRYX 18104 成功 / 0 错误、Dubbo 21244 成功 / 0 错误。官方命令与 helper 均 exit 0，外层 71.689 秒；684 原输入不变，两份 Shade POM 明确归类为生成物，58 个采样进程及 helper 已退出。原始 JSON 仍携带基准 git_sha，实际修复输入由候选 tree 和完整 manifest 另行绑定；这是本地候选 smoke，不能改称准确新 Head 或固定硬件正式性能证据。
 
-当前不能把这项确定的 Directory 交接漏洞写成旧 CI 全部 795816 错误的已确认根因。下一步在同一 PR 发布第三次提交，其准确 Head 全部相关 CI 与合并后 main 的独立验证均为 **PENDING**。#140 继续保持未完成；#141 仅有独立只读准备，不提前实施。精确 run/job、原始 XML 哈希和恢复动作见[工程断点](../agent-governance-checkpoint.md)。
+当前不能把这项确定的 Directory 交接漏洞写成旧 CI 全部 795816 错误的已确认根因。第三次提交已经发布，准确 Head 为 `e1ba9b1dc8d00667b849cd7632165cdfbc3d0814`，tree 为 `c37cd606e8e4ea83c14f9a5e1497c0d17684960c`。原始日志与 artifact 已证明实际执行；run/check API 仍有 queued/in_progress 非终态，与实际产物矛盾，不能据此记为未执行或全绿。
+
+### 第三轮失败与 revision 4
+
+[普通 CI 39279078819](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39279078819) 的 62 份 XML 为 319 tests / 1 failure / 0 errors / 0 skips。唯一失败是异步 Stage 占槽测试预期 OVERLOADED、实际 OK；Nacos Chaos 的上游 Core 构建也在同一测试失败，目标 Chaos 没有执行。普通 CI 后续模块及受保护 Etcd 9+2 项、17 阶段 mTLS 等验收也未执行，不由其他 job 的成功补记。
+
+第三轮其余原始证据中，19 个 Registry 专项目标、四后端 12 场景/44 快照、五组 rolling 都通过。[原版 Smoke 39279078618](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39279078618) 在原参数与 5% 门槛下得到 OTRYX 27437/0 error、Dubbo 18315/0 error。Style 为 29 模块/400 Java/零发现；Agent Quality 为 406 文件/0 errors/26 warnings，元数据 406 类型/0 findings。文档实际渲染 54 Mermaid、5 SVG，并检查 86 Markdown。独立 Release Readiness 的 `clean verify -Pquality` 为 839 tests / 0 failures/errors / 27 条件 skips；Fory 一个 JMH pair 保持 REPORT_ONLY。每项 scope 独立记账，共享 CI 数据不是正式性能验收。
+
+最小修复在两个相关测试中等待既有 `slowInvoked` 业务入口，再发送第二次调用。异步授权完成前，未结束的响应不能证明 admission 已取得；等待真实业务入口建立先后关系，仍能检测提前释放和 CPU worker 被异步 Stage 阻塞。保留全部结果、1 秒响应等待和 lease-release 断言，沿用现有 3 秒入口等待尺度。
+
+`build-55` 的 62 份原始 XML 实际通过 Core 319 项，0 failures/errors/skips，两个目标方法均运行。28.114 秒、684 冻结输入哈希不变、自有 Maven PID 已退出、清理无错误。下一步在同一 PR 发布 revision 4，准确新 Head 的全部相关 CI 与合并后 main 的独立验证均为 **PENDING**。#140 继续保持未完成；#141 仅有只读准备。精确 run/job、原始 ZIP/XML 哈希和恢复动作见[工程断点](../agent-governance-checkpoint.md)。
 
 ## 3. #141：连接、编码与取消资源上界
 
