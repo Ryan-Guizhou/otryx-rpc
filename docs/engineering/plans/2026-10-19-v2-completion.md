@@ -1,6 +1,6 @@
 # V2 剩余工作连续实施计划
 
-> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。
+> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。2026-10-19（UTC）revision 3 提交前核验：#140 尚未完成，状态以已结束运行的原始证据为准。
 
 **目标：** 完成应用级注册唯一入口及其生产化能力，保持可运行、可验证、可追溯的主线。
 
@@ -42,11 +42,32 @@
 
 独立审查补齐 Registry 安全原因传播、namespace 原因码和 E12 重复参数的 RED/GREEN；Consumer 快照核验后的存活检查已有 17 项 mock GREEN，默认身份在 Registry 副作用前的 10 个准确 RED 已经修复，完整身份配置 38 项均通过。最终同一冻结输入在 `build-35/36` 再次通过两组真实 Etcd 19 项自检与 9/2 项 IT，在 `build-37` 独立 quality 完成 29 模块、源 Javadoc 零警告。`build-38` 使用最终 JAR 完成全部 17 阶段，62 个采样进程全部退出；样式与 Javadoc 分开验证。本地完整通过不等于 #140 completed，准确最新 Head 和合并后的 main 均须独立验证。详见[工程断点](../agent-governance-checkpoint.md)。
 
-[PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 首次 Head `4a147880983a53cab587980230276878155c84b9` 的 14 条工作流已结束，10 成功、4 失败。原因分别为共用 bootstrap 测试仍解包三项、Consul 两处 IT 夹具未显式选择安全 profile、Core 关闭测试未等待异步取消事件；在同一 PR 修复对应测试。21 项参数回归及 CI 全部 16 组 Python 自测已通过，两项取消测试正常实现通过，移除实际取消动作的隔离副本则两项准确失败。真实 Consul 随后实际运行九项 IT，暴露两项恢复失败：404 文本正文被提前当作 Metadata JSON 解析。新增回归准确 RED，最小修复后的 HTTP 安全/字节测试 10 项全部 GREEN，原字节、期限与安全拒绝边界保留。四后端矩阵实际完成 44 份快照和 12 份 summary；首轮普通 CI、rolling、Consul Chaos 与 Nacos Chaos 未执行的范围仍须由修复后的准确 Head 补齐，不放宽生产默认值或将跳过计为通过。
+[PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 首次 Head `4a147880983a53cab587980230276878155c84b9` 的 14 条工作流已结束，10 成功、4 失败。原因分别为共用 bootstrap 测试仍解包三项、Consul 两处 IT 夹具未显式选择安全 profile、Core 关闭测试未等待异步取消事件；在同一 PR 修复对应测试。21 项参数回归及 CI 全部 16 组 Python 自测已通过，两项取消测试正常实现通过，移除实际取消动作的隔离副本则两项准确失败。真实 Consul 随后实际运行九项 IT，暴露两项恢复失败：404 文本正文被提前当作 Metadata JSON 解析。新增回归准确 RED，最小修复后的 HTTP 安全/字节测试 10 项全部 GREEN，原字节、期限与安全拒绝边界保留。四后端矩阵实际完成 44 份快照和 12 份 summary；该首轮普通 CI、rolling、Consul Chaos 与 Nacos Chaos 当时未执行的范围单独保留；第二轮实际执行结果见下表，不放宽生产默认值或将跳过计为通过。
 
-指定 Consul 文本回归的初次夹具误命中默认 404 已由独立审查纠正，`build-48/49` 用实际 handler 和到达次数断言重新完成准确 RED/GREEN。最小 HTTP 修复后的 `build-47` 真实 Consul 九项全部通过，两个恢复期限未放宽，输入与进程清理已核验；远端 Docker 故障门禁仍须实际执行。
+指定 Consul 文本回归的 `build-45/46` 初次夹具误命中 JDK 默认 404，未执行预设 Consul 文本 handler，这两次不能作为指定正文的证明；独立审查已纠正，`build-48/49` 用实际 handler 和到达次数断言重新完成准确 RED/GREEN。最小 HTTP 修复后的 `build-47` 真实 Consul 九项全部通过，两个恢复期限未放宽，输入与进程清理已核验；第二轮远端 Docker 故障门禁的实际执行另行记于下表。
 
-最后 E2E 一次运行在 15 个阶段通过后，错误 Registry 凭据负例出现成员确认超时，未观察到认证原因码，最后只读场景未运行。一次原预算、同批 JAR 的有限真实复现已观察到 AUTHENTICATION_REJECTED，未复现超时；随后 `build-32` 相同输入的完整 17 阶段通过，68 个采样到的进程均已退出。原失败保留，不修改预算或降低断言。追加 SDK 审查确认 AuthCredential 会将任意 Authenticate Future 失败包装成 UNAUTHENTICATED；`build-33` 四个准确 RED 后最小修复，`build-34` 全部八项分类测试 GREEN。历史最终 AUTH marker 本身不能反推服务端真实状态；修复后真实后端与完整 `build-38` 均已通过。
+历史 `build-30` E2E 运行在 15 个阶段通过后，错误 Registry 凭据负例出现成员确认超时，未观察到认证原因码，最后只读场景未运行。一次原预算、同批 JAR 的有限真实复现已观察到 AUTHENTICATION_REJECTED，未复现超时；随后 `build-32` 相同输入的完整 17 阶段通过，68 个采样到的进程均已退出。原失败保留，不修改预算或降低断言。追加 SDK 审查确认 AuthCredential 会将任意 Authenticate Future 失败包装成 UNAUTHENTICATED；`build-33` 四个准确 RED 后最小修复，`build-34` 全部八项分类测试 GREEN。历史最终 AUTH marker 本身不能反推服务端真实状态；修复后真实后端与完整 `build-38` 均已通过。
+
+### 第二轮准确 Head 与 revision 3 当前状态
+
+[PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 第二轮准确 Head 为 `3949104b32662d754732098cfa618e4aa55ab230`。14 条工作流已经结束，12 成功、2 失败；首轮全部失败及本地 `build-45/46` 夹具错误继续保留，不能被后续成功覆盖。
+
+| 原始证据 | 实际结果 |
+| --- | --- |
+| [普通 CI 39273378455](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378455) | 117 份 XML、825 tests / 0 failures / 1 error / 18 skips。唯一错误为 NacosRoundTripTest 的 bootstrap 遗漏显式开发 profile，触发 UNSUPPORTED_PROTECTION。该 run 后续受保护 Etcd 9 项、客户端证书 2 项、17 阶段 mTLS，以及 Memory/独立 JVM/A-B-C/revision/benchmark/soak 均未执行；不把历史本地成功补记为本次执行 |
+| Registry 专项 | Consul 9 IT + 1 Docker Chaos + 1 ACL、Eureka 6 IT + 1 restart、Etcd/Nacos 各 1 Chaos，共 20 个目标测试实际通过，0 failures/errors/skips；9 份 artifact 的 digest/CRC 与原始报告已核验 |
+| [四后端 JVM Matrix 39273378414](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378414) | 12 个 process/chain/revision 场景、44 份成员/路由快照实际通过；保留 Consumer 无 Endpoint、角色、Manifest revision、promotion/rollback 的真实断言 |
+| [Rolling 39273378482](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378482) | 五组 N/N+1/rollback 的 RPC 实际通过；只认该普通开发 profile 的互操作证据，不扩称 mTLS、负载或未归档的逐 PID/JAR 完整证据 |
+| [Comparison Smoke 39273378437](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378437) | OTRYX 4643 成功、795816 错误，错误率 99.4199578%，超过原 5% 门槛；Dubbo 26794 成功、0 错误。原异常仅记录 RpcUnavailableException 类型，首个状态/来源未记录，原因尚未唯一归因 |
+| `build-50` 有限诊断 | 同原并发 16、2 秒预热、3 秒测量、256 字节及预算，官方 smoke exit 0，measurement OTRYX 7207/0 error、Dubbo 7144/0 error；warmup 捕获选点为空来源，未复现旧 CI 高错误率。helper exit 1 仅因两份 Shade dependency-reduced-pom.xml 新生成物，684 个冻结输入不变、64 个采样进程全退出、清理无错。diagnostic overlay 不能替代准确 Head，官方 PASS 与 helper FAIL 分开保留 |
+| `build-51` 确定性 RED | ServiceDirectoryTest 20 tests / 3 failures / 0 errors / 0 skips，三项准确证明本地 publication 排队时的目录交接缺口；两个新增安全对照和原有 15 项通过。684 输入不变，清理无错误 |
+| `build-52` 完整 Core GREEN | 最小修复后 62 份 XML、319 tests / 0 failures / 0 errors / 0 skips，Directory 20 项全通过；47.922 秒，684 输入不变、清理无错误。只补投影实际新 candidate，旧对象/epoch 仍拒绝、合法空集不沿用旧 Provider、LKG 原计时不延长，无远端 IO 或循环 |
+
+`build-53` 使用全新自有 Nacos 3.2.4 实例、数据目录和动态端口，实际通过原 NacosRoundTripTest 的真实 RPC 及 Provider 停服断言：1 test / 0 failures/errors/skips，套件 13.367 秒、全过程 76.105 秒。仅 bootstrap 显式选择开发 profile，CSV 端点、namespace/group 和原 15 秒停服断言保留；684 冻结输入不变，Maven/Nacos 进程清理后已退出。
+
+`build-54` 使用原版 Harness 与官方脚本，保持 16 并发、2 秒预热、3 秒测量、256 字节、15 秒 RPC 期限及 5% 门槛，实际得到 OTRYX 18104 成功 / 0 错误、Dubbo 21244 成功 / 0 错误。官方命令与 helper 均 exit 0，外层 71.689 秒；684 原输入不变，两份 Shade POM 明确归类为生成物，58 个采样进程及 helper 已退出。原始 JSON 仍携带基准 git_sha，实际修复输入由候选 tree 和完整 manifest 另行绑定；这是本地候选 smoke，不能改称准确新 Head 或固定硬件正式性能证据。
+
+当前不能把这项确定的 Directory 交接漏洞写成旧 CI 全部 795816 错误的已确认根因。下一步在同一 PR 发布第三次提交，其准确 Head 全部相关 CI 与合并后 main 的独立验证均为 **PENDING**。#140 继续保持未完成；#141 仅有独立只读准备，不提前实施。精确 run/job、原始 XML 哈希和恢复动作见[工程断点](../agent-governance-checkpoint.md)。
 
 ## 3. #141：连接、编码与取消资源上界
 

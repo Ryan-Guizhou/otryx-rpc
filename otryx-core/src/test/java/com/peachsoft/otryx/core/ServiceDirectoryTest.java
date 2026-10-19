@@ -3,6 +3,8 @@ package com.peachsoft.otryx.core;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -30,6 +32,7 @@ import com.peachsoft.otryx.registry.memory.MemoryApplicationRegistry;
 import java.time.Duration;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -314,6 +317,176 @@ class ServiceDirectoryTest {
         }
     }
 
+    @Test
+    void unchangedRefreshMustRemainSelectableWhilePublicationIsQueued() {
+        AtomicLong clock = new AtomicLong(1_000L);
+        try (Fixture fixture = new Fixture(); ServiceDirectory directory = fixture.directory(
+                new RpcDirectoryFreshnessOptions(Duration.ofNanos(100L)), clock::get)) {
+            ApplicationInstance provider = fixture.provider("live", 19091, SCHEMA);
+            fixture.publish(1L, provider);
+            fixture.refresh();
+            ServiceDirectory.Selection original = directory.selection();
+            long successfulSync = directory.lastSuccessfulSyncNanos();
+            fixture.scheduler.deferPublications = true;
+            clock.addAndGet(20L);
+            fixture.refresh();
+            VerifiedProviderSnapshot current = fixture.resolver.current(MAPPING_KEY, SCHEMA).orElseThrow();
+            assertNotSame(original.candidate(), current);
+            assertEquals(original.candidate(), current);
+            assertEquals(1, fixture.scheduler.publications.size());
+            assertFalse(directory.isUsable(original), "Retired credentials must remain unusable");
+            int lookups = fixture.mappings.lookups;
+
+            ServiceDirectory.Selection selected = directory.selection();
+            assertEquals(ServiceDirectory.Status.HEALTHY, selected.status());
+            assertSame(current, selected.candidate());
+            assertArrayEquals(new ServiceInstance[] {project(provider)}, selected.instances());
+            assertTrue(directory.isUsable(selected));
+            assertFalse(directory.isUsable(original));
+            assertEquals(successfulSync, directory.lastSuccessfulSyncNanos(),
+                    "A local projection must not become a new successful synchronization");
+            assertEquals(lookups, fixture.mappings.lookups, "A selection must not trigger another metadata lookup");
+            assertEquals(1, fixture.scheduler.publications.size(), "A selection must not drain or schedule work");
+
+            fixture.scheduler.flushPublications();
+            assertSame(current, directory.selection().candidate());
+            assertArrayEquals(selected.instances(), directory.snapshot());
+            assertEquals(clock.get(), directory.lastSuccessfulSyncNanos());
+        }
+    }
+
+    @Test
+    void queuedEmptyRefreshMustReplaceRemovedProviderWithHealthyEmptyProjection() {
+        try (Fixture fixture = new Fixture(); ServiceDirectory directory = fixture.directory()) {
+            ApplicationInstance provider = fixture.provider("removed", 19091, SCHEMA);
+            fixture.publish(1L, provider);
+            fixture.refresh();
+            ServiceDirectory.Selection original = directory.selection();
+            fixture.scheduler.deferPublications = true;
+            fixture.publish(2L);
+            fixture.refresh();
+            VerifiedProviderSnapshot current = fixture.resolver.current(MAPPING_KEY, SCHEMA).orElseThrow();
+            assertTrue(current.providers().isEmpty());
+            assertFalse(fixture.resolver.isSnapshotUsable(MAPPING_KEY, SCHEMA, original.candidate()));
+            int lookups = fixture.mappings.lookups;
+
+            ServiceDirectory.Selection selected = directory.selection();
+            assertEquals(ServiceDirectory.Status.HEALTHY, selected.status());
+            assertSame(current, selected.candidate());
+            assertArrayEquals(new ServiceInstance[0], selected.instances());
+            assertFalse(directory.isUsable(original));
+            assertEquals(lookups, fixture.mappings.lookups);
+            fixture.scheduler.flushPublications();
+            assertSame(current, directory.selection().candidate());
+            assertArrayEquals(new ServiceInstance[0], directory.snapshot());
+        }
+    }
+
+    @Test
+    void localProjectionMustPreserveExistingLastKnownGoodDeadline() {
+        AtomicLong clock = new AtomicLong(1_000L);
+        try (Fixture fixture = new Fixture(); ServiceDirectory directory = fixture.directory(
+                new RpcDirectoryFreshnessOptions(Duration.ofNanos(100L)), clock::get)) {
+            ApplicationInstance provider = fixture.provider("live", 19091, SCHEMA);
+            fixture.publish(1L, provider);
+            fixture.refresh();
+            ServiceDirectory.Selection original = directory.selection();
+            long successfulSync = directory.lastSuccessfulSyncNanos();
+            fixture.mappings.failed = true;
+            fixture.refresh();
+            assertEquals(ServiceDirectory.Status.LAST_KNOWN_GOOD, directory.status());
+            clock.addAndGet(90L);
+            fixture.mappings.failed = false;
+            fixture.scheduler.deferPublications = true;
+            fixture.refresh();
+            VerifiedProviderSnapshot current = fixture.resolver.current(MAPPING_KEY, SCHEMA).orElseThrow();
+            assertNotSame(original.candidate(), current);
+            assertEquals(ApplicationServiceResolver.Status.HEALTHY, fixture.resolver.status(MAPPING_KEY, SCHEMA));
+            int lookups = fixture.mappings.lookups;
+
+            ServiceDirectory.Selection selected = directory.selection();
+            assertSame(current, selected.candidate());
+            assertEquals(ServiceDirectory.Status.LAST_KNOWN_GOOD, selected.status());
+            assertArrayEquals(new ServiceInstance[] {project(provider)}, selected.instances());
+            assertEquals(successfulSync, directory.lastSuccessfulSyncNanos());
+            assertFalse(directory.isUsable(original));
+            clock.addAndGet(9L);
+            assertEquals(ServiceDirectory.Status.LAST_KNOWN_GOOD, directory.status());
+            clock.incrementAndGet();
+            assertEquals(ServiceDirectory.Status.STALE, directory.status());
+            assertArrayEquals(new ServiceInstance[0], directory.snapshot());
+            assertFalse(directory.isUsable(selected));
+            assertEquals(successfulSync, directory.lastSuccessfulSyncNanos());
+            assertEquals(lookups, fixture.mappings.lookups);
+
+            fixture.scheduler.flushPublications();
+            assertEquals(ServiceDirectory.Status.HEALTHY, directory.status());
+            assertArrayEquals(new ServiceInstance[] {project(provider)}, directory.snapshot());
+            assertEquals(clock.get(), directory.lastSuccessfulSyncNanos());
+        }
+    }
+
+    @Test
+    void currentLastKnownGoodCandidateMustNotBecomeNewSynchronizationThroughSelection() {
+        AtomicLong clock = new AtomicLong(1_000L);
+        try (Fixture fixture = new Fixture(); ServiceDirectory directory = fixture.directory(
+                new RpcDirectoryFreshnessOptions(Duration.ofNanos(100L)), clock::get)) {
+            ApplicationInstance provider = fixture.provider("live", 19091, SCHEMA);
+            fixture.publish(1L, provider);
+            fixture.refresh();
+            ServiceDirectory.Selection original = directory.selection();
+            long successfulSync = directory.lastSuccessfulSyncNanos();
+            fixture.scheduler.deferPublications = true;
+            fixture.refresh();
+            VerifiedProviderSnapshot current = fixture.resolver.current(MAPPING_KEY, SCHEMA).orElseThrow();
+            assertNotSame(original.candidate(), current);
+            fixture.mappings.failed = true;
+            assertThrows(java.util.concurrent.CompletionException.class,
+                    () -> fixture.resolver.refresh(MAPPING_KEY, SCHEMA).toCompletableFuture().join());
+            assertEquals(ApplicationServiceResolver.Status.LAST_KNOWN_GOOD,
+                    fixture.resolver.status(MAPPING_KEY, SCHEMA));
+            int lookups = fixture.mappings.lookups;
+
+            ServiceDirectory.Selection selected = directory.selection();
+            assertEquals(ServiceDirectory.Status.NOT_READY, selected.status());
+            assertSame(original.candidate(), selected.candidate());
+            assertArrayEquals(new ServiceInstance[0], selected.instances());
+            assertFalse(directory.isUsable(original));
+            assertEquals(successfulSync, directory.lastSuccessfulSyncNanos());
+            clock.addAndGet(100L);
+            assertEquals(ServiceDirectory.Status.NOT_READY, directory.status());
+            assertEquals(successfulSync, directory.lastSuccessfulSyncNanos());
+            assertEquals(lookups, fixture.mappings.lookups);
+        }
+    }
+
+    @Test
+    void oldSecurityEpochCannotBorrowRecoveredCurrentCandidateWhilePublicationIsQueued() {
+        try (Fixture fixture = new Fixture(); ServiceDirectory directory = fixture.directory()) {
+            ApplicationInstance provider = fixture.provider("live", 19091, SCHEMA);
+            fixture.publish(1L, provider);
+            fixture.refresh();
+            ServiceDirectory.Selection original = directory.selection();
+            fixture.scheduler.deferPublications = true;
+            fixture.mappings.securityFailure = RegistrySecurityFailure.AUTHORIZATION_REJECTED;
+            fixture.refresh();
+            fixture.mappings.securityFailure = null;
+            VerifiedProviderSnapshot recovered = fixture.resolver.refresh(MAPPING_KEY, SCHEMA)
+                    .toCompletableFuture().join();
+            assertTrue(fixture.resolver.isSnapshotUsable(MAPPING_KEY, SCHEMA, recovered));
+            assertEquals(original.candidate(), recovered);
+            int lookups = fixture.mappings.lookups;
+
+            assertEquals(RegistrySecurityFailure.AUTHORIZATION_REJECTED,
+                    assertThrows(RegistrySecurityException.class, directory::selection).reason());
+            assertEquals(RegistrySecurityFailure.AUTHORIZATION_REJECTED,
+                    assertThrows(RegistrySecurityException.class, () -> directory.isUsable(original)).reason());
+            assertEquals(lookups, fixture.mappings.lookups);
+            fixture.scheduler.flushPublications();
+            assertThrows(RegistrySecurityException.class, directory::selection);
+        }
+    }
+
     private static void publishDelayed(ServiceDirectory directory, VerifiedProviderSnapshot candidate) {
         try {
             Method method = ServiceDirectory.class.getDeclaredMethod("publishVerified",
@@ -396,6 +569,7 @@ class ServiceDirectoryTest {
         private CompletionStage<ServiceMappingSnapshot> response = CompletableFuture.completedFuture(
                 new ServiceMappingSnapshot(MAPPING_KEY, Set.of(), 0L));
         private boolean failed;
+        private int lookups;
         private RegistrySecurityFailure securityFailure;
 
         private ControlledMappings(ServiceMappingRepository delegate) {
@@ -419,6 +593,7 @@ class ServiceDirectoryTest {
 
         @Override
         public CompletionStage<ServiceMappingSnapshot> lookup(ServiceMappingKey key) {
+            lookups++;
             if (securityFailure != null) {
                 return CompletableFuture.failedFuture(new RegistrySecurityException(securityFailure));
             }
@@ -431,6 +606,8 @@ class ServiceDirectoryTest {
     private static final class ManualScheduler extends ScheduledThreadPoolExecutor {
         private final ManualTask task = new ManualTask();
         private Runnable refresh;
+        private boolean deferPublications;
+        private final List<Runnable> publications = new ArrayList<>();
 
         private ManualScheduler() {
             super(1);
@@ -445,7 +622,17 @@ class ServiceDirectoryTest {
 
         @Override
         public void execute(Runnable command) {
-            command.run();
+            if (deferPublications) {
+                publications.add(command);
+            } else {
+                command.run();
+            }
+        }
+
+        private void flushPublications() {
+            List<Runnable> ready = List.copyOf(publications);
+            publications.clear();
+            ready.forEach(Runnable::run);
         }
 
         private void refresh() {

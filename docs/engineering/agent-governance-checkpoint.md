@@ -1,6 +1,6 @@
 # OTRYX RPC 工程断点：#140 安全默认值与身份可信
 
-> 更新时间：2026-10-19（UTC）。[#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139) 已由 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合并并完成准确 main 验证。当前 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) 已提交 [PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161)，正在同一 PR 修复 CI 测试适配及真实 Consul 暴露的 HTTP 404 恢复问题，尚未合并，不能宣称完成。恢复时查询准确最新 SHA，再核对冻结输入、自有进程和证据。
+> 更新时间：2026-10-19（UTC，revision 3 提交前核验）。[#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139) 已由 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合并并完成准确 main 验证。当前 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) 的 [PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 尚未合并；第二轮准确 Head `3949104b32662d754732098cfa618e4aa55ab230` 的 14 条工作流已结束，12 成功、2 失败。同一 PR 的第三次提交修复 Nacos 条件测试的 bootstrap profile 遗漏和已确定复现的 Directory 本地发布交接缺口。Core RED/GREEN、真实 Nacos 条件测试和无诊断 overlay 的原版 smoke 已通过；最新 Head 和合并后 main 仍待验收，不能宣称 #140 完成。恢复时先查询准确最新 SHA，再核对冻结输入、自有进程和原始证据。
 
 ## 1. 任务与授权边界
 
@@ -22,7 +22,10 @@ Provider、Consumer、BOTH 均使用真实应用成员身份；纯 Consumer 没�
 | #140 工作分支 | `feat/v2-13-security-hardening` |
 | #140 PR | [#161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161)，尚未合并 |
 | #140 首次 Head | `4a147880983a53cab587980230276878155c84b9`；14 条工作流结束，10 成功、4 失败，不能合并 |
-| #140 修复后的门禁 | 三处测试适配及 HTTP 404 解析修复在同一 PR 追加提交；最新 Head 与合并后 main 均须重新独立核验，不预填成功 |
+| #140 第二轮 Head | `3949104b32662d754732098cfa618e4aa55ab230`；tree `b7fd007c92c433bf83947fe885f8c5c6df2866e5`，14 条工作流结束，12 成功、2 失败，不能合并 |
+| 第二轮失败 | 普通 CI 的 NacosRoundTripTest bootstrap 遗漏显式 profile；comparison smoke 超出原 5% 错误率门槛，原始失败原因尚未唯一归因 |
+| revision 3 本地状态 | Directory 确定性 RED、完整 Core GREEN、真实 Nacos 回归和无 overlay 原版 smoke 已完成；准确新 Head 与 main 完整门禁 PENDING |
+| 第三次提交 / 合并后 main | 新 Head、tree 及各自独立门禁均 PENDING；不把第二轮专项成功或本地诊断改称最新提交通过 |
 
 #139 最终 main 原始报告为 638 tests、0 failures/errors、18 条件 skips；style 严格聚合 29 模块且无发现，文档实际渲染 52 个 Mermaid 与 5 个 SVG。真实 Registry 合同、四后端独立 JVM 矩阵、常规快照和五组 rolling 均已核验。依赖审查没有新增漏洞差异，但既有依赖告警仍存在；共享 CI 短时 benchmark 不能作为 #146 正式性能证据。
 
@@ -86,7 +89,13 @@ Provider、Consumer、BOTH 均使用真实应用成员身份；纯 Consumer 没�
 | `build-45/46` HTTP 404 初次回归 | 原测试确实复现非 JSON 404 被误判 METADATA_INTEGRITY_REJECTED，修复后通过；独立审查发现请求路径命中了 JDK 默认 404，预设的 Consul 文本 handler 未执行。这两次不作为指定 Consul 正文的验证证据，夹具修正后的结果见下行 |
 | `build-48/49` HTTP 正确夹具 RED/GREEN | 使用实际注册路径，handler 发送两类 Consul 文本并逐次断言确实被调用。旧 HTTP 实现为 9 tests / 1 准确 failure，0 errors/skips；相同测试配合最小 404 reader 修复后，完整 HTTP 安全/字节 10 项通过。404 声明/分块超限、401/403、成功响应畸形 JSON、重定向、期限和取消边界保留，684 输入不变、清理无错误 |
 | `build-47` 真实 Consul GREEN | 相同九项 IT 在最小 HTTP 修复后全部通过，0 failures/errors/skips，原有两个 20 秒恢复预算不变；总计 21.696 秒，测试套件 7.283 秒。前后均确认自有 Consul 1.20.6 节点身份与 leader，684 输入不变，两组进程均已退出；不代替远端 Docker Chaos |
-| 尚待远端门禁 | 首次 Head 的失败、已通过与未执行范围见下一节。三处测试适配与 HTTP 404 解析修复具有独立证据；最新 Head 的全部相关门禁通过后才可合并，再核验准确 main |
+| `build-50` 有限 smoke 诊断 | 独立诊断快照沿用并发 16、预热 2 秒、测量 3 秒、256 字节、Client 15 秒与 5% 门槛。官方 smoke 命令 exit 0；OTRYX measurement 7207 成功 / 0 错误，Dubbo 7144 成功 / 0 错误。warmup 捕获选点为空的 `attemptChecked:661` 来源，但未复现原 CI 高错误率，不能唯一归因 |
+| `build-50` helper 失败边界 | 外层 helper exit 1，仅因把新生成的 OTRYX/Dubbo 两份 `dependency-reduced-pom.xml` 计入 sourceChanges；684 个预先冻结输入前后完全不变，64 个采样进程全部退出，清理无错误。完整 helper 仍记 FAIL，官方命令另记 PASS；诊断 overlay 不是准确干净 Head 的验收证据 |
+| `build-51` Directory 确定性 RED | 真实 Resolver 完成同内容/空集/恢复解析后，ManualScheduler 暂扣 Directory publication。原生产实现的完整类为 20 tests / 3 failures / 0 errors / 0 skips，三项准确失败；另外 2 个新增安全对照和原有 15 项通过。20.312 秒，684 输入不变，清理无错误；证明本地交接漏洞，不归因全部旧 CI 错误 |
+| `build-52` Directory 完整 Core GREEN | 最小补投影修复后 62 份 XML、319 tests、0 failures/errors/skips，其中 ServiceDirectoryTest 20 项全部通过。47.922 秒，684 输入不变，cleanup_error 为 null。旧 Selection/安全 epoch 拒绝、合法空集、原 LKG 截止点和单次无 IO 补投影均保留；不代替真实后端或准确最新 Head 门禁 |
+| `build-53` 真实 Nacos 回归 | 使用独有数据目录和动态端口启动 Nacos 3.2.4，核验自有 HTTP/gRPC listener 与 readiness；原 NacosRoundTripTest 的真实 RPC 和停服断言为 1 test / 0 failures/errors/skips，套件 13.367 秒、全过程 76.105 秒。只修 bootstrap 的显式开发 profile，保留 CSV 端点、namespace/group 和 15 秒停服断言；684 输入不变，Nacos/Maven 进程清理后均已退出 |
+| `build-54` 原版 smoke GREEN | 未修改 Harness 或官方脚本，保持 16 并发、2 秒预热、3 秒测量、256 字节、15 秒 RPC 期限与 5% 错误率门槛。OTRYX 18104 成功 / 0 错误，Dubbo 21244 成功 / 0 错误；官方命令及 helper 均 exit 0，外层 71.689 秒。684 原输入不变，两份 Shade POM 明确归类为生成物，58 个采样进程及外层 helper 已退出。原始 JSON 的 git_sha 为基准提交，另以候选 tree 和完整 manifest 绑定实际修复输入；仅为本地候选 smoke，不替代准确新 Head 或正式性能证据 |
+| 尚待验收 | 第二轮准确 Head 的已通过与失败范围见第 6 节；revision 3 准确最新 Head 和合并后 main 的完整相关门禁均 PENDING。每份历史失败与其独立修复证据继续保留 |
 
 本地没有 Docker。`build-12` 在 Etcd Testcontainers 初始化时因没有有效 Docker 环境中止，环境错误不作为产品 RED。后续本地全量命令只排除 `EtcdApplicationRegistryIntegrationTest`，保留 Surefire 默认匹配模式；受保护 Etcd 用独立真实 native fixture 补验。容器故障、集群、各后端集成及 ACL 的原有 CI 门禁保持不变，条件跳过不能算通过。
 
@@ -103,12 +112,41 @@ Provider、Consumer、BOTH 均使用真实应用成员身份；纯 Consumer 没�
 
 修复后必须在最新 Head 重新检查全部工作流、job 和关键原始 artifact。只读核对确认 Memory、四后端 Quickstart、benchmark 和 Observer 已显式选择开发 profile，mTLS YAML 明确选择 NETWORK_MTLS；未因此放宽生产默认值或安全能力校验。
 
-## 6. 恢复与后续动作
+## 6. PR #161 第二轮 CI 与 revision 3 待验收范围
+
+第二轮准确 Head 为 `3949104b32662d754732098cfa618e4aa55ab230`，各 run 均为 attempt 1。全部 14 条工作流结束，12 成功、2 失败；原始 artifact、checkout 与测试范围分别核对，不能只看 badge，也不能把其他 run 的通过补记到失败 run 的未执行步骤。
+
+| 工作流 / 原始证据 | 实际结果及验收边界 |
+| --- | --- |
+| [普通 CI 39273378455](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378455)，job `118131245309` | 原始 117 份 XML：825 tests / 0 failures / 1 error / 18 skips。唯一错误是 `NacosRoundTripTest.providerLifecycleShouldPropagateThroughNacos` 的 metadata bootstrap 未显式选择开发 profile，得到 `RegistrySecurityException: UNSUPPORTED_PROTECTION`；不能放宽 UNSPECIFIED 的生产拒绝来修测试 |
+| 普通 CI 后续范围 | Reactor 在 Quickstart Consumer 失败，Memory Quickstart、benchmark/soak、独立 JVM Quickstart、A-B-C、revision/rollback、受保护 Etcd 9 项 IT、客户端证书 2 项 IT、17 阶段 mTLS 及实际安全计数门禁均未执行。上传步骤成功不证明这些场景执行；更早本地 9/2/17 的成功不能替代本次 |
+| [Consul 39273378417](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378417)、[Eureka 39273378429](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378429)、[Etcd Chaos 39273378582](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378582)、[Nacos Chaos 39273378584](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378584) | 专项目标合计 20 tests / 0 failures / 0 errors / 0 skips：Consul 9 IT + 1 真实 Docker Chaos + 1 ACL，Eureka 6 IT + 1 真实重启，Etcd/Nacos 各 1 Chaos。普通 reactor 内的条件 skips 与这些独立 run 分开计数 |
+| [四后端独立 JVM Matrix 39273378414](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378414) | 四后端共 12 个 process/chain/revision 场景与 44 份新快照实际通过。真实 RPC、Consumer 无 Endpoint、Provider/BOTH 角色、Manifest revision、promotion/rollback 和原 Consumer 保持均已核验；不与重复 reactor XML 相加。Registry 共 9 份 artifact 的 GitHub digest 与 ZIP CRC 一致 |
+| [Rolling Compatibility 39273378482](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378482)，job `118131244847` | 基线 `783bf8115c9523e5667023678dafe659315b2b66` 与本 Head 的五组 N/N+1/rollback RPC 实际通过，至少五次逻辑 hello。artifact 的 commits.properties/matrix.log、digest/CRC 已核验；未归档实际 exec JAR 字节/哈希、成员快照或逐 PID 退出快照，不把它写成 mTLS 或负载验收 |
+| [RPC Comparison Smoke 39273378437](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39273378437)，job `118131244627` | 原参数门槛准确失败。OTRYX 800459 次测量调用中 4643 成功、795816 错误，错误率 99.4199578%，记录类型均为 RpcUnavailableException；Dubbo 26794 成功、0 错误。原始 artifact 没有首个失败的源位置/状态迁移，原因尚未唯一归因，不能用后续成功覆盖 |
+
+### revision 3 修复与证据边界
+
+Directory 的受控 RED 证明：Resolver 已换入完整验证的新 candidate，Directory 的成功发布尚在本地队列时，旧对象退役会造成普通 NOT_READY。最小修复只在普通陈旧路径读取本地 Resolver 的实际新对象、一次补投影及 CAS；保留旧 Selection 拒绝、原安全 epoch、全部原 LKG/成功计时，不执行远端 IO 或循环等待。`build-51/52` 只证明这项确定缺口及其 Core 修复，不能声称旧 smoke 的 795816 个错误全部来自该机制。
+
+`build-50` 为有限诊断：官方 smoke PASS 与 helper FAIL 同时保留。新 Shade 文件是生成物，诊断快照的 684 个既有输入没有变化；该运行带有诊断 overlay，即使结果 JSON 含原 Head，也不能作为准确干净 Head 的成功证明。64 个观察到的自有进程均已退出，短命进程的采样限制继续保留。
+
+当前证据目录为 `/tmp/otryx-issue140-2d1e5f300fc7/ci-head-3949104/`，各专项保留原始 ZIP/XML/summary 与无凭据摘录；不保存完整 Nacos 认证日志或签名下载 URL。Directory 原始 RED XML SHA-256 为 `a54d6685dc6b4b7727f8d2b1324acd0dba53c4d12ce4a814a247b2359fc04e6a`，GREEN XML 为 `015d1201e89258643b7519ff78c7c0dda1004059b456d684227e8a8615ee19a5`。本地临时证据仍需准确新 Head 的远端 artifact 验收。
+
+| 后续门禁 | 当前状态 |
+| --- | --- |
+| NacosRoundTrip 条件测试的显式 bootstrap profile 修复及真实 Nacos 回归 | `build-53` 实际通过 1/0/0/0，原始 XML 与自有进程清理已核验 |
+| 不带诊断 overlay、原参数/原 5% 门槛的 comparison smoke | `build-54` 原始结果 OTRYX 18104/0 error、Dubbo 21244/0 error；官方命令和 helper 均通过，输入及进程清理已核验 |
+| revision 3 准确 Head 的完整 reactor、独立 style/quality 与必要真实后端 | PENDING；由新 Head 对应的 CI 和原始 artifact 独立核验 |
+| 同一 PR 的第三次提交及准确最新 Head 全部相关 CI | PENDING；不预填 SHA、tree 或成功 |
+| 合并后准确 main 的独立核验、#140/#127 状态更新 | PENDING；#140 尚未完成，#141 仍未实施 |
+
+## 7. 恢复与后续动作
 
 1. 核对分支、远端 main 和自有进程；一次仅一个 Maven/真实后端验证窗口，不改动运行中的冻结输入，不混用不同阶段 JAR。
 2. 保留已核验的身份、存活和 Etcd 分类 RED/GREEN；无法唯一归因的旧 TLS 与成员等待超时仍记录证据不足。
-3. 保留 `build-34` reactor/style、`build-35/36` 两组真实 Etcd、`build-37` quality 和 `build-38` 全部 17 阶段的完整证据；后续三处测试适配和 HTTP 404 解析修复的独立证据及最新 Head CI 另行核验，不能将旧全量报告改称最新输入。
-4. 在现有 PR #161 追加修复。准确最新 Head 每条相关 workflow/job/关键 artifact 通过后，以预期 Head 合并；再独立核验准确 main，不能从 PR 绿色推断 main 绿色。
+3. 保留全部历史失败及 `build-34` reactor/style、`build-35/36` 两组真实 Etcd、`build-37` quality、`build-38` 的 17 阶段、`build-45/46` 夹具错误与 `build-48/49` 纠正证据。第二轮准确 Head、`build-50` 诊断和 `build-51/52` Directory RED/GREEN 分开记录，不能把任一旧全量或诊断报告改称最新输入。
+4. 将已通过真实 Nacos 与无诊断 overlay 原版 smoke 的 revision 3 追加到现有 PR #161，再核验准确新 Head 的完整相关门禁。每条 workflow/job/关键 artifact 通过后，以预期 Head 合并；再独立核验准确 main，不能从 PR 绿色推断 main 绿色。
 5. 更新 #140 与 #127，再从新 main 继续 #141–#145 的独立工作包。main 若失败，先修复主线，暂停后续合并。
 6. #146 工具和报告可继续准备，但正式验收必须有固定物理主机、测前确定的 SLO/退化阈值、AB BA AB 六次运行、每次至少 60 分钟 soak 和完整原始指标。条件缺失保持 BLOCKED；#147 只执行已授权发行 dry-run，依赖未完成不能提前关闭。
 

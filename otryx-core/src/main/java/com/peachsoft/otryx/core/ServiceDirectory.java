@@ -167,11 +167,44 @@ final class ServiceDirectory implements AutoCloseable {
             return new Selection(null, EMPTY, Status.CLOSED);
         }
         DirectorySnapshot current = state.get();
-        if (!resolver.isSnapshotUsable(key, expectedSchema, current.candidate()) || !current.initialized()) {
+        if (!resolver.isSnapshotUsable(key, expectedSchema, current.candidate())) {
+            adoptCurrentProjection(current);
+            current = state.get();
+        }
+        if (!current.initialized() || !resolver.isSnapshotUsable(key, expectedSchema, current.candidate())) {
             return new Selection(current.candidate(), EMPTY, Status.NOT_READY);
         }
         Status status = status(current);
         return new Selection(current.candidate(), status == Status.STALE ? EMPTY : current.instances(), status);
+    }
+
+    /**
+     * 在成功快照的异步发布尚未到达时，最多一次补齐本地端点投影。
+     *
+     * <p>只读取 Resolver 已验证且健康的实际新候选，不执行远端刷新或等待。
+     * 旧候选在调用本方法前必须已通过安全 epoch 检查；任何安全异常继续向上传播。
+     * CAS 不重试且保留原目录全部计时状态，不能把本地读取计为新的同步成功。
+     *
+     * @param observed 本次读取发现已普通退役的目录状态
+     */
+    private void adoptCurrentProjection(DirectorySnapshot observed) {
+        if (!observed.initialized()) {
+            return;
+        }
+        VerifiedProviderSnapshot candidate = resolver.current(key, expectedSchema).orElse(null);
+        if (candidate == null || candidate == observed.candidate()
+                || candidate.mappingRevision() < observed.revision()
+                || resolver.status(key, expectedSchema) != ApplicationServiceResolver.Status.HEALTHY
+                || !resolver.isSnapshotUsable(key, expectedSchema, candidate)) {
+            return;
+        }
+        ServiceInstance[] endpoints = candidate.providers().stream()
+                .map(instance -> verifiedEndpoint(key, instance))
+                .toArray(ServiceInstance[]::new);
+        if (!closed.get() && resolver.isSnapshotUsable(key, expectedSchema, candidate)) {
+            state.compareAndSet(observed, new DirectorySnapshot(candidate, endpoints, candidate.mappingRevision(),
+                    true, observed.unhealthy(), observed.lastSuccessfulSyncNanos(), observed.unhealthySinceNanos()));
+        }
     }
 
     boolean isUsable(Selection selected) {

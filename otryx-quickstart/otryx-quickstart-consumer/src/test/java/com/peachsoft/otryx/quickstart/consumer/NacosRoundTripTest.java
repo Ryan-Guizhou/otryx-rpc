@@ -49,8 +49,9 @@ class NacosRoundTripTest {
                 + UUID.randomUUID()
                         .toString()
                         .replace("-", "");
-        NacosV2MetadataBootstrap.initialize(RegistryOptions.fromCsv(
-                endpoint, NAMESPACE, Map.of("nacosGroup", group)));
+        NacosV2MetadataBootstrap.initialize(RegistryOptions.trustedDevelopment(
+                RegistryOptions.fromCsv(endpoint, NAMESPACE, Map.of("nacosGroup", group)).endpoints(),
+                NAMESPACE, Map.of("nacosGroup", group)));
         ConfigurableApplicationContext provider = null;
         ConfigurableApplicationContext consumer = null;
         try {
