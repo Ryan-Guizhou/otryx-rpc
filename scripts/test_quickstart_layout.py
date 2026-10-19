@@ -99,7 +99,8 @@ def test_quickstart_maven_modules() -> None:
     for side in ("provider", "consumer"):
         deps = dependencies(pom(f"otryx-quickstart/otryx-quickstart-{side}/pom.xml"))
         assert {"otryx-quickstart-api", "otryx-spring-boot-starter",
-                "otryx-registry-nacos"} <= deps
+                "otryx-registry-nacos", "otryx-registry-etcd", "otryx-registry-consul",
+                "otryx-registry-eureka"} <= deps
     memory = dependencies(pom("otryx-quickstart/otryx-quickstart-memory/pom.xml"))
     assert memory == {"otryx-quickstart-api", "otryx-spring-boot-starter"}
 
@@ -135,7 +136,7 @@ def test_scripts_and_documentation() -> None:
         "run_quickstart_memory.sh", "run_quickstart_process_e2e.sh",
         "run_three_process_deadline_e2e.sh", "run_quickstart_revision_e2e.sh",
         "run_quickstart_mtls_e2e.sh", "run_quickstart_e2e.sh",
-        "observe_quickstart_nacos.sh", "quickstart_e2e_common.sh",
+        "observe_quickstart_nacos.sh", "observe_quickstart_registry.sh", "quickstart_e2e_common.sh",
     )
     for script in scripts:
         path = ROOT / "scripts" / script

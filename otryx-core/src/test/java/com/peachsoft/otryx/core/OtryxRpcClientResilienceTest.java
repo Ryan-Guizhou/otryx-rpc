@@ -9,12 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.peachsoft.otryx.api.OtryxRpcIdempotent;
-import com.peachsoft.otryx.api.RpcCompatibilityMetadata;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcUnavailableException;
-import com.peachsoft.otryx.api.ServiceInstance;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.codec.RpcCodec;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
@@ -25,14 +23,9 @@ import com.peachsoft.otryx.api.RpcTimeoutException;
 import com.peachsoft.otryx.observability.RpcRetryExhaustionReason;
 import com.peachsoft.otryx.protocol.RpcFrameView;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
-import com.peachsoft.otryx.registry.RegistryListener;
-import com.peachsoft.otryx.registry.RegistrySnapshot;
-import com.peachsoft.otryx.registry.RegistrySubscription;
-import com.peachsoft.otryx.registry.ServiceDiscovery;
 import com.peachsoft.otryx.transport.RpcTransportClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -41,6 +34,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -52,12 +46,23 @@ import org.junit.jupiter.api.Test;
  */
 class OtryxRpcClientResilienceTest {
 
+    private static final String VERSION = "1.0.0";
+    private static final String GROUP = "test";
+    private static final ServiceKey RETRY_SERVICE_KEY = new ServiceKey(RetryService.class.getName(), VERSION, GROUP);
+    private final ApplicationTestControlPlane controlPlane = new ApplicationTestControlPlane();
+    private final ApplicationMembershipCoordinator provider = controlPlane.publishProvider(
+            RetryService.class, VERSION, GROUP, new RpcEndpoint("127.0.0.1", 19090));
+
+    @AfterEach
+    void closeApplicationControlPlane() {
+        controlPlane.close();
+    }
+
     @Test
     void downstreamBudgetMustNotExceedRemainingParentBudget() throws Exception {
         AtomicReference<Long> wireBudget = new AtomicReference<>();
         var method = RetryService.class.getMethod("find", String.class);
-        try (OtryxRpcClient client = OtryxRpcClient.builder()
-                .serviceDiscovery(new StaticDiscovery())
+        try (OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(new TestTransport((endpoint, frame, duration) -> {
                     wireBudget.set(RpcProtocolCodec.view(frame).timeoutBudgetMillis());
                     return CompletableFuture.completedFuture(successResponse(frame, "ok"));
@@ -66,7 +71,7 @@ class OtryxRpcClientResilienceTest {
                 .timeout(Duration.ofSeconds(3))
                 .methodTimeouts(Map.of(method.toGenericString(), Duration.ofMillis(1_500)))
                 .build()) {
-            RetryService service = client.refer(RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             assertEquals("ok", service.find("method"));
             assertTrue(wireBudget.get() > 0L && wireBudget.get() <= 1_500L);
             try (RpcCallScope ignored = RpcCallContext.open(
@@ -103,7 +108,7 @@ class OtryxRpcClientResilienceTest {
             secondBudget.set(budget);
             return CompletableFuture.completedFuture(successResponse(frame, "ok"));
         })) {
-            RetryService service = client.refer(RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             try (RpcCallScope ignored = RpcCallContext.open(
                     new RpcCallOptions(Duration.ofMillis(800), Map.of("tenant", "alpha")))) {
                 assertEquals("ok", service.find("retry"));
@@ -126,10 +131,7 @@ class OtryxRpcClientResilienceTest {
             return CompletableFuture.completedFuture(
                     successResponse(frame, "ok"));
         })) {
-            RetryService service = client.refer(
-                    RetryService.class,
-                    "1.0.0",
-                    "test");
+            RetryService service = refer(client);
 
             assertEquals("ok", service.find("42"));
             assertEquals(2, attempts.get());
@@ -161,10 +163,7 @@ class OtryxRpcClientResilienceTest {
                                     "temporary"));
                 },
                 observer)) {
-            RetryService service = client.refer(
-                    RetryService.class,
-                    "1.0.0",
-                    "test");
+            RetryService service = refer(client);
 
             CompletionException error = assertThrows(
                     CompletionException.class,
@@ -190,10 +189,7 @@ class OtryxRpcClientResilienceTest {
             return CompletableFuture.failedFuture(
                     new RpcUnavailableException("temporary"));
         })) {
-            RetryService service = client.refer(
-                    RetryService.class,
-                    "1.0.0",
-                    "test");
+            RetryService service = refer(client);
 
             CompletionException error = assertThrows(
                     CompletionException.class,
@@ -251,8 +247,7 @@ class OtryxRpcClientResilienceTest {
                             successResponse(frame, "ok"));
                 },
                 failingObserver)) {
-            RetryService service = client.refer(
-                    RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             assertEquals("ok", service.find("one"));
             assertEquals("ok", service.create("two"));
             assertEquals(2, attemptCount.get());
@@ -292,8 +287,7 @@ class OtryxRpcClientResilienceTest {
                             new RpcUnavailableException("Endpoint unavailable"));
                 },
                 failingObserver)) {
-            RetryService service = client.refer(
-                    RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             CompletionException failure = assertThrows(
                     CompletionException.class,
                     () -> service.find("retry"));
@@ -326,8 +320,7 @@ class OtryxRpcClientResilienceTest {
             }
         });
 
-        try (OtryxRpcClient client = OtryxRpcClient.builder()
-                .serviceDiscovery(new StaticDiscovery())
+        try (OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(new TestTransport((endpoint, frame, timeout) -> {
                     capturedRequest.set(frame);
                     requestSent.countDown();
@@ -336,7 +329,7 @@ class OtryxRpcClientResilienceTest {
                 .codecRegistry(RpcCodecRegistry.of(codec))
                 .timeout(Duration.ofSeconds(3))
                 .build()) {
-            RetryService service = client.refer(RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             CompletableFuture<String> call =
                     CompletableFuture.supplyAsync(() -> service.find("42"));
             assertTrue(requestSent.await(2, TimeUnit.SECONDS));
@@ -368,8 +361,7 @@ class OtryxRpcClientResilienceTest {
                 new java.util.concurrent.CopyOnWriteArrayList<>();
         CountDownLatch admitted = new CountDownLatch(2);
         AtomicInteger encodedCalls = new AtomicInteger();
-        try (OtryxRpcClient client = OtryxRpcClient.builder()
-                .serviceDiscovery(new StaticDiscovery())
+        try (OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(new TestTransport(
                         (endpoint, frame, timeout) -> {
                             frames.add(frame);
@@ -385,8 +377,7 @@ class OtryxRpcClientResilienceTest {
                 .responseCompletionThreads(1)
                 .responseCompletionQueueCapacity(1)
                 .build()) {
-            RetryService service = client.refer(
-                    RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             CompletableFuture<String> first =
                     CompletableFuture.supplyAsync(() -> service.find("one"));
             CompletableFuture<String> second =
@@ -421,8 +412,7 @@ class OtryxRpcClientResilienceTest {
                     encodes.incrementAndGet();
                     throw new IllegalStateException("Argument encoder failed");
                 });
-        try (OtryxRpcClient client = OtryxRpcClient.builder()
-                .serviceDiscovery(new StaticDiscovery())
+        try (OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(new TestTransport((endpoint, frame, timeout) ->
                         CompletableFuture.completedFuture(
                                 successResponse(frame, "ok"))))
@@ -430,8 +420,7 @@ class OtryxRpcClientResilienceTest {
                 .responseCompletionThreads(1)
                 .responseCompletionQueueCapacity(1)
                 .build()) {
-            RetryService service =
-                    client.refer(RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
 
             for (int attempt = 0; attempt < 4; attempt++) {
                 assertThrows(IllegalStateException.class,
@@ -453,8 +442,7 @@ class OtryxRpcClientResilienceTest {
             }
         };
         AtomicInteger sent = new AtomicInteger();
-        try (OtryxRpcClient client = OtryxRpcClient.builder()
-                .serviceDiscovery(new StaticDiscovery())
+        try (OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(new TestTransport((endpoint, frame, timeout) -> {
                     sent.incrementAndGet();
                     return CompletableFuture.completedFuture(successResponse(frame, "ok"));
@@ -464,7 +452,7 @@ class OtryxRpcClientResilienceTest {
                 .responseCompletionThreads(1)
                 .responseCompletionQueueCapacity(1)
                 .build()) {
-            RetryService service = client.refer(RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             for (int attempt = 0; attempt < 4; attempt++) {
                 CompletionException failure = assertThrows(
                         CompletionException.class, () -> service.find("test"));
@@ -478,14 +466,13 @@ class OtryxRpcClientResilienceTest {
     @Test
     void hangingTransportShouldFinishAtLogicalDeadline() throws Exception {
         CompletableFuture<byte[]> neverFinishes = new CompletableFuture<>();
-        try (OtryxRpcClient client = OtryxRpcClient.builder()
-                .serviceDiscovery(new StaticDiscovery())
+        try (OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(new TestTransport(
                         (endpoint, frame, timeout) -> neverFinishes))
                 .codecRegistry(RpcCodecRegistry.of(new StringCodec()))
                 .timeout(Duration.ofMillis(80))
                 .build()) {
-            RetryService service = client.refer(RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             CompletionException failure = assertThrows(CompletionException.class,
                     () -> service.find("test"));
             assertInstanceOf(RpcTimeoutException.class, failure.getCause());
@@ -495,10 +482,8 @@ class OtryxRpcClientResilienceTest {
 
     @Test
     void staleDirectoryMustRejectDispatchAndAllowExplicitRecovery() {
-        MutableDiscovery discovery = new MutableDiscovery();
         AtomicInteger requests = new AtomicInteger();
-        try (OtryxRpcClient client = OtryxRpcClient.builder()
-                .serviceDiscovery(discovery)
+        try (OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(new TestTransport((endpoint, frame, timeout) -> {
                     requests.incrementAndGet();
                     return CompletableFuture.completedFuture(successResponse(frame, "ok"));
@@ -507,15 +492,17 @@ class OtryxRpcClientResilienceTest {
                 .directoryFreshnessOptions(
                         new RpcDirectoryFreshnessOptions(Duration.ofNanos(1L)))
                 .build()) {
-            RetryService service = client.refer(RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             assertEquals("ok", service.find("initial"));
-            discovery.fail();
+            controlPlane.failDiscovery();
+            ApplicationTestControlPlane.awaitStatus(client, RETRY_SERVICE_KEY, ServiceDirectory.Status.STALE);
             CompletionException failure = assertThrows(CompletionException.class,
                     () -> service.find("stale"));
             assertInstanceOf(RpcUnavailableException.class, failure.getCause());
             assertTrue(failure.getCause().getMessage().contains("freshness budget exceeded"));
             assertEquals(1, requests.get(), "Expired LKG must not dispatch");
-            discovery.healthy();
+            controlPlane.recoverDiscovery();
+            ApplicationTestControlPlane.awaitStatus(client, RETRY_SERVICE_KEY, ServiceDirectory.Status.HEALTHY);
             assertEquals("ok", service.find("recovered"));
             assertEquals(2, requests.get());
         }
@@ -523,21 +510,19 @@ class OtryxRpcClientResilienceTest {
 
     @Test
     void retiredEndpointsShouldNotAccumulateConsumerStatistics() {
-        MutableDiscovery discovery = new MutableDiscovery();
-        try (OtryxRpcClient client = OtryxRpcClient.builder()
-                .serviceDiscovery(discovery)
+        try (OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(new TestTransport((endpoint, frame, timeout) ->
                         CompletableFuture.completedFuture(
                                 successResponse(frame, "ok"))))
                 .codecRegistry(RpcCodecRegistry.of(new StringCodec()))
                 .build()) {
-            RetryService service = client.refer(
-                    RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
 
             assertEquals("ok", service.find("before"));
             assertEquals(1, client.trackedEndpointCount());
 
-            discovery.publishEmpty();
+            provider.stopProvider().toCompletableFuture().join();
+            ApplicationTestControlPlane.awaitEmpty(client, RETRY_SERVICE_KEY);
             client.evictUnusedEndpointStats();
 
             assertEquals(0, client.trackedEndpointCount());
@@ -555,8 +540,7 @@ class OtryxRpcClientResilienceTest {
         });
         AtomicReference<Throwable> failure = new AtomicReference<>();
         try {
-            RetryService service =
-                    client.refer(RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             Thread invocation = Thread.ofVirtual().start(() -> {
                 try {
                     service.find("pending");
@@ -591,8 +575,7 @@ class OtryxRpcClientResilienceTest {
             return CompletableFuture.completedFuture(
                     successResponse(frame, "ok"));
         });
-        RetryService service =
-                client.refer(RetryService.class, "1.0.0", "test");
+        RetryService service = refer(client);
         client.close();
         client.close();
 
@@ -610,14 +593,12 @@ class OtryxRpcClientResilienceTest {
             throws Exception {
         UncooperativeCloseTransport transport =
                 new UncooperativeCloseTransport();
-        OtryxRpcClient client = OtryxRpcClient.builder()
-                .serviceDiscovery(new StaticDiscovery())
+        OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(transport)
                 .codecRegistry(RpcCodecRegistry.of(new StringCodec()))
                 .build();
         try {
-            RetryService service = client.refer(
-                    RetryService.class, "1.0.0", "test");
+            RetryService service = refer(client);
             assertEquals("ok", service.find("initial"));
 
             CompletionStage<RpcClientShutdownReport> first =
@@ -644,14 +625,14 @@ class OtryxRpcClientResilienceTest {
         }
     }
 
-    private static OtryxRpcClient client(
+    private OtryxRpcClient client(
             RequestFunction request) {
         return client(
                 request,
                 RpcObserver.noop());
     }
 
-    private static OtryxRpcClient client(
+    private OtryxRpcClient client(
             RequestFunction request,
             RpcObserver observer) {
         RpcClientResilienceOptions resilience =
@@ -666,14 +647,19 @@ class OtryxRpcClientResilienceTest {
                         Duration.ofSeconds(1),
                         100,
                         Duration.ofSeconds(1));
-        return OtryxRpcClient.builder()
-                .serviceDiscovery(new StaticDiscovery())
+        return controlPlane.clientBuilder()
                 .transportClient(new TestTransport(request))
                 .codecRegistry(RpcCodecRegistry.of(new StringCodec()))
                 .timeout(Duration.ofSeconds(1))
                 .resilienceOptions(resilience)
                 .observer(observer)
                 .build();
+    }
+
+    private RetryService refer(OtryxRpcClient client) {
+        RetryService service = client.refer(RetryService.class, VERSION, GROUP);
+        ApplicationTestControlPlane.awaitReady(client, RETRY_SERVICE_KEY);
+        return service;
     }
 
     private static byte[] successResponse(
@@ -753,79 +739,6 @@ class OtryxRpcClientResilienceTest {
                     // 模拟不配合中断的外部 Transport SPI。
                 }
             }
-        }
-    }
-
-    private static final class MutableDiscovery implements ServiceDiscovery {
-        private final AtomicReference<RegistryListener> listener =
-                new AtomicReference<>();
-
-        @Override
-        public CompletionStage<RegistrySnapshot> lookup(ServiceKey key) {
-            return CompletableFuture.completedFuture(
-                    StaticDiscovery.snapshot(key));
-        }
-
-        @Override
-        public RegistrySubscription subscribe(
-                ServiceKey key,
-                RegistryListener updateListener) {
-            listener.set(updateListener);
-            updateListener.onSnapshot(StaticDiscovery.snapshot(key));
-            return () -> listener.compareAndSet(updateListener, null);
-        }
-
-        private void fail() {
-            RegistryListener observer = listener.get();
-            if (observer != null) {
-                observer.onSynchronizationFailed(
-                        new RpcUnavailableException("Registry disconnected"));
-            }
-        }
-
-        private void healthy() {
-            RegistryListener observer = listener.get();
-            if (observer != null) {
-                observer.onSynchronizationSucceeded();
-            }
-        }
-
-        private void publishEmpty() {
-            RegistryListener updateListener = listener.get();
-            if (updateListener == null) {
-                throw new IllegalStateException(
-                        "Registry listener has not been subscribed");
-            }
-            updateListener.onSnapshot(new RegistrySnapshot(List.of(), 2L));
-        }
-    }
-
-    private static final class StaticDiscovery
-            implements ServiceDiscovery {
-
-        @Override
-        public CompletionStage<RegistrySnapshot> lookup(ServiceKey key) {
-            return CompletableFuture.completedFuture(snapshot(key));
-        }
-
-        @Override
-        public RegistrySubscription subscribe(
-                ServiceKey key,
-                RegistryListener listener) {
-            listener.onSnapshot(snapshot(key));
-            return () -> { };
-        }
-
-        private static RegistrySnapshot snapshot(ServiceKey key) {
-            return new RegistrySnapshot(
-                    List.of(new ServiceInstance(
-                            "node-1",
-                            key,
-                            new RpcEndpoint("127.0.0.1", 19090),
-                            100,
-                            RpcCompatibilityMetadata.providerMetadata(
-                                    key, RetryService.class))),
-                    1L);
         }
     }
 

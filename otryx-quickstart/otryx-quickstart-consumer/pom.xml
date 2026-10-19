@@ -28,6 +28,10 @@
         </dependency>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
+            <artifactId>otryx-registry-etcd</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.peachsoft.otryx</groupId>
             <artifactId>otryx-registry-consul</artifactId>
         </dependency>
         <dependency>

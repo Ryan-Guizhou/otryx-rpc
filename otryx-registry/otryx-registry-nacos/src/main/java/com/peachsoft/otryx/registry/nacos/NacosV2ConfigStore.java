@@ -32,7 +32,22 @@ final class NacosV2ConfigStore {
 
     /** 从服务端获取数据和真正的 CAS MD5；没有服务端 MD5 的旧快照必须拒绝。 */
     Entry read(String dataId) throws Exception {
-        ConfigQueryResult response = config.getConfigWithResult(dataId, group, CONFIG_TIMEOUT_MILLIS);
+        return read(dataId, CONFIG_TIMEOUT_MILLIS);
+    }
+
+    /** 使用调用方剩余正毫秒预算读取，仍受单次 SDK 查询上限约束。 */
+    Entry read(String dataId, long remainingTimeoutMillis) throws Exception {
+        if (remainingTimeoutMillis <= 0L) {
+            throw new IllegalArgumentException("Nacos Config read timeout must be positive");
+        }
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("Nacos Config read interrupted");
+        }
+        ConfigQueryResult response = config.getConfigWithResult(
+                dataId, group, Math.min(remainingTimeoutMillis, CONFIG_TIMEOUT_MILLIS));
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("Nacos Config read interrupted");
+        }
         if (response == null || response.getContent() == null) {
             return new Entry(null, null);
         }

@@ -2,7 +2,6 @@ package com.peachsoft.otryx.core;
 
 import com.peachsoft.otryx.api.RpcAuthorizationContext;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
-import com.peachsoft.otryx.api.RpcCompatibilityMetadata;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcException;
 import com.peachsoft.otryx.api.RpcExecutionMode;
@@ -10,7 +9,6 @@ import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.RpcRemoteError;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.ExportedService;
-import com.peachsoft.otryx.api.ServiceInstance;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
@@ -25,17 +23,14 @@ import com.peachsoft.otryx.protocol.RpcFrameView;
 import com.peachsoft.otryx.protocol.RpcMessageType;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import com.peachsoft.otryx.protocol.RpcProtocolException;
-import com.peachsoft.otryx.registry.ServiceRegistrar;
 import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportServer;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
@@ -62,7 +57,7 @@ import org.slf4j.LoggerFactory;
 /**
  * OTRYX RPC Provider 运行时，协调服务注册、请求准入、执行与响应。
  *
- * <p>Provider 启动会先监听网络端点、注册服务实例，随后进入可处理请求的
+ * <p>Provider 启动会先发布导出契约、监听网络端点和注册应用成员，随后进入可处理请求的
  * STARTED 状态。仅 TCP 端口可连接不代表业务已就绪。
  *
  * <p>并发和已准入 Frame 字节数受到全局/服务/方法级预算约束；
@@ -79,7 +74,6 @@ import org.slf4j.LoggerFactory;
 public final class OtryxRpcServer implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(OtryxRpcServer.class);
 
-    private final ServiceRegistrar registrar;
     private final ApplicationMembershipCoordinator membership;
     private final List<ExportedService> exportedServices = new CopyOnWriteArrayList<>();
     private final RpcTransportServer transport;
@@ -105,8 +99,6 @@ public final class OtryxRpcServer implements AutoCloseable {
     private final ThreadPoolExecutor cpuExecutor;
     private final ConcurrentMap<Integer, ServiceBinding> bindings =
             new ConcurrentHashMap<>();
-    private final List<ServiceInstance> configuredInstances =
-            new CopyOnWriteArrayList<>();
     private final AtomicReference<State> state =
             new AtomicReference<>(State.NEW);
     private final AtomicReference<CompletableFuture<RpcShutdownReport>> shutdownResult =
@@ -118,12 +110,7 @@ public final class OtryxRpcServer implements AutoCloseable {
     private volatile RpcEndpoint advertisedEndpoint;
 
     private OtryxRpcServer(Builder builder) {
-        if (builder.membership != null && builder.registrar != null) {
-            throw new IllegalArgumentException("Conflicting application and interface registration");
-        }
-        this.membership = builder.membership;
-        this.registrar = membership == null
-                ? Objects.requireNonNull(builder.registrar, "serviceRegistrar") : null;
+        this.membership = Objects.requireNonNull(builder.membership, "applicationMembership");
         this.transport = Objects.requireNonNull(
                 builder.transport,
                 "transportServer");
@@ -230,21 +217,12 @@ public final class OtryxRpcServer implements AutoCloseable {
             throw new IllegalStateException(
                     "Service id collision: " + serviceId);
         }
-        if (membership != null) {
-            exportedServices.add(ExportedService.fromContract(key, api));
-        } else {
-            configuredInstances.add(new ServiceInstance(
-                    UUID.randomUUID().toString(),
-                    key,
-                    bindEndpoint,
-                    100,
-                    RpcCompatibilityMetadata.providerMetadata(key, api)));
-        }
+        exportedServices.add(ExportedService.fromContract(key, api));
         return this;
     }
 
     /**
-     * 启动 TCP Server 并注册所有服务实例。
+     * 发布 Manifest/Mapping，启动 TCP Server，再注册应用成员。
      *
      * @return 异步启动结果，成功时返回实际监听端点
      */
@@ -269,9 +247,7 @@ public final class OtryxRpcServer implements AutoCloseable {
         }
 
         CompletableFuture<RpcEndpoint> started = new CompletableFuture<>();
-        CompletionStage<Void> preparation = membership == null
-                ? CompletableFuture.completedFuture(null)
-                : membership.prepareProvider(exportedServices);
+        CompletionStage<Void> preparation = membership.prepareProvider(exportedServices);
         preparation.thenCompose(ignored -> transport.start(bindEndpoint, new RpcRequestHandler() {
                     @Override
                     public CompletionStage<byte[]> handle(RpcEndpoint remote, byte[] frame) {
@@ -312,15 +288,19 @@ public final class OtryxRpcServer implements AutoCloseable {
                         return;
                     }
                     advertisedEndpoint = published;
-                    registerConfiguredServices(published)
+                    registerApplication(published)
                             .whenComplete((ignored, registryError) -> {
                                 if (registryError != null) {
-                                    rollbackRegisteredServices(published)
+                                    rollbackApplication()
                                             .whenComplete((rollbackIgnored, rollbackError) -> {
                                                 state.compareAndSet(
                                                         State.STARTING,
                                                         State.CLOSED);
-                                                transport.close();
+                                                try {
+                                                    transport.close();
+                                                } catch (RuntimeException closeError) {
+                                                    registryError.addSuppressed(closeError);
+                                                }
                                                 if (rollbackError != null) {
                                                     registryError.addSuppressed(rollbackError);
                                                 }
@@ -331,7 +311,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                                 if (!state.compareAndSet(
                                         State.STARTING,
                                         State.STARTED)) {
-                                    rollbackRegisteredServices(published)
+                                    rollbackApplication()
                                             .whenComplete((ignoredRollback, rollbackError) -> {
                                                 if (rollbackError != null) {
                                                     LOGGER.warn(
@@ -361,10 +341,6 @@ public final class OtryxRpcServer implements AutoCloseable {
             transport.close();
         } catch (RuntimeException closeError) {
             error.addSuppressed(closeError);
-        }
-        if (membership == null) {
-            started.completeExceptionally(error);
-            return;
         }
         membership.stopProvider().whenComplete((ignored, rollbackError) -> {
             if (rollbackError != null) {
@@ -399,50 +375,14 @@ public final class OtryxRpcServer implements AutoCloseable {
                 || RpcEndpoint.UNSPECIFIED_IPV6_BRACKETED_HOST.equals(host);
     }
 
-    private CompletionStage<Void> registerConfiguredServices(
-            RpcEndpoint endpoint) {
-        if (membership != null) {
-            return membership.providerReady(endpoint).toCompletableFuture()
-                    .copy().orTimeout(controlPlaneTimeout.toMillis(), TimeUnit.MILLISECONDS);
-        }
-        List<CompletableFuture<Void>> registrations = new ArrayList<>();
-        for (ServiceInstance configured : configuredInstances) {
-            registrations.add(registrar.register(
-                            runtimeInstance(configured, endpoint))
-                    .toCompletableFuture());
-        }
-        return CompletableFuture.allOf(
-                        registrations.toArray(CompletableFuture[]::new))
-                .orTimeout(
-                        controlPlaneTimeout.toMillis(),
-                        TimeUnit.MILLISECONDS);
+    private CompletionStage<Void> registerApplication(RpcEndpoint endpoint) {
+        return membership.providerReady(endpoint).toCompletableFuture()
+                .copy().orTimeout(controlPlaneTimeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 
-    private CompletionStage<Void> rollbackRegisteredServices(
-            RpcEndpoint endpoint) {
-        if (membership != null) {
-            return membership.stopProvider().toCompletableFuture()
-                    .copy().orTimeout(controlPlaneTimeout.toMillis(), TimeUnit.MILLISECONDS);
-        }
-        List<CompletableFuture<Void>> rollbacks = new ArrayList<>();
-        for (ServiceInstance configured : configuredInstances) {
-            CompletableFuture<Void> rollback = registrar
-                    .unregister(runtimeInstance(configured, endpoint))
-                    .exceptionally(error -> {
-                        LOGGER.warn(
-                                "Failed to rollback RPC service registration: service={}, errorType={}",
-                                configured.serviceKey().canonicalName(),
-                                error.getClass().getName());
-                        return null;
-                    })
-                    .toCompletableFuture();
-            rollbacks.add(rollback);
-        }
-        return CompletableFuture.allOf(
-                        rollbacks.toArray(CompletableFuture[]::new))
-                .orTimeout(
-                        controlPlaneTimeout.toMillis(),
-                        TimeUnit.MILLISECONDS);
+    private CompletionStage<Void> rollbackApplication() {
+        return membership.stopProvider().toCompletableFuture()
+                .copy().orTimeout(controlPlaneTimeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private CompletionStage<byte[]> handle(
@@ -1195,17 +1135,6 @@ public final class OtryxRpcServer implements AutoCloseable {
                 payload);
     }
 
-    private static ServiceInstance runtimeInstance(
-            ServiceInstance configured,
-            RpcEndpoint endpoint) {
-        return new ServiceInstance(
-                configured.instanceId(),
-                configured.serviceKey(),
-                endpoint,
-                configured.weight(),
-                configured.metadata());
-    }
-
     /**
      * 在一个总预算内异步关闭 Provider，合并并发关闭请求。
      *
@@ -1350,62 +1279,18 @@ public final class OtryxRpcServer implements AutoCloseable {
     private void unregisterWithinBudget(
             RpcShutdownBudget budget,
             ShutdownProgress progress) {
-        RpcEndpoint endpoint = advertisedEndpoint;
-        if (membership != null) {
-            long remaining = Math.min(budget.remainingNanos(), controlPlaneTimeout.toNanos());
-            if (remaining > 0L) {
-                try {
-                    progress.registrationsRemoved = awaitWithin(membership.stopProvider(), remaining);
-                } catch (RuntimeException error) {
-                    progress.failures.incrementAndGet();
-                    LOGGER.warn("RPC application membership revoke failed: errorType={}",
-                            error.getClass().getName());
-                }
-            }
-            if (!progress.registrationsRemoved) {
-                progress.failures.incrementAndGet();
-            }
-            return;
-        }
-        if (endpoint == null || configuredInstances.isEmpty()) {
-            progress.registrationsRemoved = true;
-            return;
-        }
-        List<CompletableFuture<Void>> pending = new ArrayList<>();
-        for (ServiceInstance configured : configuredInstances) {
-            if (budget.remainingNanos() == 0L) {
-                break;
-            }
+        long remaining = Math.min(budget.remainingNanos(), controlPlaneTimeout.toNanos());
+        if (remaining > 0L) {
             try {
-                pending.add(registrar.unregister(
-                                runtimeInstance(configured, endpoint))
-                        .toCompletableFuture());
+                progress.registrationsRemoved = awaitWithin(membership.stopProvider(), remaining);
             } catch (RuntimeException error) {
                 progress.failures.incrementAndGet();
-                LOGGER.warn(
-                        "RPC service unregister failed: errorType={}",
+                LOGGER.warn("RPC application membership revoke failed: errorType={}",
                         error.getClass().getName());
             }
         }
-        if (pending.size() != configuredInstances.size()) {
-            return;
-        }
-        long unregisterBudgetNanos = Math.min(
-                budget.remainingNanos(),
-                controlPlaneTimeout.toNanos());
-        if (unregisterBudgetNanos <= 0L) {
-            return;
-        }
-        boolean completed = awaitWithin(
-                CompletableFuture.allOf(pending.toArray(
-                        CompletableFuture[]::new)),
-                unregisterBudgetNanos);
-        progress.registrationsRemoved = completed
-                && pending.stream().allMatch(future ->
-                        future.isDone() && !future.isCompletedExceptionally());
         if (!progress.registrationsRemoved) {
             progress.failures.incrementAndGet();
-            LOGGER.warn("RPC provider registry unregister did not fully complete");
         }
     }
 
@@ -1475,7 +1360,6 @@ public final class OtryxRpcServer implements AutoCloseable {
 
     /** Provider 运行时 Builder。 */
     public static final class Builder {
-        private ServiceRegistrar registrar;
         private ApplicationMembershipCoordinator membership;
         private RpcTransportServer transport;
         private RpcCodecRegistry codecs;
@@ -1504,18 +1388,7 @@ public final class OtryxRpcServer implements AutoCloseable {
         }
 
         /**
-         * 设置 Provider 服务注册控制面。
-         *
-         * @param value 服务注册控制面
-         * @return Provider Builder
-         */
-        public Builder serviceRegistrar(ServiceRegistrar value) {
-            this.registrar = value;
-            return this;
-        }
-
-        /**
-         * 选择 V2 应用级成员控制面，不同时向旧 ServiceKey Registry 写入实例。
+         * 设置同一进程共享的应用级成员控制面。
          *
          * @param value 同一个进程 Provider/Consumer 共享的成员协调器
          * @return Provider Builder

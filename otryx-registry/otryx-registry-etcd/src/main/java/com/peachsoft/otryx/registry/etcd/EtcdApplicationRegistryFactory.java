@@ -11,7 +11,7 @@ import java.util.Objects;
  * Etcd V2 应用级注册中心 SPI 工厂，Provider 与 Consumer 共享一个实例。
  *
  * <p>通过返回实例的 manifestRepository 与 serviceMappingRepository 获取同一
- * 可信 Etcd 命名空间上的元数据仓库；不复用历史接口级 RegistryFactory。
+ * 可信 Etcd 命名空间上的元数据仓库，与应用成员共享生命周期。
  *
  * @Author OpenAI
  * @Version 1.0.0-SNAPSHOT

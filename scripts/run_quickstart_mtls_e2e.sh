@@ -57,9 +57,7 @@ java -jar "$PROVIDER_JAR" \
   --spring.application.name="$PROVIDER_APP" \
   --otryx.rpc.registry.application-name="$PROVIDER_APP" \
   --otryx.rpc.registry.instance-id=provider-main \
-  --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-  --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
-  --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+  "${QUICKSTART_REGISTRY_ARGS[@]}" \
   --otryx.rpc.quickstart.role=leaf \
   --otryx.rpc.quickstart.details-enabled=true \
   --otryx.rpc.quickstart.mtls.allowed-client-sha256="$ALLOWED_SHA256" \
@@ -85,9 +83,7 @@ run_client() {
     --spring.application.name="$CONSUMER_APP" \
     --otryx.rpc.registry.application-name="$CONSUMER_APP" \
     --otryx.rpc.registry.instance-id=consumer-main \
-    --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-    --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
-    --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+    "${QUICKSTART_REGISTRY_ARGS[@]}" \
     --otryx.rpc.quickstart.use-relay=false \
     --otryx.rpc.quickstart.use-details="$details" \
     --otryx.rpc.quickstart.expect-authorization-denied="$denied" \

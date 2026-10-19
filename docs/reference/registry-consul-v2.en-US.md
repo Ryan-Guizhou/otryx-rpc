@@ -1,6 +1,6 @@
 # Consul V2: Application Membership and KV Metadata
 
-> [Issue #135](https://github.com/Ryan-Guizhou/otryx-rpc/issues/135) · OTRYX RPC 1.0.0-SNAPSHOT · **Under development; final CI and E2E acceptance are still pending.**
+> [Issue #135](https://github.com/Ryan-Guizhou/otryx-rpc/issues/135) · OTRYX RPC 1.0.0-SNAPSHOT · Current application backend; integrated #139 acceptance requires evidence for the exact head and post-merge main CI.
 
 ## Scope
 
@@ -44,4 +44,4 @@ mvn -B -ntp -pl otryx-registry/otryx-registry-consul -am \
   -Dconsul.test.endpoint=http://127.0.0.1:8500 test
 ```
 
-`.github/workflows/consul-v2.yml` has a real Consul job and an isolated ACL default-deny job that bootstraps an ephemeral management token in CI without writing secrets into source or Maven arguments. It checks authenticated success and unauthenticated write rejection. The real Consul job covers three roles, immutable Manifest, concurrent CAS Mapping fencing, heartbeat and Session recovery, cross-process identity exclusion, and a 30-contract by 10-instance density case. The legacy fake Agent tests are not evidence for V2. Agent restart across a real multi-node deployment, narrow ACL policies, and authoritative persistent-Mapping/Manifest retention and GC are separate production acceptance constraints. Full Starter/Quickstart migration and legacy Registry SPI deletion belong to #137–#139.
+`.github/workflows/consul-v2.yml` has a real Consul job and an isolated ACL default-deny job that bootstraps an ephemeral management token in CI without writing secrets into source or Maven arguments. It checks authenticated success and unauthenticated write rejection. The real Consul job covers three roles, immutable Manifest, concurrent CAS Mapping fencing, heartbeat and Session recovery, cross-process identity exclusion, and the shared contract matrix of 30 real Java interfaces with ten independent Registry client objects in one test JVM. Those SDK objects are not ten business JVMs. Native membership 0→10→0, SPI method-entry calls, subscription creation calls and snapshot/health notifications and convergence time are measured separately and are not total HTTP or keepalive traffic. Agent restart across a real multi-node deployment, narrow ACL policies, and authoritative persistent-Mapping/Manifest retention and GC are separate production acceptance constraints. Real Agent pause/recovery and ACL default-deny have separate server gates; record actual execution, failure or skipping. The four-backend process/chain/revision matrix uses independent business JVMs in `.github/workflows/application-registry-e2e.yml`; see [acceptance and evidence boundaries](application-registry-acceptance.md).

@@ -7,18 +7,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NACOS_ENDPOINT="${NACOS_TEST_ENDPOINT:-127.0.0.1:8848}"
 NACOS_NAMESPACE=public
 PORT="${OTRYX_RPC_COMPAT_PORT:-19090}"
-# Consume only this script-owned setting; preserve legitimate application env.
-unset OTRYX_RPC_COMPAT_PORT
+readonly DEFAULT_STOP_SECONDS=35
+readonly STOP_POLL_SECONDS=0.1
+STOP_SECONDS="${ROLLING_COMPAT_STOP_SECONDS:-$DEFAULT_STOP_SECONDS}"
+if [[ ! "$STOP_SECONDS" =~ ^[1-9][0-9]?$ ]] || (( STOP_SECONDS > DEFAULT_STOP_SECONDS )); then
+  echo "ROLLING_COMPAT_STOP_SECONDS must be an integer from 1 to 35." >&2
+  exit 1
+fi
+# Consume script-owned settings; preserve legitimate application environment.
+unset OTRYX_RPC_COMPAT_PORT ROLLING_COMPAT_STOP_SECONDS
 REGISTRY_GENERATION="$(python3 "$SCRIPT_DIR/check_registry_generation_boundary.py" "$OLD_ROOT" "$NEW_ROOT")"
 case "$REGISTRY_GENERATION" in
-  same-generation|registry-migration) ;;
+  same-generation) ;;
   *) echo "Unrecognized registry generation result." >&2; exit 1 ;;
 esac
 
 find_exec() {
   local root="$1"
   local module="$2"
-  find "$root/otryx-quickstart/$module/target"     -maxdepth 1     -name '*-exec.jar'     -print     -quit
+  find "$root/otryx-quickstart/$module/target" -maxdepth 1 -name '*-exec.jar' -print -quit
 }
 
 OLD_PROVIDER="$(find_exec "$OLD_ROOT" otryx-quickstart-provider)"
@@ -39,18 +46,33 @@ PROVIDER_LOG="$(mktemp)"
 CONSUMER_LOG="$(mktemp)"
 NACOS_GROUP="OTRYX_RPC_E2E_$(basename "$PROVIDER_LOG")"
 
+stop_owned_process() {
+  local pid="$1" deadline=$((SECONDS + STOP_SECONDS))
+  [[ -n "$pid" ]] || return 0
+  kill "$pid" 2>/dev/null || true
+  while kill -0 "$pid" 2>/dev/null && (( SECONDS < deadline )); do
+    sleep "$STOP_POLL_SECONDS"
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Compatibility process stop budget exhausted; forcing termination." >&2
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
 cleanup() {
-  if [[ -n "$CONSUMER_PID" ]]; then
-    kill "$CONSUMER_PID" 2>/dev/null || true
-    wait "$CONSUMER_PID" 2>/dev/null || true
-  fi
-  if [[ -n "$PROVIDER_PID" ]]; then
-    kill "$PROVIDER_PID" 2>/dev/null || true
-    wait "$PROVIDER_PID" 2>/dev/null || true
-  fi
+  local status=$?
+  trap - EXIT
+  stop_owned_process "$CONSUMER_PID"
+  stop_owned_process "$PROVIDER_PID"
+  CONSUMER_PID=""
+  PROVIDER_PID=""
   rm -f "$PROVIDER_LOG" "$CONSUMER_LOG"
+  exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 start_provider() {
   local jar="$1"
@@ -88,8 +110,7 @@ stop_provider() {
   if [[ -z "$PROVIDER_PID" ]]; then
     return
   fi
-  kill "$PROVIDER_PID" 2>/dev/null || true
-  wait "$PROVIDER_PID" 2>/dev/null || true
+  stop_owned_process "$PROVIDER_PID"
   PROVIDER_PID=""
   sleep 1
 }
@@ -98,8 +119,7 @@ stop_consumer() {
   if [[ -z "$CONSUMER_PID" ]]; then
     return
   fi
-  kill "$CONSUMER_PID" 2>/dev/null || true
-  wait "$CONSUMER_PID" 2>/dev/null || true
+  stop_owned_process "$CONSUMER_PID"
   CONSUMER_PID=""
 }
 
@@ -117,14 +137,13 @@ run_consumer() {
     CONSUMER_PID=$!
 
     for _ in {1..300}; do
-      if grep -q         "RPC quickstart completed successfully: Hello, OTRYX RPC!"         "$CONSUMER_LOG"; then
+      if grep -q "RPC quickstart completed successfully: Hello, OTRYX RPC!" "$CONSUMER_LOG"; then
         stop_consumer
         echo "Compatibility PASS: $label"
         return
       fi
       if ! kill -0 "$CONSUMER_PID" 2>/dev/null; then
-        wait "$CONSUMER_PID" 2>/dev/null || true
-        CONSUMER_PID=""
+        stop_consumer
         break
       fi
       sleep 0.1
@@ -142,8 +161,8 @@ run_consumer() {
   exit 1
 }
 
-# The current artifact supplies the explicit CLI; an interface-era baseline need
-# not have it. This new isolated scope has no application writers during bootstrap.
+# Both checkouts use application membership. Bootstrap the new isolated scope
+# before either version starts an application writer.
 bash "$SCRIPT_DIR/bootstrap_quickstart_nacos.sh" \
   "$NEW_PROVIDER" "$NACOS_ENDPOINT" "$NACOS_NAMESPACE" "$NACOS_GROUP"
 
@@ -151,36 +170,16 @@ bash "$SCRIPT_DIR/bootstrap_quickstart_nacos.sh" \
 start_provider "$OLD_PROVIDER" "N"
 run_consumer "$OLD_CONSUMER" "N consumer -> N provider"
 
-# Mixed snapshots only have a rolling gate when the Starter control plane agrees.
-if [[ "$REGISTRY_GENERATION" == "same-generation" ]]; then
-  run_consumer "$NEW_CONSUMER" "N+1 consumer -> N provider"
-fi
+run_consumer "$NEW_CONSUMER" "N+1 consumer -> N provider"
 
 # N Consumer -> N+1 Provider and N+1 Consumer -> N+1 Provider.
 stop_provider
 start_provider "$NEW_PROVIDER" "N+1"
-if [[ "$REGISTRY_GENERATION" == "same-generation" ]]; then
-  run_consumer "$OLD_CONSUMER" "N consumer -> N+1 provider"
-fi
+run_consumer "$OLD_CONSUMER" "N consumer -> N+1 provider"
 run_consumer "$NEW_CONSUMER" "N+1 consumer -> N+1 provider"
 
-if [[ "$REGISTRY_GENERATION" == "same-generation" ]]; then
-  # Roll back Provider to N while keeping N+1 Consumer.
-  stop_provider
-  start_provider "$OLD_PROVIDER" "N rollback"
-  run_consumer "$NEW_CONSUMER" "N+1 consumer -> N rollback provider"
-  echo "OTRYX RPC N/N+1 rolling compatibility matrix passed."
-else
-  echo "Registry migration verified: N/N and N+1/N+1 independent JVM RPC passed."
-  echo "Cross-generation rolling compatibility has not been established."
-  echo "Use isolated registry scopes and deploy or roll back matching Provider/Consumer generations."
-  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-    {
-      echo "## Explicit interface/application registry generation boundary"
-      echo "Both N/N and N+1/N+1 independent Provider/Consumer JVM checks passed."
-      echo "Mixed-generation and mixed-generation rollback pairs were not run."
-      echo "Cross-generation rolling compatibility has **not** been established."
-      echo "Current-version transport, security, recovery and contract CI gates remain required."
-    } >> "$GITHUB_STEP_SUMMARY"
-  fi
-fi
+# Roll back Provider to N while keeping N+1 Consumer.
+stop_provider
+start_provider "$OLD_PROVIDER" "N rollback"
+run_consumer "$NEW_CONSUMER" "N+1 consumer -> N rollback provider"
+echo "OTRYX RPC N/N+1 rolling compatibility matrix passed."

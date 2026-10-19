@@ -158,6 +158,11 @@ public final class ServiceMappingCache implements AutoCloseable {
             if (closed.get()) {
                 failure = new IllegalStateException("Mapping cache closed");
             }
+            ServiceMappingSnapshot priorSnapshot = entry.state.get().snapshot();
+            if (failure == null && valid != null && priorSnapshot != null
+                    && valid.revision() < priorSnapshot.revision()) {
+                failure = new IllegalStateException("Mapping revision moved backwards");
+            }
             if (failure != null || valid == null) {
                 if (failure == null) {
                     failure = new IllegalStateException("Null mapping snapshot");
@@ -168,11 +173,7 @@ public final class ServiceMappingCache implements AutoCloseable {
                         previous.failureSince() == null ? now : previous.failureSince()));
             } else {
                 entry.lastFailure = null;
-                ServiceMappingSnapshot accepted = valid;
-                entry.state.updateAndGet(previous -> previous.snapshot() != null
-                        && accepted.revision() < previous.snapshot().revision()
-                        ? previous : new State(accepted, null));
-                valid = entry.state.get().snapshot();
+                entry.state.set(new State(valid, null));
             }
             entry.inflight = null;
             running.decrementAndGet();

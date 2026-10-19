@@ -6,7 +6,7 @@ import java.util.Base64;
 import java.util.Objects;
 
 /**
- * Etcd V2 完全独立的应用级键空间，阻断历史 ServiceKey 注册路径。
+ * Etcd 应用成员、不可变 Manifest 与实例 Mapping Owner 的独立键空间。
  *
  * <p>所有可变用户字段使用 URL-safe Base64 编码，禁止分隔符注入和跨命名空间遍历。
  *

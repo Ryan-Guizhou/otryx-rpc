@@ -41,7 +41,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 /**
  * 验证诊断入口使用真实控制面契约，且超时、错误和旧文件不能形成成功证据。
  *
- * <p>这里使用隔离的 Memory 后端检验投影与失败边界；真实 Nacos 成员、
+ * <p>这里使用隔离的 Memory 后端检验投影与失败边界；真实四后端成员、
  * 跨 JVM 滚动和 mTLS 调用另由可执行场景验收，不将本测试当作网络证据。
  *
  * @Author OpenAI
@@ -205,8 +205,52 @@ class QuickstartRegistrySnapshotTest {
     @ValueSource(strings = {"", " ", ",,,", "user:secret@127.0.0.1:8848"})
     void rejectsImplicitOrCredentialBearingTargetBeforeCreatingSdk(String endpoints) {
         assertThrows(IllegalArgumentException.class, () -> QuickstartRegistrySnapshot.parseArguments(new String[] {
-                endpoints, NAMESPACE, "OTRYX_SNAPSHOT", NAMESPACE,
+                "nacos", endpoints, NAMESPACE, "OTRYX_SNAPSHOT", "-",
                 directory.resolve("new.json").toString(), CONSUMERS}));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"etcd", "consul"})
+    void parsesExplicitNativeMetadataBackend(String backend) throws Exception {
+        var command = QuickstartRegistrySnapshot.parseArguments(new String[] {
+                backend, "http://127.0.0.1:2379", NAMESPACE, "-", "-",
+                directory.resolve("new.json").toString(), CONSUMERS});
+        assertEquals(backend, command.backend());
+        assertEquals(NAMESPACE, command.namespace());
+        assertTrue(command.options().providerOptions().isEmpty());
+    }
+
+    @Test
+    void eurekaUsesExplicitConsulMetadataAndRejectsImplicitFallback() throws Exception {
+        var command = QuickstartRegistrySnapshot.parseArguments(new String[] {
+                "eureka", "http://127.0.0.1:8761/eureka", NAMESPACE, "-", "http://127.0.0.1:8500",
+                directory.resolve("new.json").toString(), CONSUMERS});
+        assertEquals("consul", command.options().providerOption("eurekaMetadataBackend", ""));
+        assertEquals("http://127.0.0.1:8500", command.options().providerOption("eurekaMetadataEndpoints", ""));
+        for (String metadata : List.of("-", ",,,", "http://user:secret@127.0.0.1:8500")) {
+            assertThrows(IllegalArgumentException.class, () -> QuickstartRegistrySnapshot.parseArguments(new String[] {
+                    "eureka", "http://127.0.0.1:8761/eureka", NAMESPACE, "-", metadata,
+                    directory.resolve("new.json").toString(), CONSUMERS}));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"memory", "interface", "unknown"})
+    void unsupportedBackendFailsBeforeCreatingSdk(String backend) {
+        assertThrows(IllegalArgumentException.class, () -> QuickstartRegistrySnapshot.parseArguments(new String[] {
+                backend, "http://127.0.0.1:2379", NAMESPACE, "-", "-",
+                directory.resolve("new.json").toString(), CONSUMERS}));
+    }
+
+    @Test
+    void rejectsUnusedBackendOptionsAndExistingSnapshotTarget() throws Exception {
+        assertThrows(IllegalArgumentException.class, () -> QuickstartRegistrySnapshot.parseArguments(new String[] {
+                "etcd", "http://127.0.0.1:2379", NAMESPACE, "ignored-group", "-",
+                directory.resolve("new.json").toString(), CONSUMERS}));
+        Path output = directory.resolve("existing.json");
+        Files.writeString(output, "previous evidence");
+        assertThrows(FileAlreadyExistsException.class, () -> QuickstartRegistrySnapshot.parseArguments(new String[] {
+                "consul", "http://127.0.0.1:8500", NAMESPACE, "-", "-", output.toString(), CONSUMERS}));
     }
 
     @Test

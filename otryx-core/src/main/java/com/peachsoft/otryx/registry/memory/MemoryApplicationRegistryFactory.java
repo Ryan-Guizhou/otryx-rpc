@@ -7,10 +7,10 @@ import com.peachsoft.otryx.spi.Extension;
 import java.util.Objects;
 
 /**
- * 新应用级 Registry SPI 的内存实现工厂；不返回旧接口级 MemoryRegistry。
+ * 应用级 Registry SPI 的进程内实现工厂。
  *
  * <p>调用方应在同一 Application Runtime 内创建一次并共享实例，避免多次
- * create 得到独立的内存目录。Starter 的实例协调归 #137 实现。
+ * create 得到独立的内存目录。Starter 在应用上下文中共享单一实例。
  *
  * @Author OpenAI
  * @Version 1.0.0-SNAPSHOT

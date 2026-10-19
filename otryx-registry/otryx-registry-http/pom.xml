@@ -11,14 +11,6 @@
       <artifactId>otryx-core</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.peachsoft.otryx</groupId>
-      <artifactId>otryx-core</artifactId>
-      <version>${revision}</version>
-      <type>test-jar</type>
-      <classifier>tests</classifier>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
     </dependency>

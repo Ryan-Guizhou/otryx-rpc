@@ -94,7 +94,7 @@ sequenceDiagram
     C->>B: subscribe(service)
     B-->>C: snapshot/change
     C->>C: normalize + revision
-    C->>D: RegistrySnapshot
+    C->>D: VerifiedProviderSnapshot
     D->>D: compatibility filter
     D->>D: replace immutable array snapshot
     P->>R: unregister(instance)
@@ -192,17 +192,9 @@ sequenceDiagram
 
 ## 8. Compatibility Filter
 
-每个 Provider 实例可携带：
+Provider 发布不可变 ApplicationManifest；成员仅引用实际 Manifest Revision。Consumer 控制面依次验证应用成员角色、真实 Endpoint、Mapping Owner、Manifest 内容身份、Wire/Schema 版本和导出业务契约。
 
-- `peach.rpc.protocol.version`；
-- `peach.rpc.schema.version`；
-- `peach.rpc.schema.fingerprint`。
-
-Consumer Snapshot 更新时：
-
-1. 缺失 Fingerprint 的旧 Provider -> LEGACY；
-2. Fingerprint 一致 -> COMPATIBLE；
-3. Fingerprint 明确不一致 -> INCOMPATIBLE 并从本地目录剔除。
+缺少 Manifest、内容身份不符或契约不匹配的实例不得进入本地 Provider 池。纯 Consumer 可存在于应用目录，但无 RPC Endpoint。校验后的候选才投影为 ServiceInstance 供负载均衡使用；请求热路径不访问注册中心。
 
 ## 9. Observability 事件模型
 

@@ -12,13 +12,11 @@ import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcExecutionMode;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.RpcStatus;
-import com.peachsoft.otryx.api.ServiceInstance;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.codec.RpcCodec;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
-import com.peachsoft.otryx.registry.ServiceRegistrar;
 import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportServer;
 import java.lang.reflect.Method;
@@ -32,6 +30,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
@@ -43,6 +42,13 @@ import org.slf4j.LoggerFactory;
  * @CreateTime 2026/9/30 18:13
  */
 public class OtryxRpcServerAsyncExecutionTest {
+
+    private final ApplicationTestControlPlane controlPlane = new ApplicationTestControlPlane();
+
+    @AfterEach
+    void closeApplicationControlPlane() {
+        controlPlane.close();
+    }
 
     @Test
     void providerDeadlineMustNotReleaseLeaseBeforeBusinessStops() throws Exception {
@@ -58,7 +64,7 @@ public class OtryxRpcServerAsyncExecutionTest {
             }
         };
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistry())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19109))
@@ -94,7 +100,7 @@ public class OtryxRpcServerAsyncExecutionTest {
         CapturingTransportServer transport = new CapturingTransportServer();
         ContextServiceImpl service = new ContextServiceImpl();
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistry())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19110))
@@ -197,7 +203,7 @@ public class OtryxRpcServerAsyncExecutionTest {
         };
 
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistry())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19098))
@@ -607,7 +613,7 @@ public class OtryxRpcServerAsyncExecutionTest {
             }
         };
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistry())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19097))
@@ -690,7 +696,7 @@ public class OtryxRpcServerAsyncExecutionTest {
             }
         };
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistry())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19102))
@@ -750,7 +756,7 @@ public class OtryxRpcServerAsyncExecutionTest {
             }
         };
         OtryxRpcServer server = OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistry())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19107))
@@ -839,7 +845,7 @@ public class OtryxRpcServerAsyncExecutionTest {
         }
     }
 
-    private static OtryxRpcServer createServer(
+    private OtryxRpcServer createServer(
             CapturingTransportServer transport,
             AsyncServiceImpl service,
             int maxConcurrent,
@@ -852,7 +858,7 @@ public class OtryxRpcServerAsyncExecutionTest {
                 new NoopCodec());
     }
 
-    private static OtryxRpcServer createServer(
+    private OtryxRpcServer createServer(
             CapturingTransportServer transport,
             AsyncServiceImpl service,
             int maxConcurrent,
@@ -863,7 +869,7 @@ public class OtryxRpcServerAsyncExecutionTest {
                 RpcObserver.noop());
     }
 
-    private static OtryxRpcServer createServer(
+    private OtryxRpcServer createServer(
             CapturingTransportServer transport,
             AsyncServiceImpl service,
             int maxConcurrent,
@@ -871,7 +877,7 @@ public class OtryxRpcServerAsyncExecutionTest {
             RpcCodec codec,
             RpcObserver observer) {
         return OtryxRpcServer.builder()
-                .serviceRegistrar(new NoopRegistry())
+                .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(codec))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", port))
@@ -1020,19 +1026,6 @@ public class OtryxRpcServerAsyncExecutionTest {
                 return type.cast(new Object[0]);
             }
             return null;
-        }
-    }
-
-    private static final class NoopRegistry implements ServiceRegistrar {
-
-        @Override
-        public CompletionStage<Void> register(ServiceInstance instance) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public CompletionStage<Void> unregister(ServiceInstance instance) {
-            return CompletableFuture.completedFuture(null);
         }
     }
 

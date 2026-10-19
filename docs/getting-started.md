@@ -162,7 +162,7 @@ Nacos、Etcd、Consul/Eureka、代理与遥测 Adapter 是可选依赖，不能�
 
 ## 7. 可选路线与常见失败
 
-- **Consul/Eureka**：两个进程使用同一 Profile。Eureka 只保存应用成员，必须在双方显式设置 `registry.eureka.metadata-backend` 和 `metadata-endpoints`，并加入所选 Etcd/Nacos/Consul Adapter。仅启动 Eureka 不足以提供 Manifest/Mapping；选 Nacos 元数据时也要先初始化该 scope，见 [后端示例](../otryx-quickstart/README.md#7-进一步验证-registryconsul--eureka)；
+- **Consul/Eureka**：两个进程使用同一 Profile。Eureka 只保存应用成员，必须在双方显式设置 `registry.eureka.metadata-backend` 和 `metadata-endpoints`，并加入所选 Etcd/Nacos/Consul Adapter。仅启动 Eureka 不足以提供 Manifest/Mapping；选 Nacos 元数据时也要先初始化该 scope，见 [后端示例](../otryx-quickstart/README.md#7-进一步验证-registryetcd--consul--eureka)；
 - **TLS/mTLS**：证书路径使用 `OTRYX_QUICKSTART_TLS_CERT`、`OTRYX_QUICKSTART_TLS_KEY`、`OTRYX_QUICKSTART_TLS_CA`。网络部署使用 `NETWORK_MTLS`、严格 Fory 白名单与业务授权；Quickstart 的 `mtls` Provider 还必须设置 `otryx.rpc.quickstart.mtls.allowed-client-sha256`，通用 Starter 未提供授权器时默认拒绝；
 - **Observer**：Quickstart Consumer 的 `QuickstartCallObserver` 是已有可测试的 Spring 注入示例；Micrometer/OTel/JFR 按需加入；
 - **`-exec.jar` 缺失**：先在仓库根目录构建，普通 JAR 不是 Spring Boot 可执行 JAR；
@@ -184,7 +184,7 @@ bash scripts/run_quickstart_e2e.sh
 docker compose -f otryx-quickstart/docker-compose.yml down
 ```
 
-命令和预期结果不等于某个提交已通过验证。#137 Starter 接入已经合并；#138 本教程的验收须检查其准确 Head 和合并后 main CI。#139 全仓旧接口级 SPI 删除尚未完成；短时 Quickstart 也不构成生产容量或正式发布证明。
+命令和预期结果不等于某个提交已通过验证。当前唯一应用级链路与 #139 清理、共享契约、四后端 JVM 矩阵必须核验准确 Head 及合并后 main CI；参数和计数边界见[应用级注册验收](reference/application-registry-acceptance.md)。短时 Quickstart 不构成生产容量或正式发布证明。
 
 继续阅读：[Starter 与配置](reference/starter.md) · [模块结构](design/project-structure.md) · [安全指南](security.md) · [运行与排障](operations.md) · [迁移](migration.md) · [FAQ](faq.md)。
 

@@ -2,6 +2,7 @@ package com.peachsoft.otryx.quickstart.consumer;
 
 import com.peachsoft.otryx.api.RpcRemoteException;
 import com.peachsoft.otryx.api.RpcStatus;
+import com.peachsoft.otryx.api.RpcTimeoutException;
 import com.peachsoft.otryx.api.RpcUnavailableException;
 import com.peachsoft.otryx.core.RpcCallContext;
 import com.peachsoft.otryx.core.RpcCallOptions;
@@ -79,6 +80,7 @@ public class GreetingRunner implements ApplicationRunner {
      * 在 Spring 启动线程执行所选示例模式，授权负例仅允许一次有界发现等待。
      *
      * <p>正例的显式重复模式持续等待注册中心恢复，直至外部停止或线程中断；
+     * 仅普通幂等 Greeting 探测额外容忍本地请求超时，不延长每次 RPC 的 Deadline；
      * 授权负例只接受框架的确定性远端拒绝，不把 TLS、业务或发现失败视为成功。
      *
      * @param args Spring 启动参数，调用模式由配置属性注入
@@ -126,7 +128,7 @@ public class GreetingRunner implements ApplicationRunner {
                     LOGGER.info("RPC authorization denial verified.");
                     return;
                 }
-                if (!isTransientUnavailable(error)) {
+                if (!isTransientUnavailable(error) && !isRepeatGreetingTimeout(error)) {
                     throw error;
                 }
                 lastFailure = error;
@@ -172,6 +174,15 @@ public class GreetingRunner implements ApplicationRunner {
         return cause instanceof RpcRemoteException remote
                 && remote.status() == RpcStatus.BAD_REQUEST
                 && AUTHORIZATION_DENIED_MESSAGE.equals(remote.getMessage());
+    }
+
+    private boolean isRepeatGreetingTimeout(RuntimeException error) {
+        // The explicit recovery probe calls only the side-effect-free, idempotent hello contract.
+        return repeatIntervalMillis > 0L
+                && !useRelay
+                && !useDetails
+                && !expectAuthorizationDenied
+                && unwrapCompletionFailure(error) instanceof RpcTimeoutException;
     }
 
     /**

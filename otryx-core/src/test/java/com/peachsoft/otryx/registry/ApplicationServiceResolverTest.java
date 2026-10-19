@@ -2,6 +2,7 @@ package com.peachsoft.otryx.registry;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -42,6 +44,7 @@ class ApplicationServiceResolverTest {
     private static final ServiceMappingKey KEY = new ServiceMappingKey("production", SERVICE);
     private static final String SCHEMA = "a".repeat(64);
     private static final String OTHER_SCHEMA = "b".repeat(64);
+    private static final int CANCELLATION_ITERATIONS = 64;
 
     @Test
     void resolvesMultipleApplicationsAndRevisionsWithoutRoutingPureConsumer() {
@@ -118,6 +121,110 @@ class ApplicationServiceResolverTest {
         assertTrue(f.resolver.current(KEY, SCHEMA).isEmpty());
         f.mappingCache.close();
         f.manifestCache.close();
+    }
+
+    @Test
+    void completedRefreshPublishesLocalStateBeforeNotifyingDependentStages() {
+        Fixture f = new Fixture();
+        try {
+            f.addProvider("payments", "a1", SCHEMA);
+            f.discovery.hold = new CompletableFuture<>();
+            CompletableFuture<VerifiedProviderSnapshot> checked = f.resolver.refresh(KEY, SCHEMA)
+                    .thenApply(snapshot -> {
+                        assertEquals(ApplicationServiceResolver.Status.HEALTHY, f.resolver.status(KEY, SCHEMA));
+                        assertSame(snapshot, f.resolver.current(KEY, SCHEMA).orElseThrow());
+                        return snapshot;
+                    }).toCompletableFuture();
+            assertFalse(checked.isDone());
+            f.discovery.hold.complete(f.discovery.direct("payments"));
+            checked.join();
+        } finally {
+            f.close();
+        }
+    }
+
+    @Test
+    void failedRefreshPublishesLastKnownGoodStateBeforeNotifyingDependentStages() {
+        Fixture f = new Fixture();
+        try {
+            f.addProvider("payments", "a1", SCHEMA);
+            VerifiedProviderSnapshot previous = f.resolver.refresh(KEY, SCHEMA).toCompletableFuture().join();
+            f.discovery.hold = new CompletableFuture<>();
+            CompletableFuture<Void> checked = f.resolver.refresh(KEY, SCHEMA).<Void>handle((snapshot, failure) -> {
+                assertNotNull(failure);
+                assertEquals(ApplicationServiceResolver.Status.LAST_KNOWN_GOOD, f.resolver.status(KEY, SCHEMA));
+                assertSame(previous, f.resolver.current(KEY, SCHEMA).orElseThrow());
+                return null;
+            }).toCompletableFuture();
+            assertFalse(checked.isDone());
+            f.discovery.hold.completeExceptionally(new IllegalStateException("Registry unavailable"));
+            checked.join();
+        } finally {
+            f.close();
+        }
+    }
+
+    @Test
+    void cancellationReleasesRefreshCapacityAndPreventsLatePublication() {
+        Fixture f = new Fixture();
+        try {
+            f.addProvider("payments", "a1", SCHEMA);
+            List<CompletableFuture<ApplicationDirectorySnapshot>> cancelledSources = new ArrayList<>();
+            for (int index = 0; index < CANCELLATION_ITERATIONS; index++) {
+                f.discovery.hold = new CompletableFuture<>();
+                cancelledSources.add(f.discovery.hold);
+                CompletableFuture<VerifiedProviderSnapshot> refresh = f.resolver.refresh(KEY, SCHEMA)
+                        .toCompletableFuture();
+                assertFalse(refresh.isDone());
+                assertTrue(refresh.cancel(false));
+                assertTrue(refresh.isCancelled());
+            }
+            f.discovery.hold = new CompletableFuture<>();
+            CompletableFuture<VerifiedProviderSnapshot> current = f.resolver.refresh(KEY, SCHEMA)
+                    .toCompletableFuture();
+            ApplicationDirectorySnapshot directory = f.discovery.direct("payments");
+            cancelledSources.forEach(source -> source.complete(directory));
+            assertFalse(current.isDone());
+            assertTrue(f.resolver.current(KEY, SCHEMA).isEmpty());
+            assertEquals(ApplicationServiceResolver.Status.NOT_READY, f.resolver.status(KEY, SCHEMA));
+            f.discovery.hold.complete(directory);
+            assertSame(current.join(), f.resolver.current(KEY, SCHEMA).orElseThrow());
+            assertEquals(ApplicationServiceResolver.Status.HEALTHY, f.resolver.status(KEY, SCHEMA));
+        } finally {
+            f.close();
+        }
+    }
+
+    @Test
+    void cancellationPublishesStateAndReleasesPendingBeforeNotifyingDependentStages() {
+        Fixture f = new Fixture();
+        try {
+            f.addProvider("payments", "a1", SCHEMA);
+            VerifiedProviderSnapshot previous = f.resolver.refresh(KEY, SCHEMA).toCompletableFuture().join();
+            CompletableFuture<ApplicationDirectorySnapshot> cancelledSource = new CompletableFuture<>();
+            f.discovery.hold = cancelledSource;
+            CompletableFuture<VerifiedProviderSnapshot> cancelled = f.resolver.refresh(KEY, SCHEMA)
+                    .toCompletableFuture();
+            f.discovery.hold = new CompletableFuture<>();
+            CompletableFuture<CompletableFuture<VerifiedProviderSnapshot>> checked =
+                    cancelled.handle((result, error) -> {
+                        assertTrue(error instanceof CancellationException);
+                        assertEquals(ApplicationServiceResolver.Status.LAST_KNOWN_GOOD, f.resolver.status(KEY, SCHEMA));
+                        assertSame(previous, f.resolver.current(KEY, SCHEMA).orElseThrow());
+                        CompletableFuture<VerifiedProviderSnapshot> replacement = f.resolver.refresh(KEY, SCHEMA)
+                                .toCompletableFuture();
+                        assertFalse(replacement.isDone());
+                        return replacement;
+                    });
+            assertTrue(cancelled.cancel(false));
+            CompletableFuture<VerifiedProviderSnapshot> replacement = checked.join();
+            cancelledSource.complete(f.discovery.direct("payments"));
+            assertFalse(replacement.isDone());
+            f.discovery.hold.complete(f.discovery.direct("payments"));
+            assertSame(replacement.join(), f.resolver.current(KEY, SCHEMA).orElseThrow());
+        } finally {
+            f.close();
+        }
     }
 
     private static final class Fixture {

@@ -7,6 +7,7 @@ QUICKSTART_STOP_SECONDS=35
 QUICKSTART_SNAPSHOT_SECONDS=120
 QUICKSTART_READY_SECONDS=45
 QUICKSTART_SNAPSHOT=""
+QUICKSTART_REGISTRY_ARGS=()
 
 quickstart_record() {
   printf '%s\n' "$*" | tee -a "$QUICKSTART_EVIDENCE_DIR/summary.log"
@@ -92,26 +93,77 @@ quickstart_prepare() {
   fi
   PROVIDER_JAR="${provider[0]}"
   CONSUMER_JAR="${consumer[0]}"
-  NACOS_ENDPOINT="${NACOS_TEST_ENDPOINT:-127.0.0.1:8848}"
-  NACOS_NAMESPACE=public
-  # The current Starter uses registry.namespace for the ApplicationKey as well.
-  APPLICATION_NAMESPACE=public
   local evidence_root="${OTRYX_QUICKSTART_EVIDENCE_DIR:-$QUICKSTART_ROOT_DIR/target/quickstart-e2e}"
   mkdir -p "$evidence_root"
   QUICKSTART_EVIDENCE_DIR="$(mktemp -d "$evidence_root/$scenario.XXXXXXXX")"
   QUICKSTART_WORK_DIR="$(mktemp -d)"
-  NACOS_GROUP="OTRYX_RPC_E2E_$(basename "$QUICKSTART_EVIDENCE_DIR")"
   trap quickstart_cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  quickstart_record "Quickstart scenario=$scenario group=$NACOS_GROUP applicationNamespace=$APPLICATION_NAMESPACE"
+  quickstart_configure_registry
+  quickstart_record "Quickstart scenario=$scenario backend=$QUICKSTART_REGISTRY applicationNamespace=$APPLICATION_NAMESPACE"
+}
+
+quickstart_configure_registry() {
+  QUICKSTART_REGISTRY="${QUICKSTART_REGISTRY:-nacos}"
+  NACOS_GROUP=-
+  QUICKSTART_METADATA_ENDPOINT=-
+  # Non-Nacos namespaces isolate both membership and immutable metadata for each run.
+  APPLICATION_NAMESPACE="otryx-e2e-$(basename "$QUICKSTART_EVIDENCE_DIR")"
+  case "$QUICKSTART_REGISTRY" in
+    nacos)
+      QUICKSTART_REGISTRY_ENDPOINT="${QUICKSTART_REGISTRY_ENDPOINT:-${NACOS_TEST_ENDPOINT:-127.0.0.1:8848}}"
+      APPLICATION_NAMESPACE=public
+      NACOS_GROUP="OTRYX_RPC_E2E_$(basename "$QUICKSTART_EVIDENCE_DIR")"
+      ;;
+    etcd)
+      QUICKSTART_REGISTRY_ENDPOINT="${QUICKSTART_REGISTRY_ENDPOINT:-${ETCD_TEST_ENDPOINT:-http://127.0.0.1:2379}}"
+      ;;
+    consul)
+      QUICKSTART_REGISTRY_ENDPOINT="${QUICKSTART_REGISTRY_ENDPOINT:-${CONSUL_TEST_ENDPOINT:-http://127.0.0.1:8500}}"
+      ;;
+    eureka)
+      QUICKSTART_REGISTRY_ENDPOINT="${QUICKSTART_REGISTRY_ENDPOINT:-${EUREKA_TEST_ENDPOINT:-http://127.0.0.1:8761/eureka}}"
+      QUICKSTART_METADATA_ENDPOINT="${QUICKSTART_EUREKA_METADATA_ENDPOINT:-}"
+      if [[ -z "$QUICKSTART_METADATA_ENDPOINT" || "$QUICKSTART_METADATA_ENDPOINT" == - ]]; then
+        echo "Eureka Quickstart requires explicit QUICKSTART_EUREKA_METADATA_ENDPOINT for real Consul metadata." >&2
+        return 1
+      fi
+      ;;
+    *)
+      echo "QUICKSTART_REGISTRY must be nacos, etcd, consul or eureka." >&2
+      return 1
+      ;;
+  esac
+  if [[ -z "$QUICKSTART_REGISTRY_ENDPOINT" || "$QUICKSTART_REGISTRY_ENDPOINT" == *"@"* \
+      || "$QUICKSTART_METADATA_ENDPOINT" == *"@"* ]]; then
+    echo "Quickstart endpoints must be explicit and must not embed credentials." >&2
+    return 1
+  fi
+  QUICKSTART_REGISTRY_ARGS=(
+    "--otryx.rpc.registry.type=$QUICKSTART_REGISTRY"
+    "--otryx.rpc.registry.endpoints=$QUICKSTART_REGISTRY_ENDPOINT"
+    "--otryx.rpc.registry.namespace=$APPLICATION_NAMESPACE"
+  )
+  if [[ "$QUICKSTART_REGISTRY" == nacos ]]; then
+    QUICKSTART_REGISTRY_ARGS+=("--otryx.rpc.registry.nacos.group=$NACOS_GROUP")
+  elif [[ "$QUICKSTART_REGISTRY" == eureka ]]; then
+    QUICKSTART_REGISTRY_ARGS+=(
+      "--otryx.rpc.registry.eureka.metadata-backend=consul"
+      "--otryx.rpc.registry.eureka.metadata-endpoints=$QUICKSTART_METADATA_ENDPOINT"
+    )
+  fi
 }
 
 quickstart_bootstrap() {
-  bash "$QUICKSTART_ROOT_DIR/scripts/bootstrap_quickstart_nacos.sh" \
-    "$PROVIDER_JAR" "$NACOS_ENDPOINT" "$NACOS_NAMESPACE" "$NACOS_GROUP" \
-    >"$QUICKSTART_WORK_DIR/bootstrap.log" 2>&1
-  quickstart_record "Nacos scope initialized before application startup."
+  if [[ "$QUICKSTART_REGISTRY" == nacos ]]; then
+    bash "$QUICKSTART_ROOT_DIR/scripts/bootstrap_quickstart_nacos.sh" \
+      "$PROVIDER_JAR" "$QUICKSTART_REGISTRY_ENDPOINT" "$APPLICATION_NAMESPACE" "$NACOS_GROUP" \
+      >"$QUICKSTART_WORK_DIR/bootstrap.log" 2>&1
+    quickstart_record "Nacos scope initialized before application startup."
+  else
+    quickstart_record "Native metadata scope selected before application startup: backend=$QUICKSTART_REGISTRY"
+  fi
 }
 
 quickstart_wait_log() {
@@ -159,7 +211,7 @@ quickstart_wait_success_count() {
 quickstart_snapshot() {
   local scenario="$1" stage="$2" previous="$3"
   shift 3
-  local deadline=$((SECONDS + QUICKSTART_SNAPSHOT_SECONDS)) attempt=0 remaining candidate
+  local started=$SECONDS deadline=$((SECONDS + QUICKSTART_SNAPSHOT_SECONDS)) attempt=0 remaining candidate
   local previous_args=()
   if [[ -n "$previous" ]]; then previous_args=(--previous "$previous"); fi
   while (( SECONDS < deadline )); do
@@ -168,15 +220,15 @@ quickstart_snapshot() {
     candidate="$QUICKSTART_EVIDENCE_DIR/$stage-attempt-$attempt.json"
     # Each read has a new output path. Failed reads are never accepted as empty directories.
     if timeout --kill-after=5s "${remaining}s" \
-        bash "$QUICKSTART_ROOT_DIR/scripts/observe_quickstart_nacos.sh" \
-        "$PROVIDER_JAR" "$NACOS_ENDPOINT" "$NACOS_NAMESPACE" "$NACOS_GROUP" \
-        "$APPLICATION_NAMESPACE" "$candidate" "$@" \
+        bash "$QUICKSTART_ROOT_DIR/scripts/observe_quickstart_registry.sh" \
+        "$PROVIDER_JAR" "$QUICKSTART_REGISTRY" "$QUICKSTART_REGISTRY_ENDPOINT" \
+        "$APPLICATION_NAMESPACE" "$NACOS_GROUP" "$QUICKSTART_METADATA_ENDPOINT" "$candidate" "$@" \
         >"$QUICKSTART_WORK_DIR/snapshot.log" 2>&1 \
         && python3 "$QUICKSTART_ROOT_DIR/scripts/assert_quickstart_snapshot.py" \
-        "$scenario" "$stage" "$candidate" "${previous_args[@]}" \
+        "$scenario" "$stage" "$candidate" --namespace "$APPLICATION_NAMESPACE" "${previous_args[@]}" \
         >"$QUICKSTART_WORK_DIR/assertion.log" 2>&1; then
       QUICKSTART_SNAPSHOT="$candidate"
-      quickstart_record "Registry snapshot verified: scenario=$scenario stage=$stage file=$(basename "$candidate")"
+      quickstart_record "Registry snapshot verified: backend=$QUICKSTART_REGISTRY scenario=$scenario stage=$stage convergenceSeconds=$((SECONDS - started)) file=$(basename "$candidate")"
       return 0
     fi
     quickstart_record "Registry observation has not converged: scenario=$scenario stage=$stage attempt=$attempt"

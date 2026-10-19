@@ -19,7 +19,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Consul V2 专用有界 HTTP/KV 客户端，隔离原有接口级 HTTP Registry。
+ * Consul 应用控制面专用的有界 HTTP/KV 客户端。
  *
  * <p>所有方法均为阻塞式；调用方只能在专属有界控制面 Executor 中调用。
  * ACL Token 仅写入 Header，错误消息不包含请求正文、URL 或凭据。

@@ -23,13 +23,13 @@ flowchart LR
     A[Quickstart API] --> M["Memory: Provider + Consumer"]
     A --> P[Provider JVM]
     A --> C[Consumer JVM]
-    P --> N[(Nacos / Consul / Eureka)]
+    P --> N[(Nacos / Etcd / Consul / Eureka)]
     C --> N
     C -->|Unary RPC / Vert.x TCP| P
     M -->|Memory Registry / loopback| M
 ```
 
-**Memory Registry is strictly in-process.** Use Nacos, Consul, Eureka or another shared registry for independent JVMs.
+**Memory Registry is strictly in-process.** Use Nacos, Etcd, Consul, Eureka or another shared registry for independent JVMs.
 
 <!-- doc-section:prerequisites -->
 ## 0. Prerequisites and build
@@ -196,6 +196,8 @@ OTRYX_RPC_E2E_RESTART_NACOS=false bash scripts/run_quickstart_process_e2e.sh
 
 The script uses `otryx-quickstart-process-provider` and `otryx-quickstart-process-consumer` in a scope separate from the manual example. It observes `initial`, `provider-stopped` and `provider-restarted` while one Consumer JVM stays alive. With the Provider stopped, the Consumer member remains but Greeting has no verified provider; after restoration the same Consumer must complete RPC again.
 
+Explicit repeat mode additionally tolerates a local `RpcTimeoutException` only for ordinary `GreetingService.hello`, which has no side effects and is marked idempotent, while preserving the default `3s` deadline for each RPC. The new timeout handling does not apply to one-shot, Relay, Details or expected-denial modes. Other failures keep the existing classification: explicit `UNAVAILABLE` may be retried, while remote deadline and other business, protocol and authorization errors propagate. The script's finite stage waits and TERM/KILL cleanup bound the recovery scenario.
+
 For a local test container you own and can restart, set `OTRYX_RPC_E2E_RESTART_NACOS=true` to also check `registry-recovered`, discovery by a fresh Consumer, and `endpoint-changed` (19090 → 19091). This extension requires exactly one `nacos/nacos-server:v3.2.4` container and endpoint `127.0.0.1:8848`. The switch defaults to `CI`; explicitly set it to `false` for shared or non-container Nacos. The aggregate entrypoint inherits this choice.
 
 The two-process, three-process and rolling verification scripts each use a separate Nacos group per run. They initialize shards before the first application starts and pass the same scope to every application start, restart and fresh Consumer probe.
@@ -357,7 +359,26 @@ Only declare `@OtryxRpcIdempotent` for truly idempotent operations, not blindly 
 Other opt-in adapters include Etcd, Consul, Eureka, CGLIB, ByteBuddy, Micrometer, OpenTelemetry and JFR. The Starter entrypoint does not change. See the [Starter reference](../docs/reference/starter.md).
 
 <!-- doc-section:other-registries -->
-## 7. Consul / Eureka profiles
+## 7. Etcd / Consul / Eureka
+
+Both executable JARs explicitly include Nacos, Etcd, Consul and Eureka; the Memory module still has no network Registry dependency. These three scenarios reuse the same Starter and read-only observer and apply identical real membership, routing and RPC assertions across all four backends:
+
+```bash
+# Real Etcd is already running; each scenario creates an isolated namespace.
+export QUICKSTART_REGISTRY=etcd
+export QUICKSTART_REGISTRY_ENDPOINT=http://127.0.0.1:2379
+bash scripts/run_quickstart_process_e2e.sh
+bash scripts/run_three_process_deadline_e2e.sh
+bash scripts/run_quickstart_revision_e2e.sh
+```
+
+For Consul choose `QUICKSTART_REGISTRY=consul` and `http://127.0.0.1:8500`. For Eureka choose `QUICKSTART_REGISTRY=eureka` and `http://127.0.0.1:8761/eureka`, and explicitly set `QUICKSTART_EUREKA_METADATA_ENDPOINT=http://127.0.0.1:8500`. Metadata comes from real Consul; omission fails before any application starts. Nacos retains its public namespace, isolated group and bootstrap-before-start sequence. Other backends do not restart servers by default; their fault gates run separately.
+
+The shared observation entrypoint is `scripts/observe_quickstart_registry.sh`. Arguments are Provider JAR, backend, endpoint, namespace, Nacos group or `-`, Eureka's Consul metadata endpoint or `-`, new JSON file, and application names. The existing Nacos-specific wrapper remains available and requires matching namespace arguments. See [application acceptance](../docs/reference/application-registry-acceptance.md) for the four-backend CI matrix, pinned server versions, full arguments and evidence boundaries.
+
+Observer `convergenceSeconds` includes observer JVM startup, reads and retries. Shared contract tests separately report member counts, SPI method-entry calls, subscription creation calls and snapshot/health notifications. These are not total backend HTTP, keepalive or server Watch traffic, and ten SDK client objects do not mean ten business JVMs.
+
+### Manual Consul / Eureka profiles
 
 The Provider and Consumer build files include the optional Consul/Eureka adapters required by these demonstrations. Start your own Consul agent or Eureka server, then apply the **same** Spring profile to both JVMs:
 
@@ -424,17 +445,6 @@ The aggregate entrypoint prints `Complete application-level Quickstart suite: PA
 <!-- doc-section:migration-status -->
 ## V2 application registry migration status
 
-Core provides `ApplicationMembershipCoordinator`, `ApplicationServiceResolver`,
-`OtryxRpcClient.applicationControlPlane(...)` and `OtryxRpcServer.applicationMembership(...)`.
-`ApplicationRuntimeEndToEndTest` exercises real Wire v1 RPC with three contracts,
-an independent Consumer and a same-process BOTH role.
+Core `ApplicationMembershipCoordinator`, `ApplicationServiceResolver`, Client `applicationControlPlane(...)` and Server `applicationMembership(...)` form the only application control plane. Provider, Consumer and BOTH register real members; consumer-only has no RPC endpoint. ServiceInstance remains only a local load-balancing DTO.
 
-#137 connected the single Spring Starter to the same application control plane and has merged.
-The Spring Quickstarts register Provider, Consumer or BOTH members through that Starter;
-a consumer-only member has no RPC endpoint. The Nacos process scripts initialize an isolated
-scope before starting applications. #138 covers this tutorial's membership diagnostics,
-two-real-revision rolling example and mTLS authorization, reusing the four existing modules
-and the single Starter. Acceptance requires actual results for its exact PR head and post-merge main CI.
-Full removal of the legacy interface-level SPI remains #139 and is not complete.
-A successful Quickstart does not establish project-wide V2 migration or production
-readiness. See [V2 design and status](../docs/design/application-registry-v2.md) for stage boundaries.
+#139 combines source/configuration/current-usage cleanup, shared contracts, the four-real-backend independent-JVM matrix and all five rolling pairs into one acceptance package. Retired registry modes cannot be rolling baselines. See the [checkpoint](../docs/engineering/agent-governance-checkpoint.md) for actual backend and CI results for the exact head. Tutorials, static scans and shell fixtures do not substitute for real execution or establish production capacity or a release. See [V2 design](../docs/design/application-registry-v2.md) for the current contract.

@@ -38,7 +38,7 @@ import org.junit.jupiter.api.Test;
  * 通过真实 Core Client/Server、Wire v1 编解码与本地 Transport 验证应用级发现。
  *
  * <p>仅替换 Socket 为相同 JVM 的帧传递，不模拟业务层解析或返回成功响应。
- * 跨独立进程 Registry/Transport 和 Starter 的启动验收由后续 Issue 提供。
+ * 跨独立进程 Registry/Transport 和 Starter 的启动行为由各 Adapter 与 Quickstart 的专属验收覆盖。
  *
  * @Author OpenAI
  * @Version 1.0.0-SNAPSHOT
@@ -107,7 +107,7 @@ class ApplicationRuntimeEndToEndTest {
     }
 
     @Test
-    void providerShutdownRemovesRoutesButLeavesConsumerMemberAndOtherProviderAlive() throws Exception {
+    void providerShutdownRemovesRoutesButLeavesConsumerMember() throws Exception {
         try (Fixture f = new Fixture()) {
             f.server.registerService(Payments.class, new PaymentsImpl(), VERSION, GROUP);
             f.server.start().toCompletableFuture().get(3, TimeUnit.SECONDS);

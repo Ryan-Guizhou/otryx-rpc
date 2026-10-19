@@ -45,7 +45,12 @@
 
         <spring.boot.version>3.5.4</spring.boot.version>
         <vertx.version>4.5.34</vertx.version>
-        <jetcd.version>0.8.7</jetcd.version>
+        <!-- Jetcd 0.8.6+ 的生成 Stub 依赖 Vert.x 5；当前 Transport 使用 Vert.x 4。 -->
+        <jetcd.version>0.8.5</jetcd.version>
+        <!-- 保留 Jetcd 0.8.7 依赖线中的补丁版本，避免随生成 Stub 一起回退传递依赖。 -->
+        <grpc.version>1.82.0</grpc.version>
+        <guava.version>33.6.0-jre</guava.version>
+        <commons-compress.version>1.28.0</commons-compress.version>
         <nacos.version>3.2.4</nacos.version>
         <fory.version>1.5.0</fory.version>
         <cglib.version>3.3.0</cglib.version>
@@ -93,10 +98,22 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <dependency>
+                <groupId>io.grpc</groupId>
+                <artifactId>grpc-bom</artifactId>
+                <version>${grpc.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
 
             <dependency>
                 <groupId>io.vertx</groupId>
                 <artifactId>vertx-core</artifactId>
+                <version>${vertx.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.vertx</groupId>
+                <artifactId>vertx-grpc</artifactId>
                 <version>${vertx.version}</version>
             </dependency>
             <dependency>
@@ -108,6 +125,16 @@
                 <groupId>io.etcd</groupId>
                 <artifactId>jetcd-test</artifactId>
                 <version>${jetcd.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava</artifactId>
+                <version>${guava.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>${commons-compress.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.alibaba.nacos</groupId>

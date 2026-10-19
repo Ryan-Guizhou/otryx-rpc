@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * 有超时、端点故障转移和凭证隔离的注册中心 HTTP 客户端。
  *
- * <p>同步 HTTP 调用只允许由 HttpRegistry 的有界控制面线程执行。
+ * <p>同步 HTTP 调用只允许由应用级适配器的有界控制面线程执行。
  *
  * @Author Ryan
  * @Version 1.0.0

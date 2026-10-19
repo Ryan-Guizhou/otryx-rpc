@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.peachsoft.otryx.api.RpcRemoteException;
 import com.peachsoft.otryx.api.RpcStatus;
+import com.peachsoft.otryx.api.RpcTimeoutException;
 import com.peachsoft.otryx.api.RpcUnavailableException;
 import com.peachsoft.otryx.quickstart.api.GreetingDetailsService;
 import com.peachsoft.otryx.quickstart.api.GreetingReply;
@@ -17,8 +18,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import javax.net.ssl.SSLHandshakeException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -195,6 +198,112 @@ class GreetingRunnerModeTest {
 
         assertEquals(2, attempts.get());
         assertThat(output).contains(DENIAL_MARKER).doesNotContain(GREETING_MARKER, DETAILS_MARKER);
+    }
+
+    @ParameterizedTest
+    @MethodSource("localTimeoutFailures")
+    @Timeout(5)
+    void repeatedGreetingRecoversAfterLocalTimeoutAndPropagatesTheNextTerminalFailure(
+            RuntimeException timeout, CapturedOutput output) {
+        AtomicInteger attempts = new AtomicInteger();
+        IllegalStateException terminalFailure = new IllegalStateException("Stop the repeat fixture");
+        GreetingRunner runner = runner(request -> switch (attempts.incrementAndGet()) {
+            case 1 -> new GreetingReply("Before provider stop");
+            case 2 -> throw timeout;
+            case 3 -> new GreetingReply("After provider restart");
+            default -> throw terminalFailure;
+        }, unusedDetails());
+        ReflectionTestUtils.setField(runner, "repeatIntervalMillis", 1L);
+
+        assertSame(terminalFailure, assertThrows(RuntimeException.class, () -> run(runner)));
+
+        assertEquals(4, attempts.get());
+        assertThat(output).contains(GREETING_MARKER + " Before provider stop")
+                .contains(GREETING_MARKER + " After provider restart")
+                .doesNotContain(DETAILS_MARKER, DENIAL_MARKER);
+    }
+
+    @ParameterizedTest
+    @MethodSource("nonRecoveryTimeoutModes")
+    @Timeout(5)
+    void localTimeoutPropagatesWithoutAnotherCallInOtherModes(
+            String mode, RuntimeException timeout, CapturedOutput output) {
+        AtomicInteger attempts = new AtomicInteger();
+        GreetingRunner runner = runner(request -> {
+            attempts.incrementAndGet();
+            throw timeout;
+        }, request -> {
+            attempts.incrementAndGet();
+            throw timeout;
+        });
+        ReflectionTestUtils.setField(runner, "relayGreetingService", (RelayGreetingService) request -> {
+            attempts.incrementAndGet();
+            throw timeout;
+        });
+        ReflectionTestUtils.setField(runner, "useRelay", "relay".equals(mode));
+        ReflectionTestUtils.setField(runner, "useDetails", "details".equals(mode));
+        ReflectionTestUtils.setField(runner, "expectAuthorizationDenied", "expected-denial".equals(mode));
+        ReflectionTestUtils.setField(runner, "repeatIntervalMillis",
+                "relay".equals(mode) || "details".equals(mode) ? 1L : 0L);
+
+        assertSame(timeout, assertThrows(RuntimeException.class, () -> run(runner)));
+
+        assertEquals(1, attempts.get());
+        assertThat(output).doesNotContain(GREETING_MARKER, DETAILS_MARKER, DENIAL_MARKER);
+    }
+
+    @ParameterizedTest
+    @MethodSource("otherFailures")
+    @Timeout(5)
+    void repeatedGreetingStillPropagatesRemoteDeadlineSecurityAndBusinessFailures(
+            RuntimeException failure, CapturedOutput output) {
+        AtomicInteger attempts = new AtomicInteger();
+        GreetingRunner runner = runner(request -> {
+            attempts.incrementAndGet();
+            throw failure;
+        }, unusedDetails());
+        ReflectionTestUtils.setField(runner, "repeatIntervalMillis", 1L);
+
+        assertSame(failure, assertThrows(RuntimeException.class, () -> run(runner)));
+
+        assertEquals(1, attempts.get());
+        assertThat(output).doesNotContain(GREETING_MARKER, DETAILS_MARKER, DENIAL_MARKER);
+    }
+
+    @Test
+    @Timeout(5)
+    void interruptedLocalTimeoutRecoveryStopsWithoutAnotherCall(CapturedOutput output) {
+        AtomicInteger attempts = new AtomicInteger();
+        GreetingRunner runner = runner(request -> {
+            attempts.incrementAndGet();
+            Thread.currentThread().interrupt();
+            throw new RpcTimeoutException("Provider stopped during the request");
+        }, unusedDetails());
+        ReflectionTestUtils.setField(runner, "repeatIntervalMillis", 1L);
+
+        try {
+            IllegalStateException failure = assertThrows(IllegalStateException.class, () -> run(runner));
+
+            assertThat(failure).hasMessage("RPC demo wait was interrupted")
+                    .hasCauseInstanceOf(InterruptedException.class);
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+            assertEquals(1, attempts.get());
+            assertThat(output).doesNotContain(GREETING_MARKER, DETAILS_MARKER, DENIAL_MARKER);
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    private static Stream<RuntimeException> localTimeoutFailures() {
+        return Stream.of(
+                new RpcTimeoutException("Provider stopped during the request"),
+                new CompletionException(new CompletionException(
+                        new RpcTimeoutException("Provider stopped during the request"))));
+    }
+
+    private static Stream<Arguments> nonRecoveryTimeoutModes() {
+        return Stream.of("one-shot", "relay", "details", "expected-denial")
+                .flatMap(mode -> localTimeoutFailures().map(failure -> Arguments.of(mode, failure)));
     }
 
     private static Stream<RuntimeException> otherFailures() {

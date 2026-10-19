@@ -353,6 +353,8 @@ def check_java_hygiene() -> None:
 
 
 def main() -> int:
+    from check_migration_readiness import cleanup_violations
+
     check_required_files()
     check_release_status()
     check_repository_identity()
@@ -363,6 +365,9 @@ def main() -> int:
     check_chinese_first_docs()
     check_markdown_links()
     check_retired_paths()
+    legacy_registry = cleanup_violations(ROOT)
+    if legacy_registry:
+        fail("Application-only registry cleanup failed:\n" + "\n".join(legacy_registry))
     check_maven_reactor()
     check_core_boundaries()
     check_java_hygiene()

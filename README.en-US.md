@@ -43,7 +43,7 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 
 **Design**: control-plane/data-plane isolation; SPI and adapters for implementations; no registry I/O, SPI scan or dynamic parsing per request.
 
-**V2 application-level registry migration (in progress):** Core has a shared Provider/Consumer application identity, Manifest, per-instance CAS Mapping, service Resolver and bounded control-plane caches; application-scoped Memory, Etcd, Nacos, Consul (#135) and Eureka with external metadata (#136) adapters are implemented. The merged #137 connects the single Spring Starter to that control plane: each process instance shares one member, consumer-only members have no RPC endpoint, and shutdown bounds Client/Provider and shared-membership cleanup. #138 provides membership diagnostics, two real Manifest revisions and mTLS authorization tutorials within the four existing Quickstart modules; acceptance depends on actual results for the relevant exact head. Full legacy interface-level SPI deletion remains #139. **The project-wide V2 migration is not yet complete.** [Design and status](docs/design/application-registry-v2.md).
+**Application registry (#139 acceptance in progress):** Core, the single Starter and the four Quickstart modules use Application identity, shared Provider/Consumer/BOTH membership, immutable Manifests, instance-owner CAS Mapping, a Resolver and bounded caches. Consumer-only members register without RPC endpoints; ServiceKey identifies business contracts and ServiceInstance is only a local load-balancing DTO. Cleanup gates reject retired SPI, paths and configuration. Shared real-backend contracts, the four-backend process/chain/revision matrix and all five rolling pairs require actual evidence for the exact head; source or shell fixtures alone do not establish acceptance. [Design](docs/design/application-registry-v2.md) · [Acceptance and measurement boundaries](docs/reference/application-registry-acceptance.md).
 
 <!-- doc-section:compatibility -->
 ## Compatibility and migration
@@ -52,8 +52,8 @@ Wire v1 keeps its 32-byte header and message/codec IDs; this does not establish 
 Full Java class names affect type and method identifiers and schema fingerprints, so the current OTRYX namespace change is a **breaking API migration**.
 
 - The original Peach RPC baseline remains available and is not republished under a new GAV.
-- Rolling checks select their matrix from the Starter's active registry generation: matching generations retain the complete N/N+1 and rollback combinations; interface/application migration requires only N/N and N+1/N+1 independent-JVM pairs and does not establish mixed-generation interoperability.
-- Use isolated registry scopes across generations, and migrate or roll back matching Provider/Consumer pairs. Legacy interface-level metadata keys belong only to the historical implementation retained until #139.
+- Both rolling checkouts must use application-level Starter wiring. All five N/N, N+1/N, N/N+1, N+1/N+1 and rollback pairs run, and any failure blocks acceptance. Retired modes, mixed wiring and unknown layouts are rejected before application processes start.
+- Migrate historical registry models as matching pairs in isolated scopes. Wire v1 or an identical Maven version does not replace interoperability checks across the complete business chain.
 
 [Wire compatibility](docs/wire-compatibility.md) · [Migration/rollback](docs/migration.md)
 
@@ -77,7 +77,7 @@ After building, with local Nacos, Bash, Python 3, GNU `timeout` and OpenSSL avai
 NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
 ~~~
 
-Each independent-process scenario bootstraps its own isolated Nacos group. Allowlisted JSON snapshots and `summary.log` are saved under `target/quickstart-e2e/`; temporary private keys are not evidence artifacts. This command checks current-version behavior, not production capacity, a release or completion of #139 legacy cleanup. The Consumer's `QuickstartCallObserver` separately demonstrates the observability SPI; see the [Starter guide](docs/reference/starter.md) for assembly and extension points.
+Nacos process scenarios bootstrap separate groups. The process, chain and revision scripts also support real Etcd, Consul and Eureka through `QUICKSTART_REGISTRY` and `QUICKSTART_REGISTRY_ENDPOINT`; Eureka additionally requires `QUICKSTART_EUREKA_METADATA_ENDPOINT` for real Consul metadata. Allowlisted JSON and `summary.log` are saved under `target/quickstart-e2e/`, without temporary private keys. A command proves only its actual coverage; complete #139 acceptance also requires shared contracts, Chaos, exact-head CI and post-merge main verification. See [application acceptance](docs/reference/application-registry-acceptance.md) and the [Starter guide](docs/reference/starter.md) for parameters, telemetry and assembly.
 
 <!-- doc-section:dependency -->
 ## Maven coordinates
@@ -148,8 +148,4 @@ The repository requires **Chinese standard Javadoc, English structured logs and 
 
 ## Registry freshness
 
-Spring Starter V2 defaults to `otryx.rpc.client.directory-max-staleness=30s` and rejects expired last-known-good routes
-**after explicit registry synchronization failure**; a quiet Watch alone is not considered unhealthy.
-When `client.enabled=true`, an explicit `0s` unbounded setting is rejected even before any reference is created.
-Etcd, Nacos, and Consul/Eureka report health and use bounded recovery. See the
-[registry recovery and independent-JVM test guide](docs/reference/registry-freshness.md) for the real Nacos restart checks and their limits.
+Core and the Spring Starter both default to `otryx.rpc.client.directory-max-staleness=30s` and require a strictly positive finite budget. Expired last-known-good routes are rejected **after explicit registry synchronization failure**; a quiet Watch alone is not unhealthy. Etcd, Nacos and Consul/Eureka expose health events and bounded recovery. See [directory freshness](docs/reference/registry-freshness.md) for state semantics, real Nacos restart checks and the four-backend independent-process evidence boundaries.

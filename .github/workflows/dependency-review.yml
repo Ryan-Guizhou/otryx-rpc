@@ -7,6 +7,11 @@ on:
       - '.github/dependabot.yml'
       - '.github/workflows/dependency-review.yml'
       - '.github/workflows/first-release-dry-run.yml'
+      - 'scripts/dependency_review.py'
+      - 'scripts/test_dependency_review.py'
+      - 'mvnw'
+      - 'mvnw.cmd'
+      - '.mvn/**'
 
 permissions:
   contents: read
@@ -14,62 +19,82 @@ permissions:
 jobs:
   dependency-review:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 75
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      MERGE_SHA: ${{ github.sha }}
     steps:
+      # This gate intentionally compares the target dependency baseline with the
+      # proposed merge; it does not claim to execute the PR Head runtime tests.
       - name: Checkout PR merge with complete history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout target branch for baseline
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Test incomplete dependency evidence rejection
+        shell: bash
+        run: python3 scripts/test_dependency_review.py -v
+
+      - name: Install checksum-pinned official OSV scanner
         shell: bash
         run: |
-          git fetch --no-tags origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
-          git checkout --detach "refs/remotes/origin/$GITHUB_BASE_REF"
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 180 \
+            https://github.com/google/osv-scanner/releases/download/v2.7.0/osv-scanner_linux_amd64 \
+            --output "$RUNNER_TEMP/osv-scanner"
+          printf '%s  %s\n' \
+            160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b \
+            "$RUNNER_TEMP/osv-scanner" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+          "$RUNNER_TEMP/osv-scanner" --version
+
+      - name: Build exact baseline and merge SBOMs with isolated Maven repositories
+        id: build
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$MERGE_SHA"
+          python3 scripts/dependency_review.py build \
+            --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --merge-sha "$MERGE_SHA" \
+            --maven ./mvnw \
+            --work-dir "$RUNNER_TEMP/dependency-review-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
 
       - name: Scan existing dependencies
         id: old
-        uses: google/osv-scanner-action/osv-scanner-action@0a65f82af05cd58cf587827b0bb0489548c18346 # v2.7.0
-        continue-on-error: true
-        with:
-          scan-args: |
-            --format=json
-            --output=old-results.json
-            --recursive
-            ./
-
-      - name: Restore proposed PR merge
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         shell: bash
-        run: git checkout --force --detach "$GITHUB_SHA"
+        run: |
+          python3 scripts/dependency_review.py scan \
+            --side baseline --scanner "$RUNNER_TEMP/osv-scanner"
 
       - name: Scan proposed dependencies
         id: new
-        uses: google/osv-scanner-action/osv-scanner-action@0a65f82af05cd58cf587827b0bb0489548c18346 # v2.7.0
-        continue-on-error: true
-        with:
-          scan-args: |
-            --format=json
-            --output=new-results.json
-            --recursive
-            ./
-
-      - name: Fail closed if either OSV scan did not produce evidence
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         shell: bash
         run: |
-          if [ ! -s old-results.json ] || [ ! -s new-results.json ]; then
-            echo "An OSV scan produced no usable results. Refusing to mark this PR safe." >&2
-            exit 1
-          fi
-          python3 -m json.tool old-results.json >/dev/null
-          python3 -m json.tool new-results.json >/dev/null
+          python3 scripts/dependency_review.py scan \
+            --side candidate --scanner "$RUNNER_TEMP/osv-scanner"
+
+      - name: Fail closed if either OSV scan did not produce evidence
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        shell: bash
+        run: |
+          python3 scripts/dependency_review.py validate \
+            --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --merge-sha "$MERGE_SHA"
 
       - name: Reject newly introduced known vulnerabilities
         uses: google/osv-scanner-action/osv-reporter-action@0a65f82af05cd58cf587827b0bb0489548c18346 # v2.7.0
         with:
           scan-args: |
-            --old=old-results.json
-            --new=new-results.json
+            --old=dependency-evidence/old-reporter.json
+            --new=dependency-evidence/new-reporter.json
             --gh-annotations=false
             --fail-on-vuln=true
             --output=results.sarif
@@ -80,8 +105,7 @@ jobs:
         with:
           name: osv-diff-${{ github.event.pull_request.number }}-${{ github.run_id }}
           path: |
-            old-results.json
-            new-results.json
+            dependency-evidence/
             results.sarif
           if-no-files-found: warn
           retention-days: 7

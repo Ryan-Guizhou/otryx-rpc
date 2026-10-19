@@ -28,7 +28,7 @@ flowchart TD
 
 ## Registry 兼容策略
 
-Provider 发布 `peach.rpc.protocol.version`、`peach.rpc.schema.version` 和 `peach.rpc.schema.fingerprint`。Consumer 对元数据缺失、版本不一致、指纹不匹配全部判为 `INCOMPATIBLE`，从本地目录过滤，不允许回退到未声明兼容性的旧快照。这个严格策略只适用于尚未发布的 `1.0.0-SNAPSHOT` 演进；已发布版本的滚动策略应另行设计。
+Provider 将协议/Schema 版本及导出服务指纹写入标准 ApplicationManifest，应用成员只引用其内容 Revision。Consumer 对缺失清单、内容身份错误、版本不一致和业务契约不匹配均失败关闭，不生成可路由 Provider。ServiceKey 是业务身份，ServiceInstance 仅是校验后的本地候选 DTO。此策略保证当前未发布快照内部自洽，不扩展成任意旧部署互通承诺。
 
 ## 尚不等同的事项
 

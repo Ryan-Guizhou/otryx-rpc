@@ -77,54 +77,37 @@ Fingerprint 输入包括：
 
 `RpcContractTypeModel` 在方法级绑定时递归发现可达 DTO，用于 `RpcTypeRegistry` 的稳定身份碰撞检测及严格 Fory 白名单的**静态声明类校验**。它不能将 `RpcTypeIds` 自动映射为 Fory Native Payload 中的类注册编号；当前 Codec ID 1 的真实线上编码不变。应用运行期的多态/Object 参数仍须由 Fory 的独立类检查器守护。
 
-## 4. Registry Metadata
+## 4. 应用 Manifest 的兼容校验
 
-新 Provider 注册实例时发布：
+Provider 发布标准二进制 ApplicationManifest，其中包含 Manifest/Wire/Schema 版本、ApplicationKey 和实际导出服务的 ServiceKey、Service ID、Method ID、Fingerprint；ApplicationInstance 只引用其内容 Revision。不同真实导出集合会得到不同 Revision，可以在同一个应用目录共存。
 
-~~~text
-peach.rpc.protocol.version
-peach.rpc.schema.version
-peach.rpc.schema.fingerprint
-~~~
-
-Consumer 在 Registry Snapshot 更新时完成兼容过滤，单次 RPC 热路径不额外计算 Fingerprint，也不额外创建 Schema Metadata。
+Consumer 后台使用 ServiceMapping、应用健康成员和实例自己的 Manifest 校验。缺失内容、内容身份不符、版本/指纹不匹配或纯 Consumer 均不能进入该服务的 Provider 池；单次 RPC 不重新访问远端或计算清单。
 
 ## 5. Rolling Compatibility Matrix
 
-| Consumer | Provider | 行为 |
-|---|---|---|
-| N | N | 原有 v1 行为 |
-| N | N+1 | 旧 Consumer 忽略新增 Registry Metadata |
-| N+1 | N（缺少完整 Schema Metadata） | INCOMPATIBLE，从本地目录剔除 |
-| N+1 | N（Metadata 完整且 Fingerprint 相同） | COMPATIBLE，可以滚动互操作 |
-| N+1 | N+1，相同 Schema | COMPATIBLE，正常路由 |
-| N+1 | N+1，不同 Schema | INCOMPATIBLE，从本地目录剔除 |
+两个 checkout 都必须使用应用级 Starter。历史接口模式、未知或混合装配在开始前直接失败，不能缩减成较少配对。
 
-因此同一 Wire v1、相同指纹规范且完整 Meta 的业务契约可以滚动升级；**不再**为尚未发行的历史快照保留缺失 Fingerprint 的宽松路径。
+| Consumer | Provider | 必须检查的行为 |
+| --- | --- | --- |
+| N | N | 基线自身真实 RPC |
+| N+1 | N | 新 Consumer 对应用级基线 Provider |
+| N | N+1 | 基线 Consumer 对新 Provider |
+| N+1 | N+1 | 当前组合真实 RPC |
+| N+1 | 回滚后的 N | Provider 回滚后真实 RPC |
+
+以上每组都要求相同业务契约在各实例的 Manifest 中通过验证；相同 Wire v1 不会放宽 Schema 校验。任一组失败，整个矩阵失败。`run_quickstart_revision_e2e.sh` 另外验证同一应用中 `{Greeting}` 与 `{Greeting, Details}` 两个实际导出集合、共存、升级和回滚；共同 Greeting 契约保持不变。
 
 ## 6. Rollback
 
-N+1 回滚到 N 时：
+回滚保留可能仍被在线实例或回滚版本引用的 Manifest Revision。实例 Owner 的 Generation fencing 防止迟到发布/撤销破坏新所有者；注销仅撤销自己的成员和导出映射，不删除共享清单或 Generation 墓碑。
 
-1. N Consumer 的行为取决于 N 版本自身的兼容策略；
-2. N+1 Consumer **拒绝**缺少 Wire/Schema Version/Fingerprint 的 N Provider；
-3. N Provider 只有发布了完整且一致的元数据才会进入 N+1 本地目录；
-4. Registry revision 继续保证旧 Snapshot 不覆盖新 Snapshot。
+业务 DTO、Method ID 或 Fingerprint 改变时，须通过不同 ServiceKey.version 等明确业务版本边界隔离。历史开发注册模型的成对迁移见[迁移指南](migration.md)，不能将其当作支持的 rolling baseline。
 
-如果 N+1 引入了不兼容业务契约，则必须通过新的 ServiceKey.version 隔离，不能依赖 Rollback 自动兼容 Schema。
+## 7. HELLO 与应用 Manifest 的边界
 
-## 7. HELLO 与 Registry Metadata 的边界
+Schema 校验在应用控制面完成；HELLO 负责 Protocol Version、Codec、Compression、Feature 与 Max Frame Bytes。清单不加入每个连接的 HELLO Payload，一个 Provider 进程可以导出多个服务，Consumer 在选择连接前排除不匹配实例。
 
-Schema Compatibility 当前放在 Registry 控制面，而不是每连接 HELLO Payload。
-
-原因：
-
-- 不改变现有 v1 HELLO Payload；
-- 不增加每个连接的服务级 Schema 列表；
-- 一个 Provider 进程可以暴露多个 Service；
-- Consumer 能在选连接前过滤明确不兼容实例。
-
-HELLO 继续负责 Protocol Version、Codec、Compression、Feature 与 Max Frame Bytes。
+完整当前契约与证据层次见[应用级注册验收](reference/application-registry-acceptance.md)。
 
 ## 8. 当前限制
 

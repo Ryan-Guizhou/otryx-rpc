@@ -1,6 +1,6 @@
-# Eureka V2 应用级注册（开发中）
+# Eureka V2 应用级注册
 
-> Issue [#136](https://github.com/Ryan-Guizhou/otryx-rpc/issues/136) · `1.0.0-SNAPSHOT` · 本功能仍需以最终 PR Head、真实 Eureka 集成测试及 main CI 为准。
+> Issue [#136](https://github.com/Ryan-Guizhou/otryx-rpc/issues/136) · `1.0.0-SNAPSHOT` · 当前应用级后端；#139 集成验收仍须以准确 PR Head、真实后端执行和 main CI 为准。
 
 ## 设计与边界
 
@@ -41,12 +41,16 @@ Eureka HTTP Basic Auth 选项为 `eurekaUsername` / `eurekaPassword`，建议仅
 
 Eureka 只发布实际应用成员，不声明全局持久 Revision，也没有原生 CAS Mapping。成员最多 256、订阅最多 128；控制面采用 2–4 线程与 256 队列；默认租约 30s、续期 10s、查询轮询 1s、HTTP 请求 3s。订阅故障不能刷新 LKG，Consumer 新鲜度策略由 Core 控制。
 
+`directory-max-staleness` 只约束明确同步失败之后的 LKG 使用时间。成员轮询将通过解析校验的 HTTP 200 响应，以及按空应用处理的 HTTP 404，视为成功同步；即使服务端缓存尚未反映最新成员变化，这些结果也不会自动产生同步失败。Core 无法仅凭成功响应识别这种缓存滞后，因此该预算不是 Eureka 服务端缓存内容的年龄上限。详见[目录新鲜度](registry-freshness.md)。
+
 外置 Mapping 的 `lookupCandidateOwners` 返回带 Owner `instanceId` 的**未验证候选**，严禁直接送入负载均衡器。Etcd/Consul 的普通 `lookup` 依旧保留其自身 Member Lease 交叉检查，只有组合后端候选读取跳过这些源注册中心的 Lease，再使用 Eureka 的实际 Member Health 检查。
 
 ## 验证
 
-`.github/workflows/eureka-v2.yml` 在 CI 运行使用 JDK 21、Spring Boot 3.5.4、Spring Cloud 2025.0.0 的独立真实 Eureka Server 测试夹具及真实 Consul KV。测试包括 Provider/Consumer/BOTH、原生 Port disabled、30 接口×10 进程、多实例冲突、Manifest/Mapping CAS、Server Lease 丢失、Eureka JVM 重启及恢复。
+`.github/workflows/eureka-v2.yml` 在 CI 运行使用 JDK 21、Spring Boot 3.5.4、Spring Cloud 2025.0.0 的独立真实 Eureka Server 测试夹具及真实 Consul KV。测试包括 Provider/Consumer/BOTH、原生 Port disabled、30 个真实 Java 接口×10 个独立 Registry client 对象（同一个测试 JVM）、多实例冲突、Manifest/Mapping CAS、Server Lease 丢失、Eureka JVM 重启及恢复。
 
-测试服务器位于 `.github/test-fixtures/eureka-server`，不属于 RPC Maven Reactor，不会产生第二个生产 Starter。历史 ServiceKey 级别 Eureka Adapter 见 [旧版说明](registry-eureka.md)，将在 #139 最终移除。#137–#138 负责完整 Starter/Quickstart 应用级接线和演示。
+测试服务器位于 `.github/test-fixtures/eureka-server`，不属于 RPC Maven Reactor，不会产生第二个生产 Starter。Starter/Quickstart 只使用应用控制面；独立业务 JVM 的 process/chain/revision 矩阵另由 `.github/workflows/application-registry-e2e.yml` 使用真实 Eureka + Consul 执行。原生成员数、SPI 方法入口调用数、订阅创建调用数及快照/健康通知与收敛时间分别计量，不是后端全部 HTTP、续租或服务端 Watch 流量，见[验收口径](application-registry-acceptance.md)。
 
-隔离 Eureka Server 测试会关闭只读 Response Cache，缩短写入后目录收敛时间。生产环境 Eureka 的默认缓存刷新间隔及租约策略不应混淆：短期旧目录应由 Core 的新鲜度、安全认证及连接失败策略处理。
+隔离 Eureka Server 夹具设置 `eureka.server.use-read-only-response-cache=false`，仅停用只读缓存层；读写 Response Cache 仍通过自身的失效和过期机制更新。夹具还设置 `eureka.server.response-cache-auto-expiration-in-seconds=1`，将读写缓存的写入后过期时间设为 1 秒；缓存项过期后，由后续查询重新加载。`eureka.server.response-cache-update-interval-ms` 不能当作读写缓存的过期时间。
+
+夹具缓存参数只界定隔离 CI 的收敛条件，不构成生产 Adapter 修复，也不保证 Eureka 生产默认配置在 25 秒内收敛。实际运行配置、执行结果和未完成门槛见[工程断点](../engineering/agent-governance-checkpoint.md)。

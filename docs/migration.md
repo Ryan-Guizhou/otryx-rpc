@@ -1,13 +1,13 @@
-# 从 Peach RPC 1.0.x 迁移到 OTRYX RPC 1.0
+# 迁移到 OTRYX RPC 应用级注册
 
-> **迁移状态：OTRYX `1.0.0-SNAPSHOT`；尚未形成新旧版本直接互通保证。**
->
-> Peach RPC 1.x 与 OTRYX RPC 1.0 属于不同的 Maven/Java 命名空间。即使两者均使用 `1.0.x` 版本编号，也**不表示**可以直接混部、滚动升级或回滚。
+> 当前源码为 `1.0.0-SNAPSHOT` / JDK 21 / Spring Boot 3.5.4 / Wire v1，尚未正式发布。#139 的源码、真实后端和 CI 验收状态以[断点记录](engineering/agent-governance-checkpoint.md)为准。
 
-## Maven 与 Java API
+OTRYX 的唯一注册模型是应用成员：Provider、Consumer、BOTH 都以 `ApplicationKey + instanceId` 入册。接口数量不增加实例记录，纯 Consumer 没有 RPC Endpoint。业务契约仍使用 `ServiceKey(interface, version, group)`；它不再承担注册实例身份。当前版本没有接口注册兼容模式、双读双写或自动回退。
 
-| 类型 | Peach RPC 1.0.x | OTRYX 1.0 |
-|---|---|---|
+## 1. Maven 与 Java 命名空间
+
+| 类型 | 历史 Peach RPC | 当前 OTRYX |
+| --- | --- | --- |
 | Maven groupId | io.peach.rpc | com.peachsoft.otryx |
 | Maven artifactId | peach-rpc-* | otryx-* |
 | Java namespace | io.peach.rpc.* | com.peachsoft.otryx.* |
@@ -15,98 +15,75 @@
 | Spring Boot config | peach.rpc.* | otryx.rpc.* |
 | Protocol header | Wire v1 | Wire v1 |
 
-## 为什么这次升级是 Breaking Change
+`RpcTypeIds`、`RpcIds` 与 `RpcSchemaFingerprint` 包含 Java 类型身份和结构。包名或 DTO/方法结构改变可能改变 Type ID、Method ID 与 Fingerprint；相同 Wire Header 或 Maven 快照版本号不证明业务互通。旧生成 Stub 必须清理后重建。
 
-旧版的 RpcTypeIds 从 Java 全限定类名计算稳定类型标识，RpcIds 从方法名及参数/返回值类型计算方法标识，RpcSchemaFingerprint 将这些信息组合进 SHA-256。因此，改动包名可能改变 **Type ID、Method ID、Schema Fingerprint**，尽管报文的 Wire v1 Header、Magic 和消息类型没有改变。
+## 2. 当前控制面装配
 
-**旧接口级注册路径仍使用的历史 Registry Metadata Key：**
-
-- peach.rpc.protocol.version
-- peach.rpc.schema.version
-- peach.rpc.schema.fingerprint
-
-这些是历史开发实现的兼容字段，不属于新项目的 Spring 配置前缀，也不是 V2 的应用成员身份。旧接口级 SPI、Key/Path 与相关配置的最终删除由 #139 统一执行，不承诺将这些字段作为永久兼容模式保留。
-
-## 迁移流程
-
-1. 固定旧版 Provider/Consumer 与业务 DTO 的源码、构建产物和服务注册设置；不要覆盖旧 GAV 或 Tag。
-2. 将 pom.xml 中的 io.peach.rpc:peach-rpc-* 修改成 com.peachsoft.otryx:otryx-*。
-3. 更新 io.peach.rpc.* import、PeachRpc* 公开类名及注解，清理旧版生成的 Stub。
-4. 配置项改为 otryx.rpc.*，对 Nacos/Etcd 的 namespace、group 与 ServiceKey 做单独审查，避免将新旧无法互通的业务契约登记到同一服务集合。
-5. 同时构建与部署 OTRYX Provider/Consumer，先做独立进程的正确性、TLS、Chaos 和失败路径测试。
-6. 在隔离流量环境测试真实新旧混合版本；未提供通过证据前采用蓝绿或业务级分流，不采用自动滚动混合升级。
-7. 回滚时保留旧版注册组、旧依赖和完整配置，防止新消费者错误连接到旧提供者。
-
-## OTRYX 接口级注册迁移到应用级注册（#137）
-
-这次控制面迁移独立于上述 Java 包名改动。即使两个 OTRYX 快照具有相同的 Maven 版本、Java 包名和 Wire v1 Header，旧 Starter 的 `RegistryFactory` / `serviceDiscovery` / `serviceRegistrar` 与新 Starter 的 `ApplicationRegistryFactory` / `applicationControlPlane` / `applicationMembership` 仍使用不同的注册与发现模型，不能据此直接混部。
-
-当前 #137 分支的 Starter 只装配应用级路径：同一进程实例通过 `ApplicationKey + instanceId` 共享一条 Provider/Consumer/BOTH 成员记录；纯 Consumer 必须真实入册，但没有 RPC Endpoint。旧 SPI 仍留在部分分阶段源码中，**不是 fallback、双读双写或运行时模式开关**。#138 负责完整 Quickstart 改写，#139 负责最终旧路径清除；两者仍须独立完成。[设计和分阶段状态](design/application-registry-v2.md)
-
-### 配置与扩展变更
-
-| 项目 | 应用级 Starter 要求 |
+| 项目 | 必需契约 |
 | --- | --- |
-| 应用名称 | 配置 `spring.application.name`，或用 `otryx.rpc.registry.application-name` 覆盖；均为空时启动失败 |
-| Namespace / 实例 | Namespace 默认 `default`；`registry.instance-id` 默认每次启动生成一次 UUID，显式值须在同一应用内唯一 |
-| 共享控制面预算 | 新增 `otryx.rpc.registry.control-plane-timeout`，默认 `3s`，必须大于零且不超过 `30s`；独立于 `server.control-plane-timeout`，纯 Consumer 同样适用 |
-| 发现陈旧窗口 | `client.directory-max-staleness` 默认 `30s`；`client.enabled=true` 时拒绝 `0s` 无限 LKG，即使尚无实际引用 |
-| 自定义 Registry | 使用 `ApplicationRegistry` 并提供 `ApplicationRegistrar` 与 `ApplicationMetadataBackend` 仓库；旧 `Registry` / `ServiceRegistrar` / `ServiceDiscovery` Bean 定义直接被拒绝 |
-| 配置键 | Starter 拥有的未知键和旧接口级选项直接失败；`observability.*` 与 `quickstart.*` 子树由各自模块校验 |
-| 默认 Consul 工厂 | 移除非空 `otryx.rpc.registry.consul.datacenter`；用 `registry.endpoints` 选择单个本地 Agent |
-| 默认 Eureka 工厂 | `registry.eureka.metadata-backend` 显式选择 `etcd`、`nacos` 或 `consul`，配置非空 `registry.eureka.metadata-endpoints` 并加入所选元数据 Adapter |
+| 应用身份 | 使用 `spring.application.name` 或 `otryx.rpc.registry.application-name`；均为空则启动失败 |
+| Namespace / 实例 | `registry.namespace` 默认 `default`；instance ID 每次启动生成一次 UUID，显式值须在同一应用内唯一 |
+| Core Client | `applicationControlPlane(resolver, membership, namespace)`；创建时启动 Consumer 入册，以 `membershipReady()` 确认；未就绪则调用失败关闭 |
+| Core Server | `applicationMembership(membership)`；绑定真实端点和导出 Manifest 后发布 Provider/BOTH 成员 |
+| 自定义后端 | `ApplicationRegistry`、真实 `ApplicationRegistrar` 及 `ApplicationMetadataBackend` 仓库 |
+| 成员预算 | `registry.control-plane-timeout` 默认 `3s`，大于零且不超过 `30s`；独立于 Server 控制面预算 |
+| 目录陈旧预算 | Core 与 Starter 默认 `30s`，仅接受严格正的有限时长；零时长不能表示永久保留 LKG |
+| 旧配置 | Starter 所拥有的未知键与已移除选项直接失败；Observability 与 Quickstart 子树由相应模块校验 |
+| Consul | 配置一个本地 Agent endpoint；TTL Check 不能跨 Agent 续期 |
+| Eureka | 必须显式选择可靠外置 Metadata Backend 和 endpoints；当前独立 JVM 矩阵使用真实 Consul |
 
-表中简写的配置键都位于 `otryx.rpc.*` 下。自定义应用级 Registry Bean 会替代默认工厂，未使用的 Consul/Eureka 后端专属设置不参与默认工厂校验；它仍须满足注册、元数据和有效安全契约。完整配置、生命周期和诊断说明见 [Starter](reference/starter.md)。
+Starter 创建 Consumer 时会在共享成员预算内等待上述入册确认，失败触发已分配资源回收。
 
-Quickstart TLS/mTLS Profile 的证书占位符变量同步改名；更新启动脚本后还须移除旧环境变量，避免旧名被 Spring 解释为未知的 `otryx.rpc.tls.*` 配置。证书路径仍绑定到现有 `otryx.rpc.transport.security.*` 属性，TLS 校验与授权要求不变。
+表内简写配置键位于 `otryx.rpc.*`。当前所有权与覆盖规则见 [Starter](reference/starter.md)，Manifest 与 Mapping 的一致性见 [应用注册设计](design/application-registry-v2.md)。
 
-| 旧 Quickstart 环境变量 | 新环境变量 |
+`ServiceInstance` 只作为本地负载均衡候选 DTO 保留。候选来源必须通过真实 Mapping、Application Directory、实例 Manifest 和契约校验；不允许直接将硬编码 Provider 候选或本地镜像当作跨进程发现证据。
+
+## 3. Rolling 的基线要求
+
+[基线检查器](../scripts/check_registry_generation_boundary.py) 同时识别两个 checkout 的实际 Starter 工厂、Consumer 发现和 Provider 成员装配。两端必须全部为应用级接线；历史接口模式、未知、混合或不一致装配在启动任何业务进程前失败。
+
+[独立 JVM rolling 脚本](../scripts/run_rolling_compatibility_e2e.sh) 必须执行全部五组，箭头表示 Consumer → Provider：
+
+| 顺序 | 组合 | 验证目的 |
+| --- | --- | --- |
+| 1 | N → N | 基线自身可用 |
+| 2 | N+1 → N | 先升级 Consumer |
+| 3 | N → N+1 | 先升级 Provider |
+| 4 | N+1 → N+1 | 当前组合可用 |
+| 5 | N+1 → 回滚后的 N | Provider 回滚可用 |
+
+任一组失败使整个门禁失败。不能通过识别到历史模式而缩减矩阵；需要迁移历史开发部署时采用隔离注册域和完整业务链切换。当前五组只对实际提交、相同业务契约与应用级基线提供证据，不承诺旧 Java API、旧注册域或任意 DTO 变更互通。
+
+## 4. 部署迁移顺序
+
+1. 固定现有 Provider/Consumer 配套源码、构建产物、业务契约、注册域与安全配置，保留可恢复的旧部署。
+2. 同步更新 Maven 坐标、Java import、注解和生成 Stub；将应用身份与实例身份显式纳入部署配置。
+3. 在新的隔离注册域配置唯一 Starter 和所需 Adapter。Nacos 在业务启动前初始化 Mapping 分片；Eureka 显式配置元数据后端。不要将两个不同注册模型放入同一实例集合。
+4. 在 JDK 21 下构建并运行质量、真实后端契约、独立 JVM process/chain/revision、mTLS 与 rolling 门禁，再按完整业务链切换流量。
+5. 回滚时恢复配套 Provider、Consumer、业务契约和注册配置。保存仍可能被在线实例或回滚使用的 Manifest Revision；成员注销不会自动删除内容清单或 Generation 墓碑。
+
+```bash
+./mvnw -B -ntp clean verify -Pquality
+python3 scripts/check_migration_readiness.py
+python3 scripts/test_registry_generation_boundary.py
+```
+
+这些命令是验证入口，具体成功结论必须绑定准确提交。真实后端运行方式和计数口径见 [应用级注册验收](reference/application-registry-acceptance.md)。
+
+## 5. TLS/mTLS 示例环境变量
+
+证书路径仍绑定到 `otryx.rpc.transport.security.*`。更新启动脚本时同步移除旧环境变量，避免 Spring 把旧变量解释为未知配置。
+
+| 旧 Quickstart 环境变量 | 当前环境变量 |
 | --- | --- |
 | `OTRYX_RPC_TLS_CERT` | `OTRYX_QUICKSTART_TLS_CERT` |
 | `OTRYX_RPC_TLS_KEY` | `OTRYX_QUICKSTART_TLS_KEY` |
 | `OTRYX_RPC_TLS_CA` | `OTRYX_QUICKSTART_TLS_CA` |
 
-Consumer 首次创建在有限预算内等待自身 Registry 入册确认；失败会中止创建并触发已分配资源回收。该确认不代表目标 Provider 的异步目录刷新已经完成。未实例化的 lazy 引用不会产生成员，关闭会封闭懒创建入口，并有界等待 Client/Provider 后再清理共享 Membership。
+实际网络部署必须配置 `NETWORK_MTLS`、可信 CA、严格 DTO 白名单和基于已验证身份的服务/方法授权；注册属性不提供认证证据。
 
-### 滚动检查所能证明的范围
+## 6. 仓库与发布边界
 
-[注册代际检查器](../scripts/check_registry_generation_boundary.py) 同时检查两个源码目录中的实际 Starter 工厂、Consumer 发现和 Provider 注册装配；仅存在 V2 Core 类型不等于 Starter 已启用 V2。未知、混合或相互矛盾的装配直接失败。
+当前仓库为 [Ryan-Guizhou/otryx-rpc](https://github.com/Ryan-Guizhou/otryx-rpc)。重构前稳定分支 `stable/peach-rpc-1.0.1-pre-otryx-2026-10-10` 固定于 `a4175635aef8702cab613b9c672ca7edbaae6a94`，其历史状态为 Release Prep，不代表正式发行。
 
-[独立 JVM 运行脚本](../scripts/run_rolling_compatibility_e2e.sh) 按检查结果要求以下组合，表中的箭头均表示 Consumer → Provider：
-
-| 两个快照的实际注册代际 | 必须执行的组合 | 证据边界 |
-| --- | --- | --- |
-| 同代：接口级/接口级，或应用级/应用级 | N→N、N+1→N、N→N+1、N+1→N+1、N+1→回滚后的 N | 保留完整五组合；兼容结论仍取决于该次真实检查结果 |
-| 跨代：接口级/应用级 | N→N、N+1→N+1 | 只检查两代各自的独立 Provider/Consumer JVM；不执行、也不声称混合代际或混合代际回滚互通 |
-
-选择跨代矩阵不等于已经通过检查，也不取代当前版本的协议、TLS/鉴权、故障恢复及 Maven Reactor 门禁。#137 的结果必须绑定准确 PR Head，合并后另行核验 main CI。
-
-### 成对迁移与回滚
-
-1. 固定现有 Provider/Consumer 的匹配快照、业务契约、构建产物、注册域与完整配置，保留可恢复的旧部署。
-2. 在隔离的注册域准备应用级 Provider 和 Consumer，同时更新唯一 Starter、可选 Adapter、应用身份及必需元数据配置，不向旧实例集合引入应用级 Consumer。
-3. 从仓库根目录在 JDK 21 下执行 Starter 相关回归，再执行完整质量门禁；这只是可复现的验证入口，不是已通过声明：
-
-   ```bash
-   ./mvnw -B -ntp -pl otryx-spring-boot/otryx-spring-boot-autoconfigure -am test
-   ./mvnw -B -ntp clean verify -Pquality
-   ```
-
-4. 使用该部署实际采用的注册中心，在独立 JVM 验证新 Provider/Consumer 配对、真实成员角色、发现就绪、RPC、关闭与故障路径，再按完整业务链切换流量。
-5. 回滚时成对恢复匹配代际的 Provider、Consumer、Adapter 与注册配置；不要仅回滚 Provider 并假设应用级 Consumer 能发现接口级旧 Provider。保留仍可能用于部署或回滚的 Manifest Revision，不将本次迁移当作元数据 GC。
-
-## 当前 GitHub 仓库
-
-源码已迁至 [Ryan-Guizhou/otryx-rpc](https://github.com/Ryan-Guizhou/otryx-rpc)，所有新文档、POM SCM 和克隆示例以该地址为准。
-
-## 稳定快照与兼容证据
-
-重构前稳定分支为 stable/peach-rpc-1.0.1-pre-otryx-2026-10-10，基准 SHA 为 a4175635aef8702cab613b9c672ca7edbaae6a94。其发布状态为 1.0.1 Release Prep，不应表述为已经正式发布的 1.0.1 GA。
-
-新版本的互通、性能与安全声明以实际 CI 和受控环境 Evidence 为准。
-
-## 发布前条件
-
-- 验证 com.peachsoft.otryx 的 Maven Central namespace 所有权。
-- 审核 OTRYX 名称在软件相关类别的既有使用/商标风险。
-- GitHub 仓库正式改名后校验所有 SCM、Workflow、Badge 和文档链接。
+当前质量门禁、短时共享 runner 数值、源码清理或四后端测试都不等同于正式发布、生产容量或任意环境下的安全部署保证。发布条件仍见 [发布准备](publication-readiness.md)。

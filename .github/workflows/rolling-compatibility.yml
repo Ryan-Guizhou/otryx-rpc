@@ -11,12 +11,29 @@ on:
   pull_request:
     paths:
       - 'otryx-core/**'
+      - 'otryx-codegen/**'
       - 'otryx-serialization/otryx-serialization-fory/**'
       - 'otryx-transport/otryx-transport-vertx/**'
       - 'otryx-registry/**'
       - 'otryx-spring-boot/**'
       - 'otryx-quickstart/**'
-      - 'otryx-examples/**'
+      - 'pom.xml'
+      - 'docs/release-status.properties'
+      - 'scripts/run_rolling_compatibility_e2e.sh'
+      - 'scripts/bootstrap_quickstart_nacos.sh'
+      - 'scripts/check_registry_generation_boundary.py'
+      - 'scripts/test_registry_generation_boundary.py'
+      - '.github/workflows/rolling-compatibility.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'otryx-core/**'
+      - 'otryx-codegen/**'
+      - 'otryx-serialization/otryx-serialization-fory/**'
+      - 'otryx-transport/otryx-transport-vertx/**'
+      - 'otryx-registry/**'
+      - 'otryx-spring-boot/**'
+      - 'otryx-quickstart/**'
       - 'pom.xml'
       - 'docs/release-status.properties'
       - 'scripts/run_rolling_compatibility_e2e.sh'
@@ -47,7 +64,7 @@ jobs:
           - 9848:9848
     env:
       NACOS_TEST_ENDPOINT: 127.0.0.1:8848
-      BASELINE_REF: ${{ github.event.pull_request.base.sha || inputs.baseline_ref || 'main' }}
+      BASELINE_REF: ${{ github.event.pull_request.base.sha || github.event.before || inputs.baseline_ref }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -67,8 +84,8 @@ jobs:
         shell: bash
         run: |
           for attempt in {1..90}; do
-            if timeout 1 bash -c '</dev/tcp/127.0.0.1/8848' 2>/dev/null               && timeout 1 bash -c '</dev/tcp/127.0.0.1/9848' 2>/dev/null; then
-              sleep 25
+            if curl --silent --fail http://127.0.0.1:8848/nacos/v3/admin/core/state/readiness >/dev/null \
+                && timeout 1 bash -c '</dev/tcp/127.0.0.1/9848' 2>/dev/null; then
               exit 0
             fi
             sleep 2
@@ -82,36 +99,19 @@ jobs:
           git fetch origin "$BASELINE_REF" --depth=1 || true
           git worktree add target/compat-n "$BASELINE_REF"
 
-      - name: Detect API generation boundary
-        id: baseline
+      - name: Record actual baseline and candidate commits
+        shell: bash
         run: |
-          if test -d target/compat-n/peach-rpc-core; then
-            echo "family=peach" >> "$GITHUB_OUTPUT"
-          elif test -d target/compat-n/otryx-quickstart; then
-            echo "family=otryx-quickstart" >> "$GITHUB_OUTPUT"
-          elif test -d target/compat-n/otryx-examples; then
-            echo "family=otryx-legacy" >> "$GITHUB_OUTPUT"
-          else
-            echo "Unknown baseline layout"
-            exit 1
-          fi
+          mkdir -p target/rolling-compatibility
+          baseline_sha="$(git -C target/compat-n rev-parse HEAD)"
+          candidate_sha="$(git rev-parse HEAD)"
+          printf 'baseline=%s\ncandidate=%s\n' "$baseline_sha" "$candidate_sha" \
+            > target/rolling-compatibility/commits.properties
 
-      - name: Build historical Peach RPC baseline
-        if: steps.baseline.outputs.family == 'peach'
-        working-directory: target/compat-n
-        run: |
-          mvn -B -ntp -pl peach-rpc-codegen -am install -DskipTests
-          mvn -B -ntp -pl peach-rpc-examples/peach-rpc-example-provider,peach-rpc-examples/peach-rpc-example-consumer -am package -DskipTests
+      - name: Reject unsupported baseline before building or running processes
+        run: python3 scripts/check_registry_generation_boundary.py target/compat-n .
 
-      - name: Build same-generation OTRYX baseline
-        if: steps.baseline.outputs.family == 'otryx-legacy'
-        working-directory: target/compat-n
-        run: |
-          mvn -B -ntp -pl otryx-codegen -am install -DskipTests
-          mvn -B -ntp -pl otryx-examples/otryx-example-provider,otryx-examples/otryx-example-consumer -am package -DskipTests
-
-      - name: Build current Quickstart baseline
-        if: steps.baseline.outputs.family == 'otryx-quickstart'
+      - name: Build application-level Quickstart baseline
         working-directory: target/compat-n
         run: |
           mvn -B -ntp -pl otryx-codegen -am install -DskipTests
@@ -133,22 +133,19 @@ jobs:
           package
           -DskipTests
 
-      - name: Verify both Quickstart generations and supported rolling pairs
-        if: steps.baseline.outputs.family == 'otryx-quickstart'
-        run: >
-          bash scripts/run_rolling_compatibility_e2e.sh
-          "$PWD/target/compat-n"
-          "$PWD"
-
-      - name: Verify breaking Peach-to-OTRYX migration boundary
-        if: steps.baseline.outputs.family != 'otryx-quickstart'
+      - name: Verify all five application-level rolling and rollback pairs
+        shell: bash
         run: |
-          python3 scripts/check_migration_readiness.py
-          bash scripts/run_quickstart_process_e2e.sh
-          {
-            echo "## Explicit unpublished API namespace migration"
-            echo "The historical baseline was independently built."
-            echo "The current OTRYX Quickstart was independently tested."
-            echo "Cross-generation rolling compatibility has **not** been established."
-            echo "Use service/registry isolation and the documented blue-green migration."
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -o pipefail
+          bash scripts/run_rolling_compatibility_e2e.sh \
+            "$PWD/target/compat-n" "$PWD" 2>&1 \
+            | tee target/rolling-compatibility/matrix.log
+
+      - name: Upload actual rolling commits and five-pair process evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rolling-compatibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/rolling-compatibility
+          if-no-files-found: warn
+          retention-days: 30

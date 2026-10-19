@@ -2,7 +2,7 @@
 
 > 当前 Maven 坐标：`com.peachsoft.otryx:otryx-* : 1.0.0-SNAPSHOT`（源码开发版，须本地 install，尚未从 Maven Central 发布）。历史 Peach RPC 1.0.x Java API 不与 OTRYX 1.0 自动兼容。参见[迁移指南](../migration.md)。
 >
-> 本文描述已合并 #137 的应用级 Starter 行为。#138 在同一 Starter 上补齐 Quickstart 成员诊断、真实导出 revision 与 mTLS 授权教程；每次修改的验收仍以准确 PR Head 及合并后 main CI 为准。#139 的全仓旧接口级 SPI 删除尚未完成。
+> 本文描述当前唯一应用级 Starter 行为。#139 的全仓清理、真实后端契约与 JVM 矩阵仍须绑定准确 PR Head 和合并后 main CI；当前验收状态见[断点](../engineering/agent-governance-checkpoint.md)。
 
 ## 1. 引入
 
@@ -233,7 +233,7 @@ public interface OrderService {
 - `otryx.rpc.transport.security.reload-interval`：证书文件变化检查周期，默认 30 秒。
 - `otryx.rpc.transport.security.expiry-warning-threshold`：证书过期前告警窗口，默认 7 天。
 - `otryx.rpc.client.enabled`：默认 true，表示允许 Consumer；引用所属 Bean 实例化或程序化获取 Client 时按需创建运行时。
-- `otryx.rpc.client.directory-max-staleness`：应用级 V2 的 LKG 同步故障允许陈旧期限，Spring 默认 **30 秒**。只要 `client.enabled=true`，显式设为 `0s`（无限 LKG）即 fail-fast，即使尚无实际引用；不得以历史旧默认推断 V2 安全边界。
+- `otryx.rpc.client.directory-max-staleness`：应用级 V2 的 LKG 同步故障允许陈旧期限，Core 与 Spring 默认均为 **30 秒**。只要 `client.enabled=true`，显式设为 `0s`（无限 LKG）即 fail-fast，即使尚无实际引用；Core 的程序化预算同样必须严格为正且可转换为有限纳秒时长。
 - `otryx.rpc.server.enabled`：默认 true，表示允许 Provider；没有 `@OtryxRpcService` 时不会自动监听端口，程序化 Server 由调用方启动。
 - `otryx.rpc.client.proxy`：Generated Stub 缺失时的 fallback，默认 `jdk`；可显式选择 `cglib` 或可选 Byte Buddy 模块提供的 `bytebuddy`。
 - `otryx.rpc.client.load-balancer`：默认 `p2c-ewma`。
@@ -322,7 +322,7 @@ Core 的 `RpcObserver`、`RpcTracingBridge`、`RpcMetadataPropagator` 不依赖�
 
 自定义 `ApplicationRegistry` 必须提供真实 `ApplicationRegistrar`，并实现 `ApplicationMetadataBackend`、返回非空 Manifest/Mapping Repository，供默认 Coordinator 和 Resolver 使用。覆盖 Registry Bean 后不再加载默认类型对应的工厂，未使用的 Consul/Eureka 专属后端配置不会阻止该覆盖；通用配置与有效安全 Profile 校验仍然执行。
 
-旧 `Registry`、`ServiceRegistrar` 或 `ServiceDiscovery` Bean 定义在创建 RPC 资源之前即被拒绝，包括尚未实例化的 lazy Bean。自定义扩展必须提供应用级 SPI，不能依靠旧 Bean 获得隐式 fallback。
+自定义扩展必须实现当前应用级成员与元数据 SPI。Core 和 Starter 均要求真实 Consumer 入册及 Provider membership，不能依赖 discovery-only Bean、静态候选或隐式 fallback 建立运行时。
 
 ## 10. 启动 Fail-fast 与脱敏诊断
 

@@ -8,9 +8,6 @@ import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.observability.RpcConnectionCloseReason;
 import com.peachsoft.otryx.observability.RpcConnectionRole;
 import com.peachsoft.otryx.observability.RpcObserver;
-import com.peachsoft.otryx.registry.Registry;
-import com.peachsoft.otryx.registry.RegistryFactory;
-import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.peachsoft.otryx.transport.RpcTransportFactory;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
@@ -64,7 +61,6 @@ public final class PerformanceSoakRunner {
     private static final String ENV_HOST_FINGERPRINT = "OTRYX_RPC_HOST_FINGERPRINT_SHA256";
     private static final String ENV_JVM_FLAGS = "OTRYX_RPC_JVM_FLAGS";
     private static final String TRANSPORT_EXTENSION = "vertx";
-    private static final String REGISTRY_EXTENSION = "memory";
 
     private PerformanceSoakRunner() {
     }
@@ -90,7 +86,7 @@ public final class PerformanceSoakRunner {
         int port = freePort();
         byte[] payload = new byte[config.payloadSize()];
         ConnectionObserver observer = new ConnectionObserver();
-        Registry registry = memoryRegistry();
+        BenchmarkApplicationControlPlane controlPlane = new BenchmarkApplicationControlPlane("v2d2-soak");
         RpcTransportFactory transportFactory =
                 ExtensionLoader.getLoader(RpcTransportFactory.class)
                         .getExtension(TRANSPORT_EXTENSION);
@@ -98,16 +94,16 @@ public final class PerformanceSoakRunner {
                 transportOptions(config, observer);
         RpcCodecRegistry codecs = RpcCodecRegistry.fromSpi();
 
-        try (registry;
+        try (controlPlane;
              OtryxRpcServer server = server(
-                     registry,
+                     controlPlane,
                      transportFactory,
                      transportOptions,
                      codecs,
                      config,
                      port);
              OtryxRpcClient client = client(
-                     registry,
+                     controlPlane,
                      transportFactory,
                      transportOptions,
                      codecs,
@@ -117,7 +113,7 @@ public final class PerformanceSoakRunner {
                     PayloadBenchmarkService.class,
                     "1.0.0",
                     "benchmark");
-            verifyResponse(service.echo(payload), payload.length);
+            controlPlane.warmup(client, () -> verifyResponse(service.echo(payload), payload.length));
 
             runPhase(
                     service,
@@ -147,17 +143,8 @@ public final class PerformanceSoakRunner {
         }
     }
 
-    private static Registry memoryRegistry() {
-        return ExtensionLoader.getLoader(RegistryFactory.class)
-                .getExtension(REGISTRY_EXTENSION)
-                .create(new RegistryOptions(
-                        List.of(),
-                        "v2d2-soak",
-                        Map.of()));
-    }
-
     private static OtryxRpcServer server(
-            Registry registry,
+            BenchmarkApplicationControlPlane controlPlane,
             RpcTransportFactory transportFactory,
             RpcTransportOptions transportOptions,
             RpcCodecRegistry codecs,
@@ -167,8 +154,7 @@ public final class PerformanceSoakRunner {
                 16_384,
                 config.concurrency() * 2);
         return OtryxRpcServer.builder()
-                .serviceRegistrar(
-                        registry.registrar().orElseThrow())
+                .applicationMembership(controlPlane.provider())
                 .transportServer(
                         transportFactory.createServer(
                                 transportOptions))
@@ -187,13 +173,12 @@ public final class PerformanceSoakRunner {
     }
 
     private static OtryxRpcClient client(
-            Registry registry,
+            BenchmarkApplicationControlPlane controlPlane,
             RpcTransportFactory transportFactory,
             RpcTransportOptions transportOptions,
             RpcCodecRegistry codecs,
             Config config) {
-        return OtryxRpcClient.builder()
-                .serviceDiscovery(registry)
+        return controlPlane.clientBuilder()
                 .transportClient(
                         transportFactory.createClient(
                                 transportOptions))

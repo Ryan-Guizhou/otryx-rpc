@@ -6,16 +6,11 @@ import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.core.RpcProviderExecutionOptions;
-import com.peachsoft.otryx.registry.Registry;
-import com.peachsoft.otryx.registry.RegistryFactory;
-import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.peachsoft.otryx.transport.RpcTransportFactory;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
 import java.net.ServerSocket;
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
@@ -63,7 +58,7 @@ public class ExecutionScenarioBenchmark {
     @Param({"1", "4"})
     public int connectionsPerEndpoint;
 
-    private Registry registry;
+    private BenchmarkApplicationControlPlane controlPlane;
     private OtryxRpcServer server;
     private OtryxRpcClient client;
     private ScenarioBenchmarkService service;
@@ -80,13 +75,7 @@ public class ExecutionScenarioBenchmark {
     @Setup(Level.Trial)
     public void setup() throws Exception {
         int port = freePort();
-        registry = ExtensionLoader
-                .getLoader(RegistryFactory.class)
-                .getExtension("memory")
-                .create(new RegistryOptions(
-                        List.of(),
-                        "scenario-benchmark",
-                        Map.of()));
+        controlPlane = new BenchmarkApplicationControlPlane("scenario-benchmark");
 
         RpcCodecRegistry codecs =
                 RpcCodecRegistry.fromSpi();
@@ -116,8 +105,7 @@ public class ExecutionScenarioBenchmark {
                                 : 1024);
 
         server = OtryxRpcServer.builder()
-                .serviceRegistrar(
-                        registry.registrar().orElseThrow())
+                .applicationMembership(controlPlane.provider())
                 .transportServer(
                         transportFactory.createServer(
                                 transportOptions))
@@ -141,8 +129,7 @@ public class ExecutionScenarioBenchmark {
                 .toCompletableFuture()
                 .join();
 
-        client = OtryxRpcClient.builder()
-                .serviceDiscovery(registry)
+        client = controlPlane.clientBuilder()
                 .transportClient(
                         transportFactory.createClient(
                                 transportOptions))
@@ -153,7 +140,7 @@ public class ExecutionScenarioBenchmark {
                 ScenarioBenchmarkService.class,
                 "1.0.0",
                 "benchmark");
-        service.noOp();
+        controlPlane.warmup(client, () -> service.noOp());
     }
 
     /**
@@ -191,8 +178,8 @@ public class ExecutionScenarioBenchmark {
         if (server != null) {
             server.close();
         }
-        if (registry != null) {
-            registry.close();
+        if (controlPlane != null) {
+            controlPlane.close();
         }
     }
 

@@ -18,14 +18,20 @@ case "${1:-}" in
       echo "Eureka test fixture JAR missing" >&2
       exit 1
     fi
+    # Match the instance hostname to its service URL so this standalone server
+    # excludes itself from peer replication, including on a custom test port.
+    # Bound stale read-write cache entries when an old load completes after invalidation.
     java -jar "$JAR" \
       --server.port="$PORT" \
       --server.address=127.0.0.1 \
+      --eureka.instance.hostname=127.0.0.1 \
+      --eureka.client.service-url.defaultZone="http://127.0.0.1:$PORT/eureka/" \
       --eureka.client.register-with-eureka=false \
       --eureka.client.fetch-registry=false \
       --eureka.server.enable-self-preservation=false \
       --eureka.server.use-read-only-response-cache=false \
       --eureka.server.response-cache-update-interval-ms=1000 \
+      --eureka.server.response-cache-auto-expiration-in-seconds=1 \
       --eureka.server.eviction-interval-timer-in-ms=1000 \
       > "$TARGET/server.log" 2>&1 &
     echo "$!" > "$PID_FILE"

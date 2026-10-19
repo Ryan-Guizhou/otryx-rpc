@@ -15,9 +15,7 @@ start_provider() {
     --otryx.rpc.registry.instance-id="$role" \
     --otryx.rpc.quickstart.role="$role" \
     --otryx.rpc.quickstart.details-enabled=false \
-    --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-    --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
-    --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+    "${QUICKSTART_REGISTRY_ARGS[@]}" \
     --otryx.rpc.server.port="$port" \
     --otryx.rpc.server.advertised-port="$port" \
     --otryx.rpc.quickstart.relay-delay-millis=250 \
@@ -34,9 +32,7 @@ java -jar "$CONSUMER_JAR" \
   --spring.application.name="$CONSUMER_APP" \
   --otryx.rpc.registry.application-name="$CONSUMER_APP" \
   --otryx.rpc.registry.instance-id=consumer \
-  --otryx.rpc.registry.endpoints="$NACOS_ENDPOINT" \
-  --otryx.rpc.registry.namespace="$NACOS_NAMESPACE" \
-  --otryx.rpc.registry.nacos.group="$NACOS_GROUP" \
+  "${QUICKSTART_REGISTRY_ARGS[@]}" \
   --otryx.rpc.quickstart.use-relay=true \
   --otryx.rpc.quickstart.use-details=false \
   --otryx.rpc.quickstart.expect-authorization-denied=false \

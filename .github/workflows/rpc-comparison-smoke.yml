@@ -4,6 +4,26 @@ on:
   pull_request:
     paths:
       - "benchmarks/rpc-comparison/**"
+      - "otryx-core/**"
+      - "otryx-codegen/**"
+      - "otryx-registry/otryx-registry-etcd/**"
+      - "otryx-serialization/otryx-serialization-fory/**"
+      - "otryx-transport/otryx-transport-vertx/**"
+      - "pom.xml"
+      - "scripts/run_rpc_comparison_smoke.sh"
+      - "scripts/validate_rpc_comparison.py"
+      - "scripts/test_rpc_comparison_validator.py"
+      - ".github/workflows/rpc-comparison-smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "benchmarks/rpc-comparison/**"
+      - "otryx-core/**"
+      - "otryx-codegen/**"
+      - "otryx-registry/otryx-registry-etcd/**"
+      - "otryx-serialization/otryx-serialization-fory/**"
+      - "otryx-transport/otryx-transport-vertx/**"
+      - "pom.xml"
       - "scripts/run_rpc_comparison_smoke.sh"
       - "scripts/validate_rpc_comparison.py"
       - "scripts/test_rpc_comparison_validator.py"
@@ -14,9 +34,14 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      RPC_COMPARISON_REGISTRY_ENDPOINT: http://127.0.0.1:2379
+      RPC_COMPARISON_REGISTRY_NAMESPACE: comparison-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Java 21
         uses: actions/setup-java@v6
@@ -25,8 +50,22 @@ jobs:
           java-version: "21"
           cache: maven
 
-      - name: Validate evidence schema tests
+      - name: Validate evidence schema and shared Etcd preflight failure contracts
         run: python3 scripts/test_rpc_comparison_validator.py
+
+      - name: Start shared Etcd application control plane
+        run: |
+          docker run -d --name otryx-comparison-etcd -p 2379:2379 \
+            gcr.io/etcd-development/etcd:v3.5.21 /usr/local/bin/etcd \
+            --name=otryx-comparison --data-dir=/etcd-data \
+            --listen-client-urls=http://0.0.0.0:2379 \
+            --advertise-client-urls=http://127.0.0.1:2379
+          for attempt in {1..60}; do
+            if docker exec otryx-comparison-etcd /usr/local/bin/etcdctl endpoint health; then exit 0; fi
+            sleep 2
+          done
+          docker logs otryx-comparison-etcd
+          exit 1
 
       - name: Build and smoke-test isolated OTRYX / Dubbo runtimes
         run: bash scripts/run_rpc_comparison_smoke.sh
@@ -44,3 +83,7 @@ jobs:
             target/rpc-comparison-smoke/*-provider.log
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Cleanup shared Etcd
+        if: always()
+        run: docker rm -f otryx-comparison-etcd || true

@@ -30,7 +30,6 @@ import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import com.peachsoft.otryx.proxy.ProxyFactory;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
-import com.peachsoft.otryx.registry.ServiceDiscovery;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.peachsoft.otryx.transport.RpcTransportClient;
 import java.lang.reflect.Method;
@@ -78,10 +77,8 @@ import org.slf4j.LoggerFactory;
  * @CreateTime 2026/9/23 10:51
  */
 public final class OtryxRpcClient implements AutoCloseable {
-    private static final Duration DEFAULT_APPLICATION_DIRECTORY_STALENESS = Duration.ofSeconds(30);
     private static final Logger LOGGER =
             LoggerFactory.getLogger(OtryxRpcClient.class);
-    private final ServiceDiscovery discovery;
     private final ApplicationServiceResolver applicationResolver;
     private final String applicationNamespace;
     private final ApplicationMembershipCoordinator membership;
@@ -134,17 +131,9 @@ public final class OtryxRpcClient implements AutoCloseable {
             };
 
     private OtryxRpcClient(Builder builder) {
-        if (builder.applicationResolver != null && builder.discovery != null) {
-            throw new IllegalArgumentException("Conflicting interface and application discovery configurations");
-        }
-        if ((builder.applicationResolver == null) != (builder.membership == null)) {
-            throw new IllegalArgumentException("Application discovery and membership must be configured together");
-        }
-        this.applicationResolver = builder.applicationResolver;
-        this.applicationNamespace = builder.applicationNamespace;
-        this.membership = builder.membership;
-        this.discovery = applicationResolver == null
-                ? Objects.requireNonNull(builder.discovery, "serviceDiscovery") : null;
+        this.applicationResolver = Objects.requireNonNull(builder.applicationResolver, "applicationResolver");
+        this.applicationNamespace = Objects.requireNonNull(builder.applicationNamespace, "applicationNamespace");
+        this.membership = Objects.requireNonNull(builder.membership, "applicationMembership");
         this.transport = Objects.requireNonNull(builder.transport, "transportClient");
         this.codecs = Objects.requireNonNull(builder.codecs, "codecRegistry");
         this.defaultCodecId = codecs.defaultCodec().code();
@@ -156,14 +145,8 @@ public final class OtryxRpcClient implements AutoCloseable {
                 : ExtensionLoader.getLoader(ProxyFactory.class).getDefaultExtension();
         this.timeout = Objects.requireNonNull(builder.timeout, "timeout");
         this.methodTimeouts = Map.copyOf(builder.methodTimeouts);
-        if (applicationResolver != null && builder.explicitFreshnessPolicy
-                && !builder.directoryFreshnessOptions.limited()) {
-            throw new IllegalArgumentException("Application discovery requires bounded directory staleness");
-        }
-        this.directoryFreshnessOptions = applicationResolver != null
-                && !builder.directoryFreshnessOptions.limited()
-                ? new RpcDirectoryFreshnessOptions(DEFAULT_APPLICATION_DIRECTORY_STALENESS)
-                : builder.directoryFreshnessOptions;
+        this.directoryFreshnessOptions = Objects.requireNonNull(
+                builder.directoryFreshnessOptions, "directoryFreshnessOptions");
         this.resilienceOptions = Objects.requireNonNull(
                 builder.resilienceOptions,
                 "resilienceOptions");
@@ -207,8 +190,7 @@ public final class OtryxRpcClient implements AutoCloseable {
         this.tracingBridge = Objects.requireNonNull(
                 builder.tracingBridge,
                 "tracingBridge");
-        this.membershipReady = membership == null
-                ? CompletableFuture.completedFuture(null) : membership.startConsumer().toCompletableFuture();
+        this.membershipReady = membership.startConsumer().toCompletableFuture();
     }
 
     /**
@@ -242,15 +224,12 @@ public final class OtryxRpcClient implements AutoCloseable {
                 RpcSchemaFingerprint.serviceFingerprint(
                         key,
                         api);
-        ServiceDirectory directory = directories.computeIfAbsent(key, ignored ->
-                applicationResolver == null
-                        ? new ServiceDirectory(discovery, key, schemaFingerprint, directoryFreshnessOptions)
-                        : new ServiceDirectory(
-                                applicationResolver,
-                                new ServiceMappingKey(applicationNamespace, key),
-                                schemaFingerprint,
-                                directoryFreshnessOptions,
-                                deadlineScheduler));
+        ServiceDirectory directory = directories.computeIfAbsent(key, ignored -> new ServiceDirectory(
+                applicationResolver,
+                new ServiceMappingKey(applicationNamespace, key),
+                schemaFingerprint,
+                directoryFreshnessOptions,
+                deadlineScheduler));
         ClientReference reference = ClientReference.create(
                 key,
                 api,
@@ -1156,19 +1135,14 @@ public final class OtryxRpcClient implements AutoCloseable {
                     directoryClose.complete(null);
                 });
 
-        CompletableFuture<Void> unregisterConsumer;
-        if (membership == null) {
-            unregisterConsumer = CompletableFuture.completedFuture(null);
-        } else {
-            unregisterConsumer = membership.stopConsumer().<Void>handle((ignored, error) -> {
-                if (error != null) {
-                    progress.failures.incrementAndGet();
-                    LOGGER.warn("RPC consumer membership removal failed: errorType={}",
-                            error.getClass().getName());
-                }
-                return null;
-            }).toCompletableFuture();
-        }
+        CompletableFuture<Void> unregisterConsumer = membership.stopConsumer().<Void>handle((ignored, error) -> {
+            if (error != null) {
+                progress.failures.incrementAndGet();
+                LOGGER.warn("RPC consumer membership removal failed: errorType={}",
+                        error.getClass().getName());
+            }
+            return null;
+        }).toCompletableFuture();
 
         CompletableFuture<Void> transportClose = new CompletableFuture<>();
         Thread.ofVirtual()
@@ -1402,11 +1376,9 @@ public final class OtryxRpcClient implements AutoCloseable {
 
     /** Consumer 运行时 Builder。 */
     public static final class Builder {
-        private ServiceDiscovery discovery;
         private ApplicationServiceResolver applicationResolver;
         private ApplicationMembershipCoordinator membership;
         private String applicationNamespace;
-        private boolean explicitFreshnessPolicy;
         private RpcTransportClient transport;
         private RpcCodecRegistry codecs;
         private LoadBalancer loadBalancer;
@@ -1414,7 +1386,7 @@ public final class OtryxRpcClient implements AutoCloseable {
         private Duration timeout = Duration.ofSeconds(3);
         private Map<String, Duration> methodTimeouts = Map.of();
         private RpcDirectoryFreshnessOptions directoryFreshnessOptions =
-                RpcDirectoryFreshnessOptions.UNBOUNDED;
+                RpcDirectoryFreshnessOptions.DEFAULT;
         private RpcClientResilienceOptions resilienceOptions =
                 RpcClientResilienceOptions.DEFAULT;
         private int responseCompletionThreads = Math.max(
@@ -1431,18 +1403,7 @@ public final class OtryxRpcClient implements AutoCloseable {
         }
 
         /**
-         * 设置服务发现控制面。
-         *
-         * @param value 服务发现控制面
-         * @return Consumer Builder
-         */
-        public Builder serviceDiscovery(ServiceDiscovery value) {
-            this.discovery = value;
-            return this;
-        }
-
-        /**
-         * 配置 V2 应用发现及必须注册的 Consumer 应用身份，禁止混入旧接口级发现。
+         * 配置应用发现及必须注册的 Consumer 应用身份。
          *
          * @param resolver 经 Mapping/Manifest/Schema 验证的发现解析器
          * @param membership 与 Provider 共享的进程成员协调器
@@ -1553,7 +1514,6 @@ public final class OtryxRpcClient implements AutoCloseable {
         public Builder directoryFreshnessOptions(RpcDirectoryFreshnessOptions value) {
             this.directoryFreshnessOptions = Objects.requireNonNull(
                     value, "directoryFreshnessOptions");
-            this.explicitFreshnessPolicy = true;
             return this;
         }
 

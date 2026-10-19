@@ -50,6 +50,28 @@ class ApplicationMappingCacheTest {
     }
 
     @Test
+    void olderRevisionMustNotMasqueradeAsSuccessfulRefreshAfterExpiry() {
+        AtomicLong clock = new AtomicLong(100);
+        StubMapping repository = new StubMapping();
+        repository.revision = 10;
+        try (ServiceMappingCache cache = new ServiceMappingCache(
+                repository, Duration.ofNanos(10), Duration.ZERO, clock::get)) {
+            assertEquals(10, cache.refresh(KEY).toCompletableFuture().join().revision());
+            repository.fail = true;
+            assertThrows(CompletionException.class, () -> cache.refresh(KEY).toCompletableFuture().join());
+            clock.addAndGet(10);
+            assertTrue(cache.current(KEY).isEmpty());
+            repository.fail = false;
+            repository.revision = 9;
+            assertThrows(CompletionException.class, () -> cache.refresh(KEY).toCompletableFuture().join());
+            assertTrue(cache.current(KEY).isEmpty());
+            repository.revision = 10;
+            assertEquals(10, cache.refresh(KEY).toCompletableFuture().join().revision());
+            assertTrue(cache.current(KEY).isPresent());
+        }
+    }
+
+    @Test
     void manifestNegativeCacheExpiresAndPendingLookupIsShared() {
         AtomicLong clock = new AtomicLong(100);
         AtomicInteger calls = new AtomicInteger();
@@ -110,6 +132,7 @@ class ApplicationMappingCacheTest {
 
     private static final class StubMapping implements ServiceMappingRepository {
         private volatile boolean fail;
+        private volatile long revision = 1;
 
         @Override
         public CompletionStage<ServiceMappingOwner> claim(ApplicationKey app, String instanceId) {
@@ -131,7 +154,7 @@ class ApplicationMappingCacheTest {
             if (fail) {
                 return CompletableFuture.failedFuture(new IllegalStateException("No registry connection"));
             }
-            return CompletableFuture.completedFuture(new ServiceMappingSnapshot(key, Set.of(), 1));
+            return CompletableFuture.completedFuture(new ServiceMappingSnapshot(key, Set.of(), revision));
         }
     }
 }

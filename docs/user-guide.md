@@ -84,7 +84,7 @@ otryx:
 
 应用名默认来自 `spring.application.name`，也可用 `otryx.rpc.registry.application-name` 覆盖，均未提供时启动失败。当前 Starter 以 `registry.namespace` 同时配置后端与 ApplicationKey；Quickstart 的 Nacos 示例明确使用 `public`，Nacos group 和 ServiceKey group 则是不同维度。
 
-切换 Consul/Eureka 仍复用单一 Starter。Eureka 只保存应用成员，须在 Provider 和 Consumer 同时指定 `otryx.rpc.registry.eureka.metadata-backend`、`metadata-endpoints`，并显式引入所选 Etcd/Nacos/Consul 元数据 Adapter。若元数据选用 Nacos，也必须在业务启动前初始化同一 scope。完整命令见 [可选 Registry](../otryx-quickstart/README.md#7-进一步验证-registryconsul--eureka)。
+切换 Consul/Eureka 仍复用单一 Starter。Eureka 只保存应用成员，须在 Provider 和 Consumer 同时指定 `otryx.rpc.registry.eureka.metadata-backend`、`metadata-endpoints`，并显式引入所选 Etcd/Nacos/Consul 元数据 Adapter。若元数据选用 Nacos，也必须在业务启动前初始化同一 scope。完整命令见 [可选 Registry](../otryx-quickstart/README.md#7-进一步验证-registryetcd--consul--eureka)。
 
 ## 重要运行边界
 
@@ -92,6 +92,6 @@ otryx:
 - Retry 只能用于业务明示幂等的请求；超时、Admission 和队列上限应随真实负载测试。
 - PLAINTEXT 仅用于受信实验环境；网络部署选择 `NETWORK_MTLS`、严格 Fory DTO 白名单及 `RpcAuthorizer`。Quickstart 的 mTLS 演示只允许显式客户端指纹调用 Greeting 的 `hello`，受信证书不自动获得业务权限。
 - Wire v1 保留不代表 Peach RPC 1.x 与 OTRYX 1.0 互通，尤其是 Java 类名变化造成的 Type ID、Method ID 和 Schema Fingerprint 变更。
-- #137 Starter 接入已经合并；#138 的教程与实际独立进程验收不代替 #139 的全仓旧 SPI 删除。短时验收不构成生产容量或正式发布结论。
+- 当前使用唯一应用级控制面。#139 同时要求全仓清理、共享契约和四后端独立 JVM 验收，见[验收与计数口径](reference/application-registry-acceptance.md)；短时结果不构成生产容量或正式发布结论。
 
 继续阅读：[配置](configuration.md) · [安全](security.md) · [兼容迁移](migration.md) · [FAQ](faq.md)。

@@ -1,6 +1,6 @@
 # Consul V2：应用级注册与 KV 元数据
 
-> [Issue #135](https://github.com/Ryan-Guizhou/otryx-rpc/issues/135) · OTRYX RPC 1.0.0-SNAPSHOT · **开发中，尚未通过最终 CI/E2E 验收**。
+> [Issue #135](https://github.com/Ryan-Guizhou/otryx-rpc/issues/135) · OTRYX RPC 1.0.0-SNAPSHOT · 当前应用级后端；#139 的集成验收以准确 Head 和 main CI 为准。
 
 ## 一、定位与行为
 
@@ -57,6 +57,6 @@ mvn -B -ntp -pl otryx-registry/otryx-registry-consul -am \
   -Dconsul.test.endpoint=http://127.0.0.1:8500 test
 ```
 
-GitHub Actions `.github/workflows/consul-v2.yml` 的 `consul-v2` 任务使用真实 Consul，`acl-enforcement` 任务单独以 ACL default-deny 启动、仅在隔离容器内生成临时管理 Token，分别验证授权请求与未授权请求失败关闭；Token 不写入代码或 Maven 启动参数。真实后端任务执行角色注册、并发 KV CAS、Manifest 不可变、TTL Check 和 Session 失效重注册、跨进程成员互斥、30 接口×10 实例矩阵。原有 Mock Agent 测试仅验证旧接口级路径，**不能用来替代真实 V2 E2E**。
+GitHub Actions `.github/workflows/consul-v2.yml` 的 `consul-v2` 任务使用真实 Consul，`acl-enforcement` 任务单独以 ACL default-deny 启动、仅在隔离容器内生成临时管理 Token，分别验证授权请求与未授权请求失败关闭；Token 不写入代码或 Maven 启动参数。真实后端任务执行角色注册、并发 KV CAS、Manifest 不可变、TTL Check 和 Session 失效重注册、跨进程成员互斥、30 个真实 Java 接口×10 个独立 Registry client 对象的共享契约矩阵；测试 JVM 内的 SDK 对象不是十个业务 JVM。原生成员 `0→10→0`、SPI 方法入口调用数、订阅创建调用数及快照/健康通知和收敛时间独立计量，不能作为全部后端 HTTP/keepalive 流量。
 
-需要额外验证并量化：Agent pause/restart、ACL 拒绝、Catalog 收敛、超额 Metadata、跨进程 Owner 竞态、回滚与安全 GC。#137–#139 才负责 Starter/Quickstart 应用级生产接线与旧 SPI 最终移除，不能凭本 Adapter 的存在宣称全局迁移完成。
+Agent pause/recovery 与 ACL default-deny 有独立真实服务端门禁；实际执行、失败或跳过必须分别记录。四后端独立业务 JVM 的 process/chain/revision 由 `.github/workflows/application-registry-e2e.yml` 执行，参见[验收与证据边界](application-registry-acceptance.md)。多节点 Agent 故障、窄权限部署与权威持久元数据 GC 仍是额外生产验收范围。

@@ -4,7 +4,20 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - 'otryx-core/**'
+      - 'otryx-spring-boot/**'
+      - 'pom.xml'
       - 'otryx-registry/otryx-registry-consul/**'
+      - 'otryx-registry/otryx-registry-http/**'
+      - '.github/workflows/consul-v2.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'otryx-core/**'
+      - 'otryx-spring-boot/**'
+      - 'pom.xml'
+      - 'otryx-registry/otryx-registry-consul/**'
+      - 'otryx-registry/otryx-registry-http/**'
       - '.github/workflows/consul-v2.yml'
 
 concurrency:
@@ -20,6 +33,8 @@ jobs:
       CONSUL_ENDPOINT: http://127.0.0.1:8500
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -61,6 +76,22 @@ jobs:
           docker logs "$CONSUL_CONTAINER" || true
           find otryx-registry/otryx-registry-consul/target/surefire-reports \
             -type f -name '*.txt' -exec tail -n 60 {} \; || true
+      - name: Capture Consul server diagnostics
+        if: always()
+        run: |
+          mkdir -p target/registry-ci/consul
+          docker logs "$CONSUL_CONTAINER" > target/registry-ci/consul/server.log 2>&1 || true
+      - name: Upload original Consul contract and chaos evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consul-v2-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            otryx-core/target/surefire-reports/**
+            otryx-registry/otryx-registry-consul/target/surefire-reports/**
+            target/registry-ci/consul/server.log
+          if-no-files-found: warn
+          retention-days: 30
       - name: Cleanup
         if: always()
         run: docker rm -f "$CONSUL_CONTAINER" || true
@@ -73,6 +104,8 @@ jobs:
       CONSUL_ACL_ENDPOINT: http://127.0.0.1:8501
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -123,6 +156,21 @@ jobs:
       - name: Diagnose ACL server startup only
         if: failure()
         run: docker logs "$CONSUL_ACL_CONTAINER" || true
+      - name: Capture ACL server diagnostics
+        if: always()
+        run: |
+          mkdir -p target/registry-ci/consul-acl
+          docker logs "$CONSUL_ACL_CONTAINER" > target/registry-ci/consul-acl/server.log 2>&1 || true
+      - name: Upload original ACL authorization evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consul-acl-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            otryx-registry/otryx-registry-consul/target/surefire-reports/**
+            target/registry-ci/consul-acl/server.log
+          if-no-files-found: warn
+          retention-days: 30
       - name: Cleanup ACL server
         if: always()
         run: docker rm -f "$CONSUL_ACL_CONTAINER" || true
