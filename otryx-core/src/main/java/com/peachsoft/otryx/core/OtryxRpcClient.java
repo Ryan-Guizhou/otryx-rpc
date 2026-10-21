@@ -25,6 +25,7 @@ import com.peachsoft.otryx.interceptor.RpcInvocation;
 import com.peachsoft.otryx.generated.RpcGeneratedInvocation;
 import com.peachsoft.otryx.loadbalance.LoadBalanceMetrics;
 import com.peachsoft.otryx.loadbalance.LoadBalancer;
+import com.peachsoft.otryx.observability.RpcDirectoryFailureReason;
 import com.peachsoft.otryx.observability.RpcMetadataPropagator;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.observability.RpcRetryExhaustionReason;
@@ -286,6 +287,94 @@ public final class OtryxRpcClient implements AutoCloseable {
      */
     public CompletionStage<Void> membershipReady() {
         return membershipReady;
+    }
+
+    /**
+     * 无远程 IO 查询已有 RPC 引用的可信本地目录与当前安全状态。
+     *
+     * <p>不会创建服务引用、注册成员、主动刷新 Metadata 或重新执行 Router。
+     * 原先真实业务选路失败仅在同一可信快照上记录，不携带 InstanceId/参数/地址。
+     *
+     * @param key 业务 ServiceKey；未引用的服务将返回 NOT_REFERENCED
+     * @return 不可变的有限诊断摘要
+     */
+    public RpcServiceDiagnosticSnapshot diagnose(ServiceKey key) {
+        Objects.requireNonNull(key, "key");
+        if (closed.get()) {
+            return diagnostic(key, RpcServiceDirectoryState.CLOSED,
+                    RpcDirectoryFailureReason.DIRECTORY_CLOSED, 0, 0, 0L);
+        }
+        ServiceDirectory directory = directories.get(key);
+        if (directory == null) {
+            return diagnostic(key, RpcServiceDirectoryState.NOT_REFERENCED,
+                    RpcDirectoryFailureReason.NONE, 0, 0, 0L);
+        }
+        if (!membershipReady.isDone() || membershipReady.isCompletedExceptionally()
+                || membershipReady.isCancelled()) {
+            return diagnostic(key, RpcServiceDirectoryState.MEMBERSHIP_NOT_READY,
+                    RpcDirectoryFailureReason.MEMBERSHIP_NOT_READY, 0, 0, 0L);
+        }
+        try {
+            ServiceDirectory.Selection selected = directory.selection();
+            RpcServiceDirectoryState state = switch (selected.status()) {
+                case NOT_READY -> RpcServiceDirectoryState.NOT_READY;
+                case HEALTHY -> RpcServiceDirectoryState.HEALTHY;
+                case LAST_KNOWN_GOOD -> RpcServiceDirectoryState.LAST_KNOWN_GOOD;
+                case STALE -> RpcServiceDirectoryState.STALE;
+                case CLOSED -> RpcServiceDirectoryState.CLOSED;
+            };
+            if (state == RpcServiceDirectoryState.CLOSED) {
+                return diagnostic(key, state, RpcDirectoryFailureReason.DIRECTORY_CLOSED, 0, 0, 0L);
+            }
+            if (state == RpcServiceDirectoryState.NOT_READY) {
+                return diagnostic(key, state, RpcDirectoryFailureReason.DIRECTORY_NOT_READY, 0, 0, 0L);
+            }
+            if (state == RpcServiceDirectoryState.STALE) {
+                return diagnostic(key, state, RpcDirectoryFailureReason.DIRECTORY_STALE, 0, 0, 0L);
+            }
+            ServiceInstance[] verified = selected.instances();
+            long revision = selected.candidate() == null ? 0L : selected.candidate().mappingRevision();
+            if (verified.length == 0) {
+                return diagnostic(key, state, RpcDirectoryFailureReason.VERIFIED_EMPTY, 0, 0, revision);
+            }
+            int available = 0;
+            for (ServiceInstance instance : verified) {
+                EndpointStats health = stats.get(instance.target());
+                if (health == null || health.available()) {
+                    available++;
+                }
+            }
+            RpcDirectoryFailureReason previous = directory.lastRoutingFailure(selected);
+            RpcDirectoryFailureReason reason = available == 0
+                    ? RpcDirectoryFailureReason.NO_HEALTHY_ENDPOINT : previous;
+            return diagnostic(key, state, reason, verified.length, available, revision);
+        } catch (RegistrySecurityException rejected) {
+            return diagnostic(key, RpcServiceDirectoryState.SECURITY_REJECTED,
+                    RpcDirectoryFailureReason.SECURITY_REJECTED, 0, 0, 0L);
+        }
+    }
+
+    private static RpcServiceDiagnosticSnapshot diagnostic(
+            ServiceKey key, RpcServiceDirectoryState state,
+            RpcDirectoryFailureReason reason, int verified, int available, long revision) {
+        return new RpcServiceDiagnosticSnapshot(key, state, reason, verified, available, revision);
+    }
+
+    /**
+     * 仅真实业务失败写入目录原因；首个逻辑 Attempt 最多一次指标/JFR 事件。
+     *
+     * @param reference 当前调用引用
+     * @param reason 固定失败原因
+     * @param selected 当前调用的已验证快照，允许为 null
+     * @param attempt 网络尝试序号
+     * @param localSelections 本地重选序号
+     */
+    private void recordDirectoryFailure(ClientReference reference, RpcDirectoryFailureReason reason,
+            ServiceDirectory.Selection selected, int attempt, int localSelections) {
+        reference.directory().recordRoutingFailure(reason, selected);
+        if (observer.enabled() && attempt == 1 && localSelections == 0) {
+            observer.onClientDirectoryFailure(reason);
+        }
     }
 
     private CompletionStage<Object> invoke0(
@@ -687,6 +776,8 @@ public final class OtryxRpcClient implements AutoCloseable {
             attemptChecked(reference, method, encodedArguments, propagatedMetadata, callContext,
                     deadlineNanos, attempt, localSelections, result);
         } catch (RpcAuthenticationException | RegistrySecurityException rejected) {
+            recordDirectoryFailure(reference, RpcDirectoryFailureReason.SECURITY_REJECTED,
+                    null, attempt, localSelections);
             observeClientAttempt(reference, method, null, attempt, 0L, RpcStatus.BAD_REQUEST, rejected, result);
             result.completeExceptionally(rejected);
         } catch (RuntimeException failure) {
@@ -716,6 +807,8 @@ public final class OtryxRpcClient implements AutoCloseable {
             governance.checkActive();
         }
         if (!membershipReady.isDone() || membershipReady.isCompletedExceptionally()) {
+            recordDirectoryFailure(reference, RpcDirectoryFailureReason.MEMBERSHIP_NOT_READY,
+                    null, attempt, localSelections);
             result.completeExceptionally(new RpcUnavailableException(
                     "RPC consumer application membership is not ready"));
             return;
@@ -745,6 +838,8 @@ public final class OtryxRpcClient implements AutoCloseable {
             requireVerifiedRoute(verifiedInstances, routed);
             instances = routed;
             if (routed.length == 0) {
+                recordDirectoryFailure(reference, RpcDirectoryFailureReason.ROUTER_FILTERED_ALL,
+                        selection, attempt, localSelections);
                 RpcUnavailableException unavailable =
                         new RpcUnavailableException("RPC router excluded all verified providers");
                 observeClientAttempt(reference, method, null, attempt, 0L, RpcStatus.UNAVAILABLE, unavailable, result);
@@ -758,6 +853,8 @@ public final class OtryxRpcClient implements AutoCloseable {
             requireVerifiedRoute(instances, controlled);
             instances = controlled;
             if (controlled.length == 0) {
+                recordDirectoryFailure(reference, RpcDirectoryFailureReason.GOVERNANCE_FILTERED_ALL,
+                        selection, attempt, localSelections);
                 RpcUnavailableException excluded = new RpcUnavailableException(
                         "RPC governance excluded all verified providers");
                 observeClientAttempt(reference, method, null, attempt, 0L,
@@ -769,6 +866,15 @@ public final class OtryxRpcClient implements AutoCloseable {
         ServiceInstance selected = instances.length == 0
                 ? null : loadBalancer.select(instances, loadMetrics);
         if (selected == null) {
+            RpcDirectoryFailureReason cause = switch (selection.status()) {
+                case NOT_READY -> RpcDirectoryFailureReason.DIRECTORY_NOT_READY;
+                case STALE -> RpcDirectoryFailureReason.DIRECTORY_STALE;
+                case CLOSED -> RpcDirectoryFailureReason.DIRECTORY_CLOSED;
+                case LAST_KNOWN_GOOD, HEALTHY -> instances.length == 0
+                        ? RpcDirectoryFailureReason.VERIFIED_EMPTY
+                        : RpcDirectoryFailureReason.NO_HEALTHY_ENDPOINT;
+            };
+            recordDirectoryFailure(reference, cause, selection, attempt, localSelections);
             String reason = switch (selection.status()) {
                 case NOT_READY -> "Registry directory has no initial snapshot for ";
                 case STALE -> "Registry directory freshness budget exceeded for ";
@@ -800,6 +906,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             return;
         }
 
+        reference.directory().clearRoutingFailure();
         if (java.util.Arrays.stream(instances).noneMatch(selected::equals)) {
             throw new IllegalStateException("LoadBalancer selected an instance outside the verified directory");
         }

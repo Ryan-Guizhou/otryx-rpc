@@ -57,6 +57,13 @@ final class RpcResponseEncodingBudget {
         return highWaterBytes.get();
     }
 
+    /** 返回编码输出预留量和高水位；内部递增时允许无锁读取的一瞬间错位。 */
+    RpcResponseBufferDiagnosticSnapshot diagnostics() {
+        long current = reservedBytes.get();
+        return new RpcResponseBufferDiagnosticSnapshot(
+                current, Math.max(current, highWaterBytes.get()), totalBytes, singleBytes);
+    }
+
     /** 检查包装后的编码容量拒绝，不能公开第三方 Codec 异常文本。 */
     static boolean isCapacityExceeded(Throwable error) {
         Throwable current = error;

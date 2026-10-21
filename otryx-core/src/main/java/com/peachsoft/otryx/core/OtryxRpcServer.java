@@ -205,6 +205,15 @@ public final class OtryxRpcServer implements AutoCloseable {
     }
 
     /**
+     * 获取 Provider 响应编码阶段的配额、水位和最大预留，不包含完整 JVM 内存。
+     *
+     * @return 不含业务输出和原始 Metadata 的资源诊断
+     */
+    public RpcResponseBufferDiagnosticSnapshot responseEncodingDiagnostics() {
+        return responseEncodingBudget.diagnostics();
+    }
+
+    /**
      * 注册本地服务实现。
      *
      * @param api 服务接口

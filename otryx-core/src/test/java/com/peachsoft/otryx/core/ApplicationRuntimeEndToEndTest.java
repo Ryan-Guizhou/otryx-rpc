@@ -15,6 +15,7 @@ import com.peachsoft.otryx.transport.RpcTransportSecurityDescriptor;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.api.RpcUnavailableException;
+import com.peachsoft.otryx.observability.RpcDirectoryFailureReason;
 import com.peachsoft.otryx.codec.RpcCodec;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
@@ -59,6 +60,29 @@ class ApplicationRuntimeEndToEndTest {
     private static final int MAX_POLLS = 60;
     private static final long POLL_MILLIS = 100L;
     private static final Duration CONTROL_TIMEOUT = Duration.ofSeconds(3);
+
+    @Test
+    void diagnosticsAreLocalAndNeverCreateUnknownSubscriptions() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            ServiceKey key = key(Payments.class);
+            RpcServiceDiagnosticSnapshot before = fixture.client.diagnose(key);
+            assertEquals(RpcServiceDirectoryState.NOT_REFERENCED, before.directoryState());
+            assertEquals(RpcDirectoryFailureReason.NONE, before.reason());
+
+            fixture.server.registerService(Payments.class, new PaymentsImpl(), VERSION, GROUP);
+            fixture.client.membershipReady().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            fixture.server.start().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            fixture.client.refer(Payments.class, VERSION, GROUP);
+            awaitProviders(fixture, Payments.class);
+            RpcServiceDiagnosticSnapshot local = fixture.client.diagnose(key);
+            assertTrue(local.directoryState() == RpcServiceDirectoryState.HEALTHY
+                    || local.directoryState() == RpcServiceDirectoryState.NOT_READY);
+            assertEquals(RpcServiceDirectoryState.NOT_REFERENCED,
+                    fixture.client.diagnose(key(Inventory.class)).directoryState());
+            assertEquals(1, fixture.registry.lookup(fixture.consumerKey)
+                    .toCompletableFuture().join().instances().size());
+        }
+    }
 
     @Test
     void threeContractsUseOneProviderMemberAndIndependentPureConsumerMember() throws Exception {

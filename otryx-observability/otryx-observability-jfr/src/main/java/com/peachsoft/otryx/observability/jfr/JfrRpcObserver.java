@@ -6,6 +6,7 @@ import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.observability.RpcCertificateReloadOutcome;
 import com.peachsoft.otryx.observability.RpcConnectionRole;
+import com.peachsoft.otryx.observability.RpcDirectoryFailureReason;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.observability.RpcRegistryRecoveryAction;
 import com.peachsoft.otryx.observability.RpcSecurityMode;
@@ -40,6 +41,13 @@ public final class JfrRpcObserver implements RpcObserver {
         }
         this.slowThresholdNanos =
                 slowThreshold.toNanos();
+    }
+
+    @Override
+    public void onClientDirectoryFailure(RpcDirectoryFailureReason reason) {
+        if (reason != null && reason != RpcDirectoryFailureReason.NONE) {
+            recovery("directory", reason.name(), "FAILURE", 0L);
+        }
     }
 
     @Override
