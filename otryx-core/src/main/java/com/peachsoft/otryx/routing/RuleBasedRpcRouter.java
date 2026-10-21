@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/21 13:38
  */
-@Extension("rules")
+@Extension(RpcRouter.DEFAULT_EXTENSION)
 public final class RuleBasedRpcRouter implements RpcRouter {
     /** Provider 实例属性中的业务区域名称。 */
     public static final String ZONE_ATTRIBUTE = "zone";

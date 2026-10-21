@@ -17,9 +17,11 @@ import java.util.Map;
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/21 13:38
  */
-@SPI("rules")
+@SPI(RpcRouter.DEFAULT_EXTENSION)
 @FunctionalInterface
 public interface RpcRouter {
+    /** 具名默认 SPI 扩展标识。 */
+    String DEFAULT_EXTENSION = "rules";
 
     /**
      * 根据当前本地规则选择可进入负载均衡的可信实例子集。

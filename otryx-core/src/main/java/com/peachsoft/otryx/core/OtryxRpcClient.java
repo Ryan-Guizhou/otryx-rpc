@@ -1651,12 +1651,6 @@ public final class OtryxRpcClient implements AutoCloseable {
         }
 
         /**
-         * 设置代理工厂。
-         *
-         * @param value 代理工厂
-         * @return Consumer Builder
-         */
-        /**
          * 配置路由 SPI，先对已验证应用候选做本地过滤，然后执行负载均衡。
          *
          * @param value 非 null 路由器，热路径不得远端 IO
@@ -1667,6 +1661,12 @@ public final class OtryxRpcClient implements AutoCloseable {
             return this;
         }
 
+        /**
+         * 设置代理工厂。
+         *
+         * @param value 代理工厂
+         * @return Consumer Builder
+         */
         public Builder proxyFactory(ProxyFactory value) {
             this.proxyFactory = value;
             return this;
