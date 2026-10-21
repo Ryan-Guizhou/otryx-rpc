@@ -81,6 +81,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
     private volatile VertxTlsSupport.PreparedMaterial tlsMaterial;
     private VertxTlsSupport.PreparedMaterial pendingTlsMaterial;
     private final Set<ServerConnection> connections = ConcurrentHashMap.newKeySet();
+    private final Set<PendingTlsConnection> pendingTlsConnections = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean draining = new AtomicBoolean();
     private final AtomicBoolean closingServer = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -121,6 +122,9 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         VertxTlsSupport.configureServer(serverOptions, tlsMaterial);
         if (options.security().enabled()) {
             serverOptions.setSslEngineOptions(Objects.requireNonNull(engineOptions, "engineOptions"));
+            // TLS 材料仍预配置于 NetServer，接收 TCP 后先取得租约，再主动触发 TLS。
+            // 自动 SSL 连接回调发生在 TLS 完成后，无法约束预握手资源。
+            serverOptions.setSsl(false);
         }
     }
 
@@ -196,6 +200,21 @@ final class VertxRpcTransportServer implements RpcTransportServer {
             socket.close();
             return;
         }
+        if (options.security().enabled()) {
+            // 此时 TLS Engine 尚不存在，预握手与 HELLO 共享有界握手租约。
+            PendingTlsConnection pending = new PendingTlsConnection(
+                    socket, handler, connectionLease, handshakeLease);
+            pendingTlsConnections.add(pending);
+            pending.begin();
+        } else {
+            establishConnection(socket, handler, connectionLease, handshakeLease, 0L);
+        }
+    }
+
+    /** 只有真实 TLS 已完成并确认属于当前安全代次，才允许进入 RPC HELLO。 */
+    private void establishConnection(NetSocket socket, RpcRequestHandler handler,
+            TransportAdmissionController.Lease connectionLease,
+            TransportAdmissionController.Lease handshakeLease, long tlsStartedNanos) {
         try {
             VertxTlsSupport.ConnectionSecurity security = tlsMaterial.verifyConnection(socket, null);
             ServerConnection connection = new ServerConnection(socket, handler, connectionLease, handshakeLease,
@@ -207,22 +226,90 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 }
                 connections.add(connection);
             }
-            observeTlsHandshake(socket, null);
+            observeTlsHandshake(socket, null, tlsStartedNanos);
         } catch (RuntimeException error) {
             handshakeLease.close();
             connectionLease.close();
             socket.close();
-            observeTlsHandshake(socket, VertxTlsSupport.connectionFailure(error));
+            observeTlsHandshake(socket, VertxTlsSupport.connectionFailure(error), tlsStartedNanos);
             LOGGER.warn("RPC admission setup failed: errorType={}", error.getClass().getName());
         }
     }
 
-    private void observeTlsHandshake(NetSocket socket, Throwable error) {
+    /**
+     * 预握手 Socket 的唯一配额所有者；无论 TLS 失败、取消、断连或服务器排空，
+     * 都在建立 RPC Connection 之前归还额度。成功升级只转交所有权。
+     */
+    private final class PendingTlsConnection {
+        private final NetSocket socket;
+        private final RpcRequestHandler handler;
+        private final TransportAdmissionController.Lease connectionLease;
+        private final TransportAdmissionController.Lease handshakeLease;
+        private final long startedAtNanos = System.nanoTime();
+        private final AtomicBoolean terminal = new AtomicBoolean();
+        private long timeoutId = -1L;
+
+        private PendingTlsConnection(NetSocket socket, RpcRequestHandler handler,
+                TransportAdmissionController.Lease connectionLease,
+                TransportAdmissionController.Lease handshakeLease) {
+            this.socket = socket;
+            this.handler = handler;
+            this.connectionLease = connectionLease;
+            this.handshakeLease = handshakeLease;
+        }
+
+        private void begin() {
+            socket.closeHandler(ignored -> reject(
+                    new RpcUnavailableException("RPC TLS connection closed")));
+            socket.exceptionHandler(error -> reject(VertxTlsSupport.connectionFailure(error)));
+            timeoutId = vertx.setTimer(Math.max(1L, options.security().handshakeTimeout().toMillis()),
+                    ignored -> reject(new RpcTimeoutException("RPC TLS handshake timed out")));
+            try {
+                socket.upgradeToSsl().onComplete(result -> {
+                    if (result.failed()) {
+                        reject(VertxTlsSupport.connectionFailure(result.cause()));
+                        return;
+                    }
+                    if (!terminal.compareAndSet(false, true)) {
+                        socket.close();
+                        return;
+                    }
+                    finishPending();
+                    establishConnection(socket, handler, connectionLease, handshakeLease, startedAtNanos);
+                });
+            } catch (RuntimeException error) {
+                reject(VertxTlsSupport.connectionFailure(error));
+            }
+        }
+
+        private void reject(Throwable reason) {
+            if (!terminal.compareAndSet(false, true)) {
+                return;
+            }
+            finishPending();
+            handshakeLease.close();
+            connectionLease.close();
+            socket.close();
+            observeTlsHandshake(socket, reason, startedAtNanos);
+            checkDrainComplete();
+        }
+
+        private void finishPending() {
+            if (timeoutId >= 0L) {
+                vertx.cancelTimer(timeoutId);
+                timeoutId = -1L;
+            }
+            pendingTlsConnections.remove(this);
+        }
+    }
+
+    private void observeTlsHandshake(NetSocket socket, Throwable error, long startedAtNanos) {
         if (options.security().enabled() && options.observer().enabled()) {
             RpcEndpoint remote = new RpcEndpoint(socket.remoteAddress().host(),
                     Math.max(socket.remoteAddress().port(), 1));
+            long durationNanos = startedAtNanos == 0L ? 0L : Math.max(0L, System.nanoTime() - startedAtNanos);
             options.observer().onTlsHandshakeCompleted(RpcConnectionRole.SERVER, remote,
-                    options.security().mode(), 0L, error);
+                    options.security().mode(), durationNanos, error);
         }
     }
 
@@ -1013,6 +1100,9 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 return created;
             }
         }
+        // 未通过 TLS 的 Socket 不具备业务连接，排空时必须立即拒绝并归还额度。
+        pendingTlsConnections.forEach(pending ->
+                pending.reject(new RpcUnavailableException("RPC transport server is draining")));
         connections.forEach(ServerConnection::beginDrain);
         drainTimerId = vertx.setTimer(Math.max(1L, timeout.toMillis()), ignored -> forceDrainTimeout());
         checkDrainComplete();
@@ -1020,12 +1110,14 @@ final class VertxRpcTransportServer implements RpcTransportServer {
     }
 
     private void checkDrainComplete() {
-        if (draining.get() && connections.isEmpty()) {
+        if (draining.get() && connections.isEmpty() && pendingTlsConnections.isEmpty()) {
             finishDrain();
         }
     }
 
     private void forceDrainTimeout() {
+        pendingTlsConnections.forEach(pending ->
+                pending.reject(new RpcTimeoutException("RPC transport drain timed out")));
         connections.forEach(connection -> connection.socket.close());
         finishDrain();
     }
@@ -1058,7 +1150,12 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         return admission.activeConnections();
     }
 
-    /** 供受控网络测试观察协议握手租约数量。 */
+    /** 供受控网络测试观察 TLS 预握手 Socket 数量。 */
+    int pendingTlsHandshakes() {
+        return pendingTlsConnections.size();
+    }
+
+    /** 供受控网络测试观察 TLS 预握手与协议 HELLO 共享租约数量。 */
     int admittedHandshakes() {
         return admission.activeHandshakes();
     }
@@ -1094,6 +1191,8 @@ final class VertxRpcTransportServer implements RpcTransportServer {
             cancelTlsReload();
             cancelIdentitySweep();
         }
+        pendingTlsConnections.forEach(pending ->
+                pending.reject(new RpcUnavailableException("RPC transport server is closing")));
         connections.forEach(ServerConnection::closeLocally);
         server.close();
         vertx.close();

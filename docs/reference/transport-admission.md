@@ -1,6 +1,6 @@
 # Transport 接入容量与生命周期
 
-状态：**U03-A 连接/HELLO 限额、U03-B 全局残帧预算与超时、U03-C Provider 单连接 Inflight 限额均已实现**；TLS 握手前资源治理不在这些限额覆盖范围内。
+状态：**U03-A 连接/HELLO 限额、U03-B 残帧预算、U03-C 单连接 Inflight 已实现**。V2-14 候选实现将 TLS Engine 创建前的 Socket/握手计数纳入同一预算；生效与否以 #141 PR 的真实 TLS/mTLS CI 验收为准。
 
 ## 目的与边界
 
@@ -8,8 +8,8 @@ Provider 在进入 RPC Core Admission 前需要抵御大量连接与停留在握
 
 | 预算 | 默认值 | 实施状态及实际含义 |
 |---|---:|---|
-| `maxConnections` | 4096 | 已启用：Vert.x `NetSocket` 连接回调已接入且未关闭的连接数 |
-| `maxHandshakes` | 1024 | 已启用：在 `NetSocket` 回调后开始，直至 HELLO_ACK 成功写出或连接关闭 |
+| `maxConnections` | 4096 | TLS 启用时在原始 TCP `NetSocket` 接入、`upgradeToSsl()` 前预留连接；其他模式在普通 TCP 接入时预留 |
+| `maxHandshakes` | 1024 | TLS 启用时覆盖 TLS 预握手及后续 HELLO，只有 HELLO_ACK 成功才释放；TLS 失败/超时或 Socket 关闭均释放 |
 | `maxBufferedPartialFrameBytes` | 67108864 | 已启用：每个 Transport Server 实例的残帧保留字节额度（追加前预留、消费后释放） |
 | `partialFrameTimeout` | 10s | 已启用：残帧首次驻留到期关闭连接；追加小碎片不重置时限 |
 | `maxInflightPerConnection` | 1024 | 已启用：每条 Provider NetSocket 独立跟踪未结束的 REQUEST 数；容量耗尽返回 OVERLOADED，不运行 Handler |
@@ -21,24 +21,25 @@ Provider 在进入 RPC Core Admission 前需要抵御大量连接与停留在握
 
 ```mermaid
 flowchart TD
-  A["Vert.x NetSocket 回调（TLS 之后）"] --> B{"连接配额足够？"}
-  B -->|否| R["关闭 Socket"]
-  B -->|是| C["预留 Connection Lease"]
-  C --> D{"OTRYX 握手配额足够？"}
-  D -->|否| E["释放 Connection Lease"]
-  E --> R
-  D -->|是| F["预留 Handshake Lease"]
-  F --> G["处理 HELLO 与写入 HELLO_ACK"]
-  G -->|ACK 写入成功| H["释放 Handshake Lease，保留 Connection Lease"]
-  G -->|无效 HELLO 或握手超时| I["关闭 Socket"]
-  I --> J["closeHandler 幂等释放两个 Lease"]
-  H --> K["业务请求与后续连接生命周期"]
-  K --> J
+  A["TCP NetSocket 回调（未创建 TLS Engine）"] --> B{"连接容量"}
+  B -->|耗尽| R["关闭 Socket"]
+  B -->|准入| C["预留 Connection Lease"]
+  C --> D{"共享 TLS/HELLO 握手容量"}
+  D -->|耗尽| E["释放连接额度并拒绝"]
+  D -->|准入| F["预留 Handshake Lease"]
+  F --> G{"配置启用了 TLS？"}
+  G -->|是| H["NetSocket.upgradeToSsl"]
+  H -->|失败、超时、断连、Drain| I["预握手所有者幂等释放两个 Lease"]
+  H -->|真实握手成功并验证身份| J["进入 RPC HELLO"]
+  G -->|否| J
+  J --> K{"HELLO_ACK 成功"}
+  K -->|否| L["关闭 Socket，归还两个 Lease"]
+  K -->|是| M["释放 Handshake Lease，连接 Lease 持续持有"]
+  M --> N["业务与真实连接关闭后释放 Connection Lease"]
 ```
-
 成功 HELLO 时只归还握手额度，连接仍占用额度直至真实连接关闭。握手失败、Socket 异常、握手超时、Drain、主动关闭最终都通过同一个幂等所有权释放点收尾。应用层早期关闭不会把 Transport 资源视作已经释放。
 
-**安全限制：** 当开启 TLS/mTLS 时，TLS 引擎可能在 Vert.x `NetSocket` 回调前分配资源。这两项配额不能限制 TCP backlog、内核 socket、TLS 预握手内存，也不等于整个 JVM 的硬内存上限；不要将 `maxConnections` 宣称为 TLS 握手攻击的完整防护策略。
+**边界：** TLS 启用时监听器先以 `ssl=false` 接收 TCP，EventLoop 在本地取得连接与共享握手配额之后立即 `upgradeToSsl()`。未经 TLS 的明文 RPC 请求不会交付给 Handler。TLS 失败、超时、断连或 Drain 由预握手对象一次性释放额度。手动握手仍依赖 Vert.x/JSSE 的超时和内核安全设置：计数不限制 TCP backlog、内核 Socket 缓冲、每个 TLS Engine 的峰值或整个 JVM Heap/DirectMemory，不能称为全 JVM 硬内存界。安全 Profile、身份/证书绑定、热更新仍需真实 mTLS E2E 验证。
 
 ## Spring Boot 配置
 
@@ -60,6 +61,7 @@ otryx:
 
 - `TransportAdmissionControllerTest`：跨线程 CAS 限额、拒绝后的恢复和两次释放不产生负计数；
 - `VertxRpcTransportAdmissionTest`：真实 TCP 连接限额、HELLO 配额失败与关闭后的恢复；
+- `VertxTlsPreHandshakeAdmissionTest`：真实 mTLS 监听端的无 ClientHello 洪峰、越限立即拒绝、关闭/Drain 归还，以及恢复后合法 TLS RPC；
 - `OtryxRpcAutoConfigurationTest`：Spring 配置绑定与非法数值拒绝。
 
 U03-B 已在 `FrameAccumulator` 追加不完整数据前预留全局字节预算，在完整帧消费、错误、超时和关闭时立即归还。正常完整帧继续走无全局计数与中间累积复制的快速路径。残帧超时从开始保留的时间起算；如果交付了一帧而仍有下一帧残留，重启对应的新驻留时钟，小碎片追加不会无限续期。

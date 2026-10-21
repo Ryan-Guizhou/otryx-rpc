@@ -40,14 +40,14 @@
 
 | 配置（相对 `otryx.rpc.transport`） | 默认值 | 实际约束 |
 |---|---|---|
-| `admission.max-connections` | 4096 | NetSocket 回调后已接入连接；不直接覆盖 TLS 预握手、TCP backlog 或 OS Socket 内存 |
-| `admission.max-handshakes` | 1024 | 同时进行的 OTRYX HELLO 协议握手；失败关闭连接并归还幂等额度 |
+| `admission.max-connections` | 4096 | TLS 模式在原始 TCP NetSocket 进入时预留，先于 TLS Engine/握手；不控制 OS backlog/FD 内存 |
+| `admission.max-handshakes` | 1024 | TLS 预握手和 OTRYX HELLO 共用握手额度（从 TCP 接入到 HELLO_ACK）；失败/超时幂等释放 |
 | `admission.max-buffered-partial-frame-bytes` | 67108864 | Transport 实例内所有残帧逻辑字节；追加前预留，消费或关闭后归还 |
 | `admission.partial-frame-timeout` | 10s | 长期没有完整帧交付的连接；少量追加字节不会无限延长驻留 |
 | `max-inflight-per-connection` | 1024 | 单个 Provider 连接内尚未结束的请求；超限返回 `OVERLOADED`，不进入 Handler |
 | `admission.max-buffered-response-bytes` | 67108864 | Transport Server 已编码且待写的 RESPONSE 字节；写 Future 终态或断连后释放 |
 
-CANCEL 可以结束连接层的逻辑请求，不能证明业务或授权策略已经停止。真正执行的资源继续受 Core 所有权约束。待写响应额度耗尽时拒绝新写入，Drain 等待尚未完成的写入；这一预算不控制 Codec 编码峰值、TLS、Netty Direct Memory 或操作系统缓冲。
+CANCEL 可以结束连接层的逻辑请求，不能证明业务或授权策略已经停止。真实 TLS 握手不自动在 Vert.x 回调前执行：先进行有限的 TCP 准入，再主动升级，拒绝明文应用数据。真正执行的资源继续受 Core 所有权约束。待写响应额度耗尽时拒绝新写入，Drain 等待尚未完成的写入；这一预算不控制 Codec 编码峰值、TLS、Netty Direct Memory 或操作系统缓冲。
 
 Codec 在网络 Profile 下还必须声明正数的载荷大小、对象图深度和估算图内存上限，并在 DTO 实例化前验证载荷。这些声明不是编码分配或 JVM Heap 的硬内存租约。详见 [Transport 接入容量](reference/transport-admission.md) 与 [Codec 能力模型](../otryx-core/src/main/java/com/peachsoft/otryx/codec/RpcCodecSecurityDescriptor.java)。
 
