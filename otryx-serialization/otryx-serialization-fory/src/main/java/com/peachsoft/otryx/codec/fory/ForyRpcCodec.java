@@ -3,6 +3,7 @@ package com.peachsoft.otryx.codec.fory;
 import com.peachsoft.otryx.api.RpcContractTypeModel;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.RpcTypeRegistry;
+import com.peachsoft.otryx.codec.RpcBoundedResultMethodCodec;
 import com.peachsoft.otryx.codec.RpcCodec;
 import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecSecurityDescriptor;
@@ -193,7 +194,7 @@ public final class ForyRpcCodec implements RpcCodec {
     }
 
     private final class ForyMethodCodec
-            implements RpcMethodCodec {
+            implements RpcBoundedResultMethodCodec {
 
         @Override
         public RpcCodecSecurityDescriptor securityDescriptor() {
@@ -234,6 +235,17 @@ public final class ForyRpcCodec implements RpcCodec {
         @Override
         public byte[] encodeResult(Object value) {
             return encodeChecked(value);
+        }
+
+        /**
+         * 直接写入调用者的有界 OutputStream，避免在 Codec 出口创建无额度的完整结果数组。
+         *
+         * @param value 实际业务返回值
+         * @param output 调用方预留容量的输出流
+         */
+        @Override
+        public void encodeResultTo(Object value, java.io.OutputStream output) {
+            fory.serialize(output, value);
         }
 
         @Override

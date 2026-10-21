@@ -410,6 +410,9 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .maxConcurrent(serverProperties.getMaxConcurrent())
                 .admissionOptions(providerAdmissionOptions(
                         serverProperties.getAdmission()))
+                .responseEncodingLimits(
+                        serverProperties.getEncoding().getMaxBufferedBytes(),
+                        serverProperties.getEncoding().getMaxResponseBytes())
                 .drainTimeout(serverProperties.getDrainTimeout())
                 .controlPlaneTimeout(serverProperties.getControlPlaneTimeout())
                 .executionOptions(executionOptions)

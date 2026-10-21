@@ -1,6 +1,6 @@
 # V2 剩余工作连续实施计划
 
-> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。截至 2026-10-21：#140 已完成并合并，[PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 的最终 Head 15/15 workflows、19/19 checks 通过；准确合并 main@`b655249d295992b4632c0b1a6019af8a7cc5b89a` 的 16/16 checks 通过。下列 revision 1–9 失败与修复记录保留为历史证据，不代表当前 HEAD 失败状态。后续 #141–#147 未通过各自验收前仍为未完成。
+> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。截至 2026-10-21：#140 已完成并合并，[PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 的最终 Head 15/15 workflows、19/19 checks 通过；准确合并 main@`b655249d295992b4632c0b1a6019af8a7cc5b89a` 的 16/16 checks 通过。下列 revision 1–9 失败与修复记录保留为历史证据，不代表当前 HEAD 失败状态。随后 #142 已在 PR #162 准确 Head `7c69fb9` 的 17/17 检查和 main@`61ef70c29aa1bbc6eb633f57997d9b64cdfc12c9` 的 16/16 检查通过后合并，Issue 已关闭；#141、#143–#147 尚未验收。
 
 **目标：** 完成应用级注册唯一入口及其生产化能力，保持可运行、可验证、可追溯的主线。
 
@@ -115,11 +115,11 @@ revision 6 准确 `ae9a573a660d27d75f520e694a1f07cdc5e1bb08` 的全部 15 条工
 
 ## 3. #141：连接、编码与取消资源上界
 
-依赖 #140。检查 TLS 预握手配额、Frame/Codec 字节峰值、慢消费和异步取消；每项新增边界先有可复现失败用例，再验证拒绝与实际释放。记录内存、Future、Lease、线程及连接，禁止以无证据零拷贝变更替代预算控制。
+依赖 #140。开发中的 [PR #163](https://github.com/Ryan-Guizhou/otryx-rpc/pull/163) 从已验证 main@61ef70c2 建立草稿：TLS 原始 TCP accept 前移 Handshake/Connection Lease、fail/close/Drain 所有权；Provider Fory 有界流式编码输出、全局增长前字节预留、Spring 配置和负/并发测试。准确 PR Head 全 CI、Heap/DirectMemory/FD 高水位、取消异步所有权矩阵均尚待验收，不可将阶段性实现宣称 #141 completed。默认不改 Wire、依赖版本或单一 Starter。
 
 ## 4. #142：Router SPI
 
-依赖 #139，已在独立工作区开始实现。在 Manifest/Schema/健康过滤之后、LB 之前实现应用/tag/zone/gray/weight 本地路由快照。验证 10%/90% 容差、tag 隔离、空候选错误、热更与回滚，Consumer 成员绝不进入候选集。集成时以 #140 合并后的 main 重新验证安全边界。
+已完成并合并：[PR #162](https://github.com/Ryan-Guizhou/otryx-rpc/pull/162) 准确 Head `7c69fb9991d01c00eeadfd012a11c17269d20be5` 的 13/13 workflows、17/17 checks 成功，合并主线 `61ef70c29aa1bbc6eb633f57997d9b64cdfc12c9` 另有 12/12 workflows、16/16 checks 成功。Core Router SPI 和版本化规则、完整 ApplicationKey 过滤、标签/zone/release/gray 应用优先顺序、可信候选防伪、真实成员属性发布、Starter 与双语 Quickstart 已通过门禁。权重仍由下游 P2C/EWMA 处理，而非独立 Router 权重字段。
 
 ## 5. #143：Interceptor SPI
 

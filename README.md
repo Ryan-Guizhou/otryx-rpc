@@ -30,7 +30,7 @@
 - **Registry**：Memory、Etcd、Nacos、Consul、Eureka；Consumer 热路径读取本地验证目录。后端的网络安全支持范围按实际 Adapter 区分。
 - **Routing / Load Balancing**：应用级 Router SPI、本地版本化规则、应用优先级、标签/区域/发布版本与 10%/90% 灰度，先过滤再经 P2C + EWMA 负载均衡；路由标签不构成授权依据。
 - **Resilience**：方法级/单次超时、父级单调 Deadline 预算传播、显式幂等 Retry、Retry Budget、Circuit Breaker、Outlier Ejection、Provider Admission。
-- **Execution**：Virtual Thread、CPU 有界资源；Fory Codec 与 Stable Type ID。
+- **Execution / Bounds**：Virtual Thread、CPU 有界资源、TLS 前握手准入及幂等释放；Provider 流式输出编码具独立字节预算，Fory Codec 与 Stable Type ID。
 - **Observability**：Micrometer、OpenTelemetry、JFR、Grafana 和 Prometheus 示例配置。
 - **Engineering**：JMH、10k logical-concurrency soak harness、Chaos、独立 JVM E2E 与兼容性验证。
 
@@ -137,6 +137,8 @@ Nacos 的 Manifest/Mapping 读取只接受远端查询结果及其权威 MD5，S
 先通过项目现有准入、背压、超时、重试、TLS 与可观测性规范验证目标环境；不可将 GitHub shared runner 的 smoke 结果解释为生产吞吐、p99 或容量 SLO。
 
 [性能证据](docs/reference/performance-evidence.md) · [容量规划](docs/reference/capacity-planning.md) · [可观测性](docs/observability.md)
+
+生产级 `NETWORK_MTLS` 在 Provider 绑定方法时要求 `RpcBoundedResultMethodCodec`，禁止仅依赖先完整分配 Payload 的默认 Codec；Fory 已实现有界 OutputStream，最终 Wire Frame 创建前另预留瞬时内存配额。可信开发模式仍可使用兼容适配；该防护不等于全 JVM Heap/DirectMemory 的硬上限，详见 [Transport 资源说明](docs/reference/transport-admission.md)。
 
 <!-- doc-section:documentation -->
 ## 文档

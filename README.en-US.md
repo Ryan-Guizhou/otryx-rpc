@@ -30,7 +30,7 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 - **Registry**: Memory, Etcd, Nacos, Consul, Eureka; the consumer hot path reads a locally verified directory. Network security support depends on the actual adapter.
 - **Routing / load balancing**: application-aware Router SPI, versioned local rules, application priority, labels, zones, deployment releases and percentage-based canary routing, followed by P2C + EWMA. Routing labels never grant authorization.
 - **Resilience**: method/per-call timeouts, inherited monotonic deadline budgets, explicitly idempotent retries, retry budget, circuit breaker, outlier ejection and provider admission.
-- **Execution**: virtual threads, bounded CPU resources, Fory and stable type IDs.
+- **Execution / bounds**: virtual threads, bounded CPU resources, pre-TLS admission with idempotent cleanup, plus a bounded Provider encoding output buffer. Fory and stable type IDs.
 - **Observability**: Micrometer, OpenTelemetry, JFR and Grafana / Prometheus examples.
 - **Engineering**: JMH, 10k logical-concurrency soak harness, chaos and independent-process tests.
 
@@ -137,6 +137,8 @@ See [Starter guide](docs/reference/starter.md) and [Production configuration](do
 Validate deadline, admission, backpressure, retries, TLS and observability against your actual workloads. Shared CI-runner smoke results are not production throughput, p99 or capacity claims.
 
 [Performance evidence](docs/reference/performance-evidence.md) · [Capacity planning](docs/reference/capacity-planning.md) · [Observability](docs/observability.md)
+
+Production `NETWORK_MTLS` Providers require `RpcBoundedResultMethodCodec` during method binding, rejecting the default full-array result adapter. Fory writes to a bounded OutputStream; final Wire Frame construction also reserves a temporary frame budget. Trusted development mode retains the legacy adapter. This is not a global JVM heap/direct-memory bound; see [Transport resource ownership](docs/reference/transport-admission.md).
 
 <!-- doc-section:documentation -->
 ## Documentation

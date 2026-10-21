@@ -514,3 +514,18 @@ otryx:
 ```
 
 The default empty ruleset does not filter Providers. To use deployment labels, zones, canary routing or explicit application selection, provide a `RuleBasedRpcRouter` Bean and atomically publish a `RpcRoutingSnapshot`. See the [routing guide and security boundaries](../docs/reference/routing.md). This is not a new executable E2E scenario; Core Router tests cover canary distribution and snapshot changes.
+
+## Optional Provider response encoding limits
+
+The following settings bound **streaming output buffer capacity**, separate from the transport's queued response budget. They do not bound Fory's internal object graph, temporary frame copies, TLS or Netty direct memory:
+
+```yaml
+otryx:
+  rpc:
+    server:
+      encoding:
+        max-buffered-bytes: 67108864
+        max-response-bytes: 16777216
+```
+
+Oversized payloads and exhausted output reservations are rejected as `OVERLOADED`. This does not prove that arbitrary user work stopped when a request was cancelled. See [Transport admission and limitations](../docs/reference/transport-admission.md).

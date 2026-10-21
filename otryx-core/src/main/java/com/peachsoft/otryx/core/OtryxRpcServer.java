@@ -92,6 +92,7 @@ public final class OtryxRpcServer implements AutoCloseable {
     private final int advertisedPort;
     private final int maxConcurrent;
     private final RpcProviderAdmissionOptions admissionOptions;
+    private final RpcResponseEncodingBudget responseEncodingBudget;
     private volatile ProviderAdmissionController admission;
     private final Duration drainTimeout;
     private final Duration controlPlaneTimeout;
@@ -139,6 +140,8 @@ public final class OtryxRpcServer implements AutoCloseable {
         this.admissionOptions = Objects.requireNonNull(
                 builder.admissionOptions,
                 "admissionOptions");
+        this.responseEncodingBudget = new RpcResponseEncodingBudget(
+                builder.maxBufferedEncodingBytes, builder.maxSingleResponseBytes);
         this.drainTimeout = Objects.requireNonNull(
                 builder.drainTimeout,
                 "drainTimeout");
@@ -954,11 +957,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                         markWorkFinished);
                 return;
             }
-            byte[] responseBytes = response(
-                    request,
-                    methodCodec.codecId(),
-                    RpcStatus.OK,
-                    methodCodec.encodeResult(value));
+            byte[] responseBytes = encodedResponse(request, methodCodec, value);
             completeAuthorizedResponse(request, result, responseBytes, callContext, grant);
         } catch (Throwable error) {
             completeInvocationFailure(request, result, error);
@@ -1117,11 +1116,7 @@ public final class OtryxRpcServer implements AutoCloseable {
             if (!permitResponse(request, result, callContext, grant)) {
                 return;
             }
-            byte[] responseBytes = response(
-                    request,
-                    methodCodec.codecId(),
-                    RpcStatus.OK,
-                    methodCodec.encodeResult(value));
+            byte[] responseBytes = encodedResponse(request, methodCodec, value);
             completeAuthorizedResponse(request, result, responseBytes, callContext, grant);
         } catch (Throwable completionError) {
             completeInvocationFailure(
@@ -1182,11 +1177,42 @@ public final class OtryxRpcServer implements AutoCloseable {
         return current;
     }
 
+    /**
+     * 流式写入全局有界编码缓冲，完整构造 Wire Frame 后再释放局部输出额度。
+     *
+     * <p>NETWORK_MTLS 的方法级 Codec 必须声明流式编码契约；
+     * 可信开发环境的默认兼容 Codec 仍可能预分配其内部 Payload。
+     */
+    private byte[] encodedResponse(RpcFrameView request, RpcMethodCodec methodCodec, Object value)
+            throws java.io.IOException {
+        int codecMax = methodCodec.securityDescriptor().maxPayloadBytes();
+        try (RpcResponseEncodingBudget.Buffer encoded = responseEncodingBudget.open(codecMax)) {
+            methodCodec.encodeResultTo(value, encoded);
+            return encoded.toResponseFrame(methodCodec.codecId(), RpcStatus.OK,
+                    request.requestId(), request.serviceId(), request.methodId());
+        }
+    }
+
+    /** 供包内压力测试读取框架输出缓冲目前保留的容量。 */
+    long responseEncodingBytes() {
+        return responseEncodingBudget.reservedBytes();
+    }
+
+    /** 供包内压力测试读取该实例编码输出缓冲的最高保留容量。 */
+    long responseEncodingHighWaterBytes() {
+        return responseEncodingBudget.highWaterBytes();
+    }
+
     private void completeInvocationFailure(
             RpcFrameView request,
             CompletableFuture<byte[]> result,
             Throwable error) {
         if (result.isCancelled()) {
+            return;
+        }
+        if (RpcResponseEncodingBudget.isCapacityExceeded(error)) {
+            observeAdmissionRejected(request, "response-encoding");
+            result.complete(frameworkError(request, RpcStatus.OVERLOADED, "Response encoding capacity exhausted"));
             return;
         }
         // User exception messages may contain raw request parameters or
@@ -1494,6 +1520,8 @@ public final class OtryxRpcServer implements AutoCloseable {
         private int maxConcurrent = 4096;
         private RpcProviderAdmissionOptions admissionOptions =
                 RpcProviderAdmissionOptions.DEFAULT;
+        private long maxBufferedEncodingBytes = RpcResponseEncodingBudget.DEFAULT_TOTAL_BYTES;
+        private int maxSingleResponseBytes = RpcResponseEncodingBudget.DEFAULT_SINGLE_BYTES;
         private Duration drainTimeout = Duration.ofSeconds(30);
         private Duration controlPlaneTimeout = Duration.ofSeconds(3);
         private RpcProviderExecutionOptions executionOptions =
@@ -1641,6 +1669,24 @@ public final class OtryxRpcServer implements AutoCloseable {
             this.admissionOptions = Objects.requireNonNull(
                     value,
                     "admissionOptions");
+            return this;
+        }
+
+        /**
+         * 设置单实例编码缓冲累计额度及单个 Payload 硬输出上限。
+         *
+         * <p>使用渐进增长的框架缓冲租约，不按最大 Payload 预留每次小结果。
+         *
+         * @param totalBytes 全部并发编码操作允许保留的缓冲总字节数
+         * @param singleBytes 单个响应的最大输出字节数
+         * @return Provider Builder
+         */
+        public Builder responseEncodingLimits(long totalBytes, int singleBytes) {
+            if (totalBytes <= 0L || singleBytes <= 0 || singleBytes > totalBytes) {
+                throw new IllegalArgumentException("Invalid RPC response encoding limits");
+            }
+            this.maxBufferedEncodingBytes = totalBytes;
+            this.maxSingleResponseBytes = singleBytes;
             return this;
         }
 

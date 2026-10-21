@@ -11,7 +11,10 @@ import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecSecurityDescriptor;
+import com.peachsoft.otryx.codec.RpcBoundedResultMethodCodec;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
+import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.Set;
@@ -105,6 +108,41 @@ class ForyRpcCodecTest {
                 new Object[] {"value"},
                 decodedArguments);
         assertEquals("result", decodedResult);
+    }
+
+    @Test
+    void streamEncodedResultMustPreserveExistingWireBytes() throws Exception {
+        ForyRpcCodec codec = new ForyRpcCodec();
+        RpcMethodCodec method = codec.bind(RpcMethodDescriptor.from(
+                new ServiceKey(SampleService.class.getName(), "1.0.0", "default"),
+                SampleService.class.getMethod("echo", String.class)));
+        assertTrue(method instanceof RpcBoundedResultMethodCodec,
+                "NETWORK_MTLS must use direct bounded result encoding rather than a full-array adapter");
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            method.encodeResultTo("OTRYX streaming response", output);
+            assertArrayEquals(method.encodeResult("OTRYX streaming response"), output.toByteArray());
+            assertEquals("OTRYX streaming response", method.decodeResult(output.toByteArray()));
+        }
+        OutputStream bounded = new OutputStream() {
+            private int written;
+
+            @Override
+            public void write(int data) {
+                if (++written > 16) {
+                    throw new IllegalStateException("bounded stream");
+                }
+            }
+
+            @Override
+            public void write(byte[] data, int offset, int length) {
+                if (written + length > 16) {
+                    throw new IllegalStateException("bounded stream");
+                }
+                written += length;
+            }
+        };
+        assertThrows(RuntimeException.class,
+                () -> method.encodeResultTo(new byte[4096], bounded));
     }
 
     @Test

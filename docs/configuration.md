@@ -40,16 +40,16 @@
 
 | 配置（相对 `otryx.rpc.transport`） | 默认值 | 实际约束 |
 |---|---|---|
-| `admission.max-connections` | 4096 | NetSocket 回调后已接入连接；不直接覆盖 TLS 预握手、TCP backlog 或 OS Socket 内存 |
-| `admission.max-handshakes` | 1024 | 同时进行的 OTRYX HELLO 协议握手；失败关闭连接并归还幂等额度 |
+| `admission.max-connections` | 4096 | TLS 模式在原始 TCP NetSocket 进入时预留，先于 TLS Engine/握手；不控制 OS backlog/FD 内存 |
+| `admission.max-handshakes` | 1024 | TLS 预握手和 OTRYX HELLO 共用握手额度（从 TCP 接入到 HELLO_ACK）；失败/超时幂等释放 |
 | `admission.max-buffered-partial-frame-bytes` | 67108864 | Transport 实例内所有残帧逻辑字节；追加前预留，消费或关闭后归还 |
 | `admission.partial-frame-timeout` | 10s | 长期没有完整帧交付的连接；少量追加字节不会无限延长驻留 |
 | `max-inflight-per-connection` | 1024 | 单个 Provider 连接内尚未结束的请求；超限返回 `OVERLOADED`，不进入 Handler |
 | `admission.max-buffered-response-bytes` | 67108864 | Transport Server 已编码且待写的 RESPONSE 字节；写 Future 终态或断连后释放 |
 
-CANCEL 可以结束连接层的逻辑请求，不能证明业务或授权策略已经停止。真正执行的资源继续受 Core 所有权约束。待写响应额度耗尽时拒绝新写入，Drain 等待尚未完成的写入；这一预算不控制 Codec 编码峰值、TLS、Netty Direct Memory 或操作系统缓冲。
+CANCEL 可以结束连接层的逻辑请求，不能证明业务或授权策略已经停止。真实 TLS 握手不自动在 Vert.x 回调前执行：先进行有限的 TCP 准入，再主动升级，拒绝明文应用数据。真正执行的资源继续受 Core 所有权约束。待写响应额度耗尽时拒绝新写入，Drain 等待尚未完成的写入；这一预算不控制 Codec 内部对象图和数组复制峰值、TLS、Netty Direct Memory 或操作系统缓冲；新增的 Provider 输出编码预算另行计算框架已保留的流式输出缓冲。
 
-Codec 在网络 Profile 下还必须声明正数的载荷大小、对象图深度和估算图内存上限，并在 DTO 实例化前验证载荷。这些声明不是编码分配或 JVM Heap 的硬内存租约。详见 [Transport 接入容量](reference/transport-admission.md) 与 [Codec 能力模型](../otryx-core/src/main/java/com/peachsoft/otryx/codec/RpcCodecSecurityDescriptor.java)。
+Provider 另外提供 `otryx.rpc.server.encoding.max-buffered-bytes=67108864` 和 `max-response-bytes=16777216`。编码缓冲在分配前预留全局额度，Fory 响应采用有界 OutputStream；单响应额度与 Codec 声明上限取更小值。第三方 Codec 的默认方法可能先创建完整 Payload，因此不可把当前额度视作任意自定义编码器的分配硬上限。Codec 在网络 Profile 下还必须声明正数的载荷大小、对象图深度和估算图内存上限，并在 DTO 实例化前验证载荷。这些声明不是编码分配或 JVM Heap 的硬内存租约。详见 [Transport 接入容量](reference/transport-admission.md) 与 [Codec 能力模型](../otryx-core/src/main/java/com/peachsoft/otryx/codec/RpcCodecSecurityDescriptor.java)。
 
 ## 3. Provider 授权、执行与关闭
 
@@ -149,8 +149,13 @@ Registry 网络请求始终在控制面执行，单次 RPC 发送前只做本地
 QPS、线程数、连接数、Heap 和 p99/p99.9 的建议值都需要目标环境数据。配置默认值说明当前约束，不代表部署容量承诺。验证方法见[容量规划](reference/capacity-planning.md)。
 
 
-## 7. Consumer 本地路由策略（V2-15）
+## 10. Consumer 本地路由策略（V2-15）
 
 `otryx.rpc.client.router` 默认为 `rules`；可通过自定义 `RpcRouter` Bean 替换。 `otryx.rpc.registry.member-attributes` 为 Provider/Consumer/BOTH 成员附加非可信标签，最多 64 项且有单键和值长度上限；不得在其中放入 Token、密码、证书或身份声明。
 
 `RuleBasedRpcRouter` 使用带递增 revision 的本地 `RpcRoutingSnapshot`。未配置规则时不产生候选数组拷贝；启用规则后先按 ApplicationKey、标签、zone、release 与 track 过滤，再依据优先应用选择候选，最后才执行 P2C EWMA；灰度 0/100 分别强制稳定/灰度轨道。路由空集会拒绝，不会跨应用降级；安全身份验证仍由实际 mTLS 与 Provider 授权决定。参见 [Router SPI](reference/routing.md)。
+
+
+## 11. 有界结果编码的生产 Codec 契约（V2-14）
+
+`NETWORK_MTLS` Provider 的每一个方法级 Codec 在注册前必须是 `RpcBoundedResultMethodCodec`，不接受使用兼容 `encodeResult()` 完整数组的默认方法级适配。Fory 直接向有界 OutputStream 写入；最终 Wire Frame 根据有效底层数组区间构造，创建前同时对输出缓冲与完整 Frame 的瞬时内存预留额度，避免中间 Payload 拷贝。该额度不包含第三方 Codec 内部堆分配、返回后异步持有的 Frame、Netty/SSL/操作系统缓冲，需结合 [Transport 配额](reference/transport-admission.md) 和 #146 固定物理性能证据验收。
