@@ -28,7 +28,7 @@
 - **Transport**：Vert.x TCP 长连接、连接分片、Heartbeat、Reconnect、CANCEL、GO_AWAY、Graceful Drain。
 - **Security**：显式部署 Profile、证书与完整应用身份绑定、Hostname Verification、证书 Reload、有限方法许可与实际 SPI 能力预检。
 - **Registry**：Memory、Etcd、Nacos、Consul、Eureka；Consumer 热路径读取本地验证目录。后端的网络安全支持范围按实际 Adapter 区分。
-- **Load Balancing**：P2C + EWMA、inflight 与静态权重。
+- **Routing / Load Balancing**：应用级 Router SPI、本地版本化规则、应用优先级、标签/区域/发布版本与 10%/90% 灰度，先过滤再经 P2C + EWMA 负载均衡；路由标签不构成授权依据。
 - **Resilience**：方法级/单次超时、父级单调 Deadline 预算传播、显式幂等 Retry、Retry Budget、Circuit Breaker、Outlier Ejection、Provider Admission。
 - **Execution**：Virtual Thread、CPU 有界资源；Fory Codec 与 Stable Type ID。
 - **Observability**：Micrometer、OpenTelemetry、JFR、Grafana 和 Prometheus 示例配置。
@@ -46,6 +46,8 @@
 **应用级注册（#139 已完成）：** [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 已合入 main `783bf8115c9523e5667023678dafe659315b2b66`，并完成该合并提交的 main 门禁核验。Core、唯一 Starter 和四模块 Quickstart 使用统一 Application 身份、Provider/Consumer/BOTH 共享成员生命周期、Manifest、实例 Owner CAS Mapping、Resolver 与有界缓存。纯 Consumer 真实入册但无 RPC Endpoint；ServiceKey 表示业务契约，ServiceInstance 是携带目标应用的本地负载均衡候选。过渡 SPI、注册路径和配置已清理。[设计](docs/design/application-registry-v2.md) · [验收与计数口径](docs/reference/application-registry-acceptance.md)。
 
 **安全契约与验收（#140）：** 本文描述显式安全模式、真实应用身份和受保护控制面的契约与使用入口。完整验证范围以 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) 及工程断点中记录的准确 PR Head、合并后 main 和原始证据为准。
+
+[应用路由 SPI 与规则文档](docs/reference/routing.md)：Provider/Consumer 统一应用身份，默认无过滤，使用本地原子路由规则而非热路径查询 Registry；任何自定义 Router 的输出均须是已验证 Provider 候选的原始对象子集。
 
 <!-- doc-section:compatibility -->
 ## 兼容性与迁移

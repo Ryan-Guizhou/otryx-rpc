@@ -509,3 +509,21 @@ docker compose -f otryx-quickstart/docker-compose.yml down
 Core `ApplicationMembershipCoordinator`、`ApplicationServiceResolver`、Client `applicationControlPlane(...)` 和 Server `applicationMembership(...)` 是当前唯一应用级链路。Provider、Consumer、BOTH 均真实入册，纯 Consumer 无 RPC Endpoint；ServiceInstance 只保留为本地 LB DTO。
 
 #139 已通过 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合并到 `main@783bf8115c9523e5667023678dafe659315b2b66`，其源码/配置清理、共享契约、四真实后端独立 JVM 和五组 rolling 均有独立核验记录。旧注册模式不能作为 rolling baseline。#140 的安全实现须另行完成当前 Head 的实际测试与合并后核验；#139 的结果不能充当本次安全验收。准确证据见[断点](../docs/engineering/agent-governance-checkpoint.md)，设计与约束见 [V2 设计](../docs/design/application-registry-v2.md)。教程、静态扫描或脚本夹具不能替代真实通过结果，也不构成生产容量或正式发行证明。
+
+## 可选：标签、区域与灰度路由
+
+Spring Boot 应用可在 `application.yml` 中为**实际成员**声明公开标签，Consumer 默认路由 SPI 为 `rules`。Provider/Consumer/BOTH 的身份、Manifest 与授权逻辑保持不变：
+
+```yaml
+otryx:
+  rpc:
+    registry:
+      member-attributes:
+        zone: cn-shanghai
+        release: v2
+        track: stable
+    client:
+      router: rules
+```
+
+默认无规则时不会过滤 Provider。需要部署级标签、区域、灰度或固定应用路由时，应用配置一个 `RuleBasedRpcRouter` Bean，并调用 `publish(RpcRoutingSnapshot)` 原子发布规则；参见 [Router 使用及安全边界](../docs/reference/routing.md)。这不是额外的 E2E 场景；灰度和切换测试由 Core 的 Router 回归测试覆盖。

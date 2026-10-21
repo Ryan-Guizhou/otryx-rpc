@@ -28,7 +28,7 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 - **Transport**: Vert.x TCP, sharded connections, heartbeat, reconnect, CANCEL, GO_AWAY and graceful drain.
 - **Security**: explicit deployment profiles, certificates bound to full application identities, hostname verification, certificate reload, finite method grants and actual SPI capability checks.
 - **Registry**: Memory, Etcd, Nacos, Consul, Eureka; the consumer hot path reads a locally verified directory. Network security support depends on the actual adapter.
-- **Load balancing**: P2C + EWMA, inflight count and static weights.
+- **Routing / load balancing**: application-aware Router SPI, versioned local rules, application priority, labels, zones, deployment releases and percentage-based canary routing, followed by P2C + EWMA. Routing labels never grant authorization.
 - **Resilience**: method/per-call timeouts, inherited monotonic deadline budgets, explicitly idempotent retries, retry budget, circuit breaker, outlier ejection and provider admission.
 - **Execution**: virtual threads, bounded CPU resources, Fory and stable type IDs.
 - **Observability**: Micrometer, OpenTelemetry, JFR and Grafana / Prometheus examples.
@@ -46,6 +46,8 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 **Application registry (#139 completed):** [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) was merged into main at `783bf8115c9523e5667023678dafe659315b2b66`, and that merge commit passed its main gates. Core, the single Starter and the four Quickstart modules use Application identity, shared Provider/Consumer/BOTH membership, immutable Manifests, instance-owner CAS Mapping, a Resolver and bounded caches. Consumer-only members register without RPC endpoints; ServiceKey identifies business contracts, and ServiceInstance is a local load-balancing candidate carrying the target application. Transitional SPI, registry paths and configuration have been removed. [Design](docs/design/application-registry-v2.md) · [Acceptance and measurement boundaries](docs/reference/application-registry-acceptance.md).
 
 **Security contracts and acceptance (#140):** this document describes explicit security profiles, verified application identity and protected control-plane entrypoints. Verify the complete acceptance scope against the exact PR Head, post-merge main and raw evidence recorded in [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) and the engineering checkpoint.
+
+[Application routing SPI and rules](docs/reference/routing.md): the default router performs no filtering; versioned snapshots are local, and custom routers may return only members of the already verified Provider candidate set. No registry I/O occurs on the call path.
 
 <!-- doc-section:compatibility -->
 ## Compatibility and migration

@@ -496,3 +496,21 @@ The aggregate entrypoint prints `Complete application-level Quickstart suite: PA
 Core `ApplicationMembershipCoordinator`, `ApplicationServiceResolver`, Client `applicationControlPlane(...)` and Server `applicationMembership(...)` form the only application control plane. Provider, Consumer and BOTH register real members; consumer-only has no RPC endpoint. ServiceInstance remains only a local load-balancing DTO.
 
 #139 was merged through [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) at `main@783bf8115c9523e5667023678dafe659315b2b66`, with independently verified source/configuration cleanup, shared contracts, the four-real-backend independent-JVM matrix and all five rolling pairs. Retired registry modes cannot be rolling baselines. #140 security changes require their own exact-head execution and post-merge verification; #139 results do not establish this security acceptance. See the [checkpoint](../docs/engineering/agent-governance-checkpoint.md) for evidence and [V2 design](../docs/design/application-registry-v2.md) for the contract. Tutorials, static scans and shell fixtures do not substitute for real execution or establish production capacity or a release.
+
+## Optional: labels, zones and canary routing
+
+Spring Boot applications can declare public labels on **actual application members** in `application.yml`. The Consumer default router SPI is `rules`. Provider/Consumer/BOTH identity, Manifest validation and authorization do not change:
+
+```yaml
+otryx:
+  rpc:
+    registry:
+      member-attributes:
+        zone: cn-shanghai
+        release: v2
+        track: stable
+    client:
+      router: rules
+```
+
+The default empty ruleset does not filter Providers. To use deployment labels, zones, canary routing or explicit application selection, provide a `RuleBasedRpcRouter` Bean and atomically publish a `RpcRoutingSnapshot`. See the [routing guide and security boundaries](../docs/reference/routing.md). This is not a new executable E2E scenario; Core Router tests cover canary distribution and snapshot changes.

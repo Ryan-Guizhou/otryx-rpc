@@ -86,3 +86,10 @@ Provider 使用显式 `RpcAuthorizer`，返回 `CompletionStage<RpcAuthorization
 新增后端须执行相同的应用成员、角色、Manifest、Mapping Owner、订阅健康、失败和关闭契约，不能仅有工厂加载测试。NETWORK 扩展还须验证三类实际 Registry 来源的保护、错误信任/凭据、内容篡改与安全失效；Transport/Codec 替换须有未知能力拒绝及真实安全正例。受控计数应分别报告原生成员、SPI 方法入口调用数、订阅创建调用数及快照/健康通知和收敛时间，不能将它们表述为后端全部 HTTP、keepalive 或 server Watch 流量。
 
 运行入口和真实证据边界见 [应用级注册验收](reference/application-registry-acceptance.md)。
+
+
+## 9. Router SPI：应用级候选过滤
+
+Consumer 的 `RpcRouter` 位于 `com.peachsoft.otryx.routing`，默认 `rules` 实现为 `RuleBasedRpcRouter`。调用链为 Mapping → Directory → Manifest/Schema/Health → **Router** → LoadBalancer → Transport。应用成员的 `attributes` 投影到本地 `ServiceInstance.metadata`；标签不可用于冒充身份或授权。
+
+自定义 Router 必须只返回已验证数组中的原始 Provider 对象，不得修改输入、增加端点或执行 Registry IO。Core 会校验输出的引用身份并在发送前再次复核目录安全代次；空路由明确失败且不能偷偷回退到其他应用。规则按 `ServiceKey` 加载有界原子快照，更新和回滚均使用递增 revision。详细规则、灰度、优先级与配置示例见 [Router 参考](reference/routing.md)。
