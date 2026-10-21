@@ -570,8 +570,9 @@ public final class OtryxRpcClient implements AutoCloseable {
                         result.isCancelled() ? RpcStatus.UNAVAILABLE
                                 : error == null ? RpcStatus.OK : statusOf(unwrap(error)),
                         result.isCancelled()));
+                long interceptorDeadlineNanos = deadlineNanos;
                 session.before(() -> attempt(reference, method, encodedArguments, propagatedMetadata,
-                        currentCall, deadlineNanos, 1, result), result::completeExceptionally);
+                        currentCall, interceptorDeadlineNanos, 1, result), result::completeExceptionally);
             } else {
                 attempt(reference, method, encodedArguments, propagatedMetadata,
                         currentCall, deadlineNanos, 1, result);

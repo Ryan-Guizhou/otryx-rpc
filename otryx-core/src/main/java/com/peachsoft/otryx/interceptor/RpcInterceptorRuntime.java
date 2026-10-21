@@ -129,7 +129,7 @@ public final class RpcInterceptorRuntime implements AutoCloseable {
         private final RpcCallContext scope;
         private final ArrayDeque<Runnable> events = new ArrayDeque<>();
         private final Set<Integer> attemptsStarted = new LinkedHashSet<>();
-        private final Set<Integer> attemptsFinished = new HashSet<>();
+        private final Set<Integer> attemptsFinished = new LinkedHashSet<>();
         private final AtomicBoolean terminal = new AtomicBoolean();
         private boolean draining;
 
