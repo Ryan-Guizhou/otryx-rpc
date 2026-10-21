@@ -11,6 +11,7 @@ import com.peachsoft.otryx.observability.RpcCertificateReloadOutcome;
 import com.peachsoft.otryx.observability.RpcCircuitState;
 import com.peachsoft.otryx.observability.RpcConnectionCloseReason;
 import com.peachsoft.otryx.observability.RpcConnectionRole;
+import com.peachsoft.otryx.observability.RpcDirectoryFailureReason;
 import com.peachsoft.otryx.observability.RpcFailureClassifier;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.observability.RpcRegistryOperation;
@@ -50,6 +51,7 @@ public final class MicrometerRpcObserver implements RpcObserver {
     private static final String METRIC_TLS_HANDSHAKE_FAILURES = "otryx.rpc.tls.handshake.failures";
     private static final String METRIC_TLS_CERTIFICATE_RELOAD = "otryx.rpc.tls.certificate.reload";
     private static final String METRIC_TLS_CERTIFICATE_EXPIRY_WARNINGS = "otryx.rpc.tls.certificate.expiry.warnings";
+    private static final String METRIC_CLIENT_DIRECTORY_FAILURES = "otryx.rpc.client.directory.failures";
     private static final String METRIC_CLIENT_ATTEMPTS = "otryx.rpc.client.attempts";
     private static final String METRIC_CLIENT_FAILURES = "otryx.rpc.client.failures";
     private static final String METRIC_CLIENT_CALLS = "otryx.rpc.client.calls";
@@ -336,6 +338,13 @@ public final class MicrometerRpcObserver implements RpcObserver {
                             TAG_STATUS,
                             status.name())
                     .increment();
+        }
+    }
+
+    @Override
+    public void onClientDirectoryFailure(RpcDirectoryFailureReason reason) {
+        if (reason != null && reason != RpcDirectoryFailureReason.NONE) {
+            registry.counter(METRIC_CLIENT_DIRECTORY_FAILURES, TAG_REASON, reason.name()).increment();
         }
     }
 
