@@ -1,6 +1,6 @@
 # V2-17：签名动态治理与安全回滚
 
-> 状态：#144 开发候选。只有本任务准确 PR Head 与合并后 main CI 通过时才能更新为已实现。本文区分治理参数与永远不能热放宽的安全硬限制。
+> 状态：**已实现**。#144 的 [PR #165](https://github.com/Ryan-Guizhou/otryx-rpc/pull/165) 在准确 Head `a5bdc77d6c22cd24379f6ef6e80fa89bb6ba82ec` 通过全部 13 项 GitHub Actions 工作流及 17 项 Check 后 squash 合并至 `main@fd54cd3e9548cc0c5b24a954b46e62f8426c489d`；合并后 main 12/12 push 工作流已成功。本文仍严格区分治理参数与永远不能热放宽的安全硬限制。
 
 ## 1. 为什么需要单一版本治理
 

@@ -7,7 +7,7 @@
 | 项目 | 工程证据 | 尚不能宣称 |
 |---|---|---|
 | U10 可观测性 | 有界 Observer、JFR 低基数出口、OpenTelemetry 回归、JMH 工具 | 已取得固定物理主机真实性能数据 |
-| U11 初次接入 | Maven Wrapper、Lite Starter、两进程及 SPI 示例 | 所有 Windows/Linux 首次安装环境均经人工验收 |
+| U11 初次接入 | Maven Wrapper、唯一 `otryx-spring-boot-starter`、Provider/Consumer 两进程与 `otryx-quickstart` 四模块实战 | 所有 Windows/Linux 首次安装环境均经人工验收 |
 | U12 运行时治理 | `ClientRetryController`、`RpcShutdownBudget`、Core CI 回归 | 任意业务线程都能被安全强制停止 |
 | U13 性能证据 | JMH/Matrix/10k Smoke、六轮 AB BA AB 受控证据校验、原始 JMH 可复算及负面测试；PR #123 与合并后 main CI 成功 | 真实固定 Runner 上完成六轮至少 60 分钟 Soak、工程师独立审查及生产性能指标 |
 | U14 构建/供应链 | 首发 Dry-run、CycloneDX、SHA256、恶意证据校验 | 已完成签名、Tag、Central 或 Namespace 授权 |
@@ -20,7 +20,7 @@ PR/main CI 通过与手动运行完整 RC/GA Dry-run 是不同的验收信号。
 
 1. 检查精确 Git SHA、仓库、Java 21、Maven 发布元数据、恶意证据 Fixtures 与开发版状态。
 2. 等待测试 Nacos，运行完整 `-Pquality,release` Reactor，不跳过核心测试及严格 Javadoc。
-3. 核对所有公开模块的 Main/Sources/Javadoc JAR；Examples/Benchmarks 不属于 Central 产物。
+3. 核对所有公开模块的 Main/Sources/Javadoc JAR；`otryx-quickstart` 与 Benchmarks 不属于 Central 发布产物。
 4. 用固定 CycloneDX 插件生成 Aggregate SBOM，校验项目与版本。
 5. 将源码 SHA、每个构建产物 SHA256、`manifest.json`、`SHA256SUMS`、`bom.json` 关联归档为 **unsigned evidence**。
 
@@ -43,12 +43,12 @@ flowchart LR
 
 - 真实 GPG 签名及验证；Central Portal 对 `com.peachsoft.otryx` 的 Namespace Verified，发布用户有相应权限；正式坐标可从干净 Maven Repository 解析。
 - OTRYX 商标风险和 Otti 吉祥物/参考图形的公开使用权。
-- 目标硬件三轮受控性能矩阵及建议的 60 分钟 10k logical-concurrency Soak；缺少原始证据时继续保持**无官方性能数字**。
+- **V2-19 #146 强制实证门槛**：同一固定物理硬件的 AB BA AB 六个受控完整 JMH/分配/故障矩阵，每轮必须 ≥3600 秒真实 10k 逻辑并发 Soak，并附真实原生注册规模及 CPU/GC/JFR/Heap/DirectMemory/故障原始材料；缺少真实数据时继续保持 **BLOCKED，禁止官方 QPS/SLO/容量数字**。
 - 维护者对 RC/GA 实际发行的明确授权。本工作流不提供 Publish 开关，不进行 Central 上传、Tag 或签名。
 
 相关：[公开发布核查](../publication-readiness.md) · [性能证据](performance-evidence.md) · [历史发行边界](../archive/releases/release-readiness.md)。
 
-**当前结论：候选构建具有执行入口，不等于 GA Ready 或 Published。**
+**当前结论：候选构建具有执行入口，不等于 GA Ready 或 Published；#146 真实硬件证据与 #147 最终依赖尚未满足。**
 
 
 ## U13 性能工具新增边界

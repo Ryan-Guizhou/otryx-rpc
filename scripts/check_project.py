@@ -207,9 +207,16 @@ def check_public_docs_are_ga_clean() -> None:
         "capability-status:v2-",
         "project=preview",
         "Production Roadmap / Capability Matrix",
+        "Lite Starter",
+        "Examples/Benchmarks",
+        "状态：#144 开发候选",
     )
     paths = [ROOT / "README.md", ROOT / "README.en-US.md"]
     paths.extend(ROOT.glob("docs/*.md"))
+    paths.extend((
+        ROOT / "docs/reference/first-release-acceptance.md",
+        ROOT / "docs/reference/governance.md",
+    ))
     for path in paths:
         text = path.read_text(encoding="utf-8")
         for token in forbidden:
