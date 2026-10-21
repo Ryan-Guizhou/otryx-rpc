@@ -327,6 +327,16 @@ public interface RpcObserver {
     }
 
     /**
+     * 记录一次真实 RPC 调用的固定目录失败原因；只允许有限枚举，不携带动态标签。
+     *
+     * <p>诊断 API 自身不会产生此事件。
+     *
+     * @param reason 有界失败原因
+     */
+    default void onClientDirectoryFailure(RpcDirectoryFailureReason reason) {
+    }
+
+    /**
      * 返回全局 NOOP Observer。
      *
      * @return 不产生回调的 Observer
@@ -491,6 +501,12 @@ public interface RpcObserver {
                                 durationNanos,
                                 status,
                                 error)));
+            }
+
+            @Override
+            public void onClientDirectoryFailure(RpcDirectoryFailureReason reason) {
+                immutable.forEach(observer -> safely(() ->
+                        observer.onClientDirectoryFailure(reason)));
             }
 
             @Override

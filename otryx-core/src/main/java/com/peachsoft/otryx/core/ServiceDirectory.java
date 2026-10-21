@@ -2,6 +2,7 @@ package com.peachsoft.otryx.core;
 
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ServiceInstance;
+import com.peachsoft.otryx.observability.RpcDirectoryFailureReason;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.RegistrySecurityException;
@@ -40,6 +41,7 @@ final class ServiceDirectory implements AutoCloseable {
     }
 
     private final AtomicBoolean closed = new AtomicBoolean();
+    private volatile RoutingFailure routingFailure;
     private final AtomicReference<DirectorySnapshot> state =
             new AtomicReference<>(new DirectorySnapshot(
                     null, EMPTY, 0L, false, false, 0L, 0L));
@@ -232,6 +234,33 @@ final class ServiceDirectory implements AutoCloseable {
     record Selection(VerifiedProviderSnapshot candidate, ServiceInstance[] instances, Status status) {
     }
 
+    /**
+     * 从真实业务调用记录有界失败枚举和对应的已验证候选身份，不执行 Registry IO。
+     *
+     * @param reason 固定失败原因
+     * @param selection 当次业务的可信目录，成员未就绪时可以为 null
+     */
+    void recordRoutingFailure(RpcDirectoryFailureReason reason, Selection selection) {
+        routingFailure = new RoutingFailure(reason, selection == null ? null : selection.candidate());
+    }
+
+    /** 在新的真实业务调用选中可信候选时清除上一次路由失败。 */
+    void clearRoutingFailure() {
+        routingFailure = null;
+    }
+
+    /**
+     * 旧的失败只有属于相同可信快照才允许继续出现在诊断中。
+     *
+     * @param selection 当前选择快照
+     * @return 固定失败原因，不相符时为 NONE
+     */
+    RpcDirectoryFailureReason lastRoutingFailure(Selection selection) {
+        RoutingFailure last = routingFailure;
+        return last != null && last.candidate() == selection.candidate()
+                ? last.reason() : RpcDirectoryFailureReason.NONE;
+    }
+
     long lastSuccessfulSyncNanos() {
         return state.get().lastSuccessfulSyncNanos();
     }
@@ -241,6 +270,9 @@ final class ServiceDirectory implements AutoCloseable {
         if (closed.compareAndSet(false, true)) {
             subscription.close();
         }
+    }
+
+    private record RoutingFailure(RpcDirectoryFailureReason reason, VerifiedProviderSnapshot candidate) {
     }
 
     private record DirectorySnapshot(

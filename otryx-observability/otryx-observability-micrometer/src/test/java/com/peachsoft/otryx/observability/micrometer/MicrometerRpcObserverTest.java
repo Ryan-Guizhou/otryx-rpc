@@ -13,6 +13,7 @@ import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.observability.RpcConnectionCloseReason;
 import com.peachsoft.otryx.observability.RpcCircuitState;
 import com.peachsoft.otryx.observability.RpcConnectionRole;
+import com.peachsoft.otryx.observability.RpcDirectoryFailureReason;
 import com.peachsoft.otryx.observability.RpcRetryExhaustionReason;
 import com.peachsoft.otryx.observability.RpcRegistryOperation;
 import java.util.stream.IntStream;
@@ -26,6 +27,18 @@ import org.junit.jupiter.api.Test;
  * @CreateTime 2026/9/29 14:51
  */
 class MicrometerRpcObserverTest {
+
+    @Test
+    void directoryFailureMetricHasOnlyFiniteReasonTag() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        MicrometerRpcObserver observer = new MicrometerRpcObserver(registry);
+        observer.onClientDirectoryFailure(RpcDirectoryFailureReason.DIRECTORY_STALE);
+        observer.onClientDirectoryFailure(RpcDirectoryFailureReason.DIRECTORY_STALE);
+        observer.onClientDirectoryFailure(RpcDirectoryFailureReason.NONE);
+        assertEquals(2.0, registry.find("otryx.rpc.client.directory.failures")
+                .tag("reason", RpcDirectoryFailureReason.DIRECTORY_STALE.name()).counter().count());
+        assertEquals(1, registry.find("otryx.rpc.client.directory.failures").meters().size());
+    }
 
     @Test
     void shouldRecordConnectionAndClientMetrics() {

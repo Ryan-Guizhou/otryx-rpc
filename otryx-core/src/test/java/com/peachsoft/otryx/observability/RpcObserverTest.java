@@ -22,6 +22,27 @@ import org.junit.jupiter.api.Test;
 class RpcObserverTest {
 
     @Test
+    void directoryFailureCallbacksMustBeIsolated() {
+        AtomicInteger called = new AtomicInteger();
+        RpcObserver failing = new RpcObserver() {
+            @Override
+            public void onClientDirectoryFailure(RpcDirectoryFailureReason reason) {
+                throw new IllegalStateException("exporter unavailable");
+            }
+        };
+        RpcObserver counting = new RpcObserver() {
+            @Override
+            public void onClientDirectoryFailure(RpcDirectoryFailureReason reason) {
+                called.incrementAndGet();
+            }
+        };
+        RpcObserver.composite(List.of(failing, counting))
+                .onClientDirectoryFailure(RpcDirectoryFailureReason.SECURITY_REJECTED);
+        assertEquals(1, called.get());
+        assertFalse(RpcObserver.noop().enabled());
+    }
+
+    @Test
     void noopShouldStayDisabled() {
         assertFalse(RpcObserver.noop().enabled());
     }

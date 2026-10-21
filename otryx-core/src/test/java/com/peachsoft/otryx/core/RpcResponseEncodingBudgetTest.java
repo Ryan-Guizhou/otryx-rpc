@@ -18,6 +18,20 @@ import org.junit.jupiter.api.Test;
 class RpcResponseEncodingBudgetTest {
 
     @Test
+    void bufferDiagnosticsReturnStrictBoundsAndReleaseToZero() {
+        RpcResponseEncodingBudget budget = new RpcResponseEncodingBudget(4096L, 2048);
+        assertEquals(0L, budget.diagnostics().bufferedBytes());
+        try (RpcResponseEncodingBudget.Buffer buffer = budget.open(1024)) {
+            buffer.write(5);
+            assertTrue(budget.diagnostics().bufferedBytes() > 0L);
+            assertTrue(budget.diagnostics().highWaterBytes()
+                    >= budget.diagnostics().bufferedBytes());
+        }
+        assertEquals(0L, budget.diagnostics().bufferedBytes());
+        assertTrue(budget.diagnostics().highWaterBytes() > 0L);
+    }
+
+    @Test
     void buffersMustReserveBeforeGrowingAndReleaseAfterSuccessfulEncoding() throws Exception {
         RpcResponseEncodingBudget budget = new RpcResponseEncodingBudget(32, 32);
         byte[] payload = new byte[28];
