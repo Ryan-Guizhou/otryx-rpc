@@ -59,6 +59,8 @@
         <archunit.version>1.5.1</archunit.version>
         <opentelemetry.version>1.66.0</opentelemetry.version>
         <bouncycastle.version>1.86</bouncycastle.version>
+        <!-- Jetcd 的容器测试需支持当前 Docker Engine 的最低 API 版本。 -->
+        <testcontainers.version>1.21.4</testcontainers.version>
 
         <flatten-maven-plugin.version>1.7.2</flatten-maven-plugin.version>
         <maven-clean-plugin.version>3.4.1</maven-clean-plugin.version>
@@ -91,6 +93,14 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- 优先于 Spring Boot BOM 统一测试依赖，生产 Starter 不引入容器运行时。 -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>

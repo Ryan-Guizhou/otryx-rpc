@@ -1,6 +1,6 @@
 # OTRYX RPC 工程断点：#140 安全默认值与身份可信
 
-> 更新时间：2026-10-19（UTC，revision 5 本地验证完成）。[#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139) 已由 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合并并完成准确 main 验证。当前 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) 的 [PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 尚未合并。第四轮准确 Head `27e92a2a5a7b41f38dd7af5a9f67d35431110913` 的普通 CI reactor 为 839 tests / 0 failures / 0 errors / 18 skips，但随后 Nacos 独立进程恢复失败，Consumer 自身已出现类型化安全拒绝；后续保护链验收未执行。run/check API 非终态与原始日志和产物不一致，不能记成未执行或全部成功。远端元数据查询修复已完成同一热 Snapshot 暂停用例的 RED/GREEN，关闭所有权三个受控反例和五项正确实现回归均已执行；同批执行包的完整 native 进程链及原 Consumer 恢复后新 RPC 完成证据已通过。准确新 Head 和合并后 main 仍待验收，#140 保持未完成。
+> 更新时间：2026-10-21（UTC，revision 6 验证中）。[#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139) 已由 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合并并完成准确 main 验证。当前 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) 的 [PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 尚未合并。revision 5 分支 Head `99a3a7ed206b22d21baca23e6d8ad8bacf3abe53` 与 PR 内部引用的不同步已通过关闭、重新打开原 PR 修复，没有修改源码或历史。该准确 Head 的 Nacos Chaos 已通过；普通 CI、Etcd Chaos 与 Release Readiness 被 Testcontainers 1.21.3 的旧 Docker API 请求阻塞，尚未完成后续验收。revision 6 统一测试依赖至上游兼容修复 1.21.4，新增真实客户端 API 交互回归；准确新 Head 的全部相关门禁及合并后 main 仍待核验，#140 保持未完成。#142、#143 在独立工作区并行实现，#141 仍为只读准备。
 
 ## 1. 任务与授权边界
 
@@ -27,7 +27,8 @@ Provider、Consumer、BOTH 均使用真实应用成员身份；纯 Consumer 没�
 | 第三轮准确 Head | `e1ba9b1dc8d00667b849cd7632165cdfbc3d0814`；tree `c37cd606e8e4ea83c14f9a5e1497c0d17684960c`，原始执行结果见第 7 节；API 状态仍不一致 |
 | 第三轮失败 | 普通 CI 与 Nacos Chaos 前置构建的 `asyncStageShouldRetainAdmissionUntilCompletion`：预期 OVERLOADED、实际 OK，测试没有等待慢业务真正取得 admission |
 | 第四轮准确 Head | `27e92a2a5a7b41f38dd7af5a9f67d35431110913`；tree `0349024ef332f4a3033b5d0563702237d84396b0`。普通 CI reactor 为 839 tests / 0 failures/errors / 18 skips，随后 Nacos 独立进程恢复失败；见第 8 节 |
-| revision 5 / 合并后 main | `build-56/60` 同一热 Snapshot 用例准确 RED/GREEN；`build-57–59` 三个受控生命周期反例、`build-61` 五项正确实现回归通过；`build-62` 样式零发现，`build-64` 完整 native 进程证据通过。新 Head 门禁 PENDING，合并后 main 尚未形成 |
+| revision 5 准确 Head | `99a3a7ed206b22d21baca23e6d8ad8bacf3abe53`；tree `862f34be5ef5f63630bf3a02105b0499d31a495b`。原本地证据保留；2026-10-21 PR 引用修复后已执行准确 Head 工作流，三项 Docker API 前置失败见第 9 节 |
+| revision 6 / 合并后 main | 测试依赖 Docker 兼容修复及客户端交互回归验证中；新 Head 门禁 PENDING，合并后 main 尚未形成 |
 
 #139 最终 main 原始报告为 638 tests、0 failures/errors、18 条件 skips；style 严格聚合 29 模块且无发现，文档实际渲染 52 个 Mermaid 与 5 个 SVG。真实 Registry 合同、四后端独立 JVM 矩阵、常规快照和五组 rolling 均已核验。依赖审查没有新增漏洞差异，但既有依赖告警仍存在；共享 CI 短时 benchmark 不能作为 #146 正式性能证据。
 
@@ -219,12 +220,33 @@ Reactor ZIP `12201562198` SHA-256 为 `fb15e1f4b347597856a1ba480f78d668f11e5d167
 
 `build-64` 复用 build-61 的相同执行包，原六阶段、每阶段首次快照及最终 marker 全部通过。Nacos 新一代在 `17:03:42.258490Z` ready，原 Consumer PID `273730`、startTick `3753953` 在 `17:03:43.307Z` 的新 RPC 完成时仍存活且身份相同；第 64 次成功计数大于 ready 时已采集的 48 次。全程采集 183 次成功、43,591 字节，尾部 drain 后未发现匹配格式的 `Application run failed`。这是完成时间晚于 ready 的证明，不推断该次调用的发起时间。六份快照已用原断言重新验证，687 输入与两份 JAR 前后哈希不变；两代 Nacos、原脚本组及外层 helper 已退出，私有目录已删除。summary SHA-256 为 `6c4f9794754d5896d9ea87dd4f2db4452907fa4ac886ba3ffc37f3bd344f9ae9`。本地模式明确为 `NATIVE_RESTART_ORIGINAL_PROCESS_SCRIPT_NOT_DOCKER`；准确新 Head 的容器故障门禁仍须单独核验。
 
-## 9. 恢复与后续动作
+## 9. PR 引用恢复、第五轮执行与 revision 6
+
+2026-10-21 先通过 GitHub PR API、分支引用和 `refs/pull/161/head` 交叉核验：分支已经是 `99a3a7e`，PR 内部引用仍为第四轮 `27e92a2`，最新分支 SHA 没有对应工作流。旧工作流已全部终态后，仅关闭并重新打开原 PR 一次；02:03:32（UTC）重新打开后，PR Head、内部引用和最新分支一致，准确 Head 的新 `pull_request` 工作流开始运行。第五轮 14 条工作流最终为 11 成功、3 失败，均为 attempt 1；Rolling 和四后端 Registry Matrix 也已成功。没有重跑携带旧事件 SHA 的任务，也没有取消远端任务、改动生产代码或重写分支历史。
+
+| 第五轮准确 Head 验证 | 已证实结果 |
+| --- | --- |
+| [Nacos Chaos 39530873253](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873253) | 成功；原 Docker 暂停/恢复用例 `providerAndConsumerMembershipRecoverWithoutMisrouting` 为 1 test / 0 failures/errors/skips，9.639 秒。该范围不包含普通 CI 中的独立 JVM 重启链 |
+| [Etcd Chaos 39530873155](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873155) | job `118996431414` 在 `EtcdClusterExtension.beforeAll` 启动容器前置失败，1 test / 0 failures / 1 error / 0 skips；目标故障场景没有运行 |
+| [Release Readiness 39530873205](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873205) | job `118996412106` 的 Etcd 模块为 14 tests / 0 failures / 1 error / 0 skips；同一 Docker API 错误阻塞后续 reactor |
+| [普通 CI 39530873130](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873130) | job `118996676508` 的 reactor 在 Etcd 容器前置失败；后续进程链、受保护 Etcd、17 阶段 mTLS 与安全计数没有执行 |
+
+上述三项失败的原始日志均是 Docker 服务端 HTTP 400：客户端请求 API 1.32，而服务端要求至少 1.40。实际依赖树中，Spring Boot 3.5.4 的 BOM 将 Jetcd 测试容器依赖管理为 Testcontainers 1.21.3。revision 6 在 Spring Boot BOM 之前显式导入 Testcontainers 1.21.4 BOM，使相关测试组件采用同一兼容版本；[上游 1.21.4 发布说明](https://github.com/testcontainers/testcontainers-java/releases/tag/1.21.4)明确该版本修复近期 Docker Engine 兼容问题。Jetcd 0.8.5、Spring Boot 3.5.4、项目版本与 Wire v1 不变；测试容器依赖仍只通过 test scope 引入。
+
+回归通过真实 Docker Java 客户端向受控 HTTP 服务发送 ping 请求，验证现代服务端的最低 API 要求和旧服务端的回退交互；不以读取 POM 字符串代替协议验证。真实 Docker Etcd 启动和 Chaos 仍由新准确 Head 的远端 CI 验收。本地独立运行原 revision 5 的完整 `clean verify -Pquality`，使用真实 native Etcd；没有 Docker 的环境不能据此宣称容器场景成功。各轮源码、依赖、进程与原始 XML 独立保存，不把不同输入的计数合并成一次全量通过。
+
+最终同一回归源码 SHA-256 为 `b66e4a2e5b465263cbd5a28264a8a62bed878c6f06fe37b0e57abfe39ae00ca8`。仅覆盖 Maven 属性为旧依赖 1.21.3 时，结果为 2 tests / 1 failure / 0 errors/skips：现代端点实际收到 `GET /v1.32/_ping` 并返回 HTTP 400；旧端点通过。默认 1.21.4 为 2/0/0/0，现代端点实际收到两次 `/v1.44/_ping`；旧端点先拒绝 1.44，再接受回退的 1.32。原始 RED/GREEN XML SHA-256 分别为 `7ce55d062d3cbdcce9cd34cbc8fc98ec9c6f1958c26e01b556c1ff088a0e81f5`、`182007320e96b49435725ef8bd7d95de36d6154f736f22e47bc1ea650387b9c6`。解析依赖树与运行时 classpath 分别确认 1.21.3/1.21.4，docker-java 均为 3.4.2，整个链保持 test scope；不是编译错误或跳过冒充 RED。
+
+2026-10-21 本地原 `99a3a7e` 全量 quality 运行至 Transport 后失败：97 份本轮原始 XML 为 567 tests / 0 failures / 1 error / 27 条件 skips。唯一错误是 `preparedTransportMustStartFromFrozenBytesAfterFilesDisappear` 的 20 秒 JUnit 期限；方法记录实耗 178.197 秒，同时本地执行器多个操作发生长延迟，尚不能唯一归因。后续 Starter、Quickstart 等模块没有运行。687 个源码输入前后哈希不变，native Etcd 和 Maven 自有组已退出，清理无错误；历史失败继续保留。
+
+原提交、原源码与原期限的一次定向诊断为 1 test / 0 failures/errors/skips，方法耗时 4.926 秒，全程 43.282 秒，源码哈希不变且自有进程已清理。这次没有复现原超时，不证明原全量已通过。仓库 clean 配置保留旧 Surefire 报告，诊断初次聚合误含其他类的旧 XML；原聚合另存并排除，只以本次目标类 XML 和 Maven 实际执行日志计 1 项。全量运行的 97 份 XML 则已核验均为该轮新报告。
+
+## 10. 恢复与后续动作
 
 1. 核对分支、远端 main 和自有进程；一次仅一个 Maven/真实后端验证窗口，不改动运行中的冻结输入，不混用不同阶段 JAR。
 2. 保留已核验的身份、存活和 Etcd 分类 RED/GREEN；无法唯一归因的旧 TLS 与成员等待超时仍记录证据不足。
 3. 保留全部历史失败及 `build-34` reactor/style、`build-35/36` 两组真实 Etcd、`build-37` quality、`build-38` 的 17 阶段、`build-45/46` 夹具错误与 `build-48/49` 纠正证据。第二轮准确 Head、`build-50` 诊断和 `build-51/52` Directory RED/GREEN 分开记录，不能把任一旧全量或诊断报告改称最新输入。
-4. 将已完成同例 RED/GREEN、生命周期与完整 native 进程验证的 revision 5 追加到 PR #161，再核验准确新 Head 的完整相关门禁。先读取真实日志/产物解决 API 状态与执行证据的矛盾；每条 workflow/job/关键 artifact 确实通过后，以预期 Head 合并，再独立核验准确 main。
+4. 完成 revision 6 的 Docker API 客户端 RED/GREEN、依赖与静态检查，再追加到 PR #161。根 POM 修改也会触发 Dependency Review，按新准确 Head 实际适用的全部工作流核验，不能固定沿用旧的 14 条计数。每条 workflow/job/关键 artifact 确实通过后，以预期 Head 合并，再独立核验准确 main。
 5. 更新 #140 与 #127，再从新 main 继续 #141–#145 的独立工作包。main 若失败，先修复主线，暂停后续合并。
 6. #146 工具和报告可继续准备，但正式验收必须有固定物理主机、测前确定的 SLO/退化阈值、AB BA AB 六次运行、每次至少 60 分钟 soak 和完整原始指标。条件缺失保持 BLOCKED；#147 只执行已授权发行 dry-run，依赖未完成不能提前关闭。
 

@@ -95,17 +95,25 @@ revision 5 将远端 Config 查询与发布收敛到一个受管理 SDK worker�
 
 `build-64` 同批 JAR 的完整原脚本和额外证据均通过：六阶段、六份首次快照、最终 marker 与脚本 exit 0；原 Consumer PID/start 在 Nacos 新代 ready 后的新 RPC 完成时仍相同且存活。第 64 次成功完成晚于 ready 1.048510 秒，全程采集 183 次成功，不据此推断调用发起时间或正式性能容量。138.077 秒、687 输入与 JAR 哈希不变，自有组及私有目录已清理。证据明确为 native 重启；新准确 Head 的 Docker/CI 与合并后 main 仍须独立核验。
 
+### 第五轮准确 Head、Docker API 前置失败与 revision 6
+
+2026-10-21 确认分支已是 revision 5 `99a3a7ed206b22d21baca23e6d8ad8bacf3abe53`，PR 内部引用却仍停在 `27e92a2`。在旧工作流全部终态后，关闭、重新打开原 PR 一次，准确 Head 与内部引用恢复一致，新的 `pull_request` 工作流实际启动。没有重写提交或重跑旧事件 SHA。
+
+[Nacos Chaos 39530873253](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873253) 的真实 Docker 暂停/恢复用例通过，1/0/0/0；这不替代完整独立 JVM 重启链。[普通 CI 39530873130](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873130)、[Etcd Chaos 39530873155](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873155) 与 [Release Readiness 39530873205](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873205) 在 Etcd 容器启动前置失败：Testcontainers 1.21.3 请求 Docker API 1.32，服务端 HTTP 400 要求最低 1.40。受影响的后续安全和进程验收没有运行。
+
+revision 6 在 Spring Boot BOM 前统一导入上游兼容修复 Testcontainers 1.21.4 BOM，保持 Jetcd 0.8.5、Boot 3.5.4 和全部项目/协议版本不变。同一源码回归用真实客户端与受控 Docker HTTP 端点验证现代 API 和旧服务端回退：1.21.3 为 2 tests / 1 failure / 0 errors/skips，现代端点拒绝实际请求的 API 1.32；1.21.4 为 2/0/0/0，现代端点接受 1.44，旧端点从 1.44 正确回退至 1.32。解析树和运行时 classpath 已核验，容器组件仍为测试依赖。真实 Docker 验收继续由新 Head CI 执行。根 POM 的变更将额外触发 Dependency Review，必须动态核验全部适用工作流；#140 与合并后 main 验证仍为 **PENDING**。完整证据与本地原提交 TLS 超时、定向未复现的边界见[工程断点](../agent-governance-checkpoint.md)。
+
 ## 3. #141：连接、编码与取消资源上界
 
 依赖 #140。检查 TLS 预握手配额、Frame/Codec 字节峰值、慢消费和异步取消；每项新增边界先有可复现失败用例，再验证拒绝与实际释放。记录内存、Future、Lease、线程及连接，禁止以无证据零拷贝变更替代预算控制。
 
 ## 4. #142：Router SPI
 
-依赖 #139。在 Manifest/Schema/健康过滤之后、LB 之前实现应用/tag/zone/gray/weight 本地路由快照。验证 10%/90% 容差、tag 隔离、空候选错误、热更与回滚，Consumer 成员绝不进入候选集。
+依赖 #139，已在独立工作区开始实现。在 Manifest/Schema/健康过滤之后、LB 之前实现应用/tag/zone/gray/weight 本地路由快照。验证 10%/90% 容差、tag 隔离、空候选错误、热更与回滚，Consumer 成员绝不进入候选集。集成时以 #140 合并后的 main 重新验证安全边界。
 
 ## 5. #143：Interceptor SPI
 
-依赖 #139。实现有序 Consumer/Provider 扩展链，区分逻辑调用与 retry attempt；失败、Deadline、取消只发布一次终态，阻塞扩展不运行于 EventLoop。验证上下文恢复及不可绕过 mTLS/授权，并进行低开销 profiling。
+依赖 #139，已在独立工作区开始实现。实现有序 Consumer/Provider 扩展链，区分逻辑调用与 retry attempt；失败、Deadline、取消只发布一次终态，阻塞扩展不运行于 EventLoop。验证上下文恢复及不可绕过 mTLS/授权，并进行低开销 profiling。集成 #140 后再次检查有限授权、身份和真实工作所有权。
 
 ## 6. #144：动态治理快照
 
