@@ -296,9 +296,10 @@ public final class RpcGovernanceRuntime implements AutoCloseable {
      * <p>每个服务/方法使用跨 revision 同一计数器；新版本降低配额时不会把仍在
      * 执行的旧调用数量重置。必须在实际业务与响应双终态后归还。
      *
+     * @param side Consumer 逻辑调用或 Provider 业务工作分别计数
      * @param key 真实服务键
      * @param methodId 真实方法标识
-     * @return 可幂等释放的资源租约；未配置配额返回无操作共享租约
+     * @return 可幂等释放的资源租约
      */
     public QuotaLease acquireQuota(QuotaSide side, ServiceKey key, int methodId) {
         return acquireQuota(capture(key, methodId), side, key, methodId);
@@ -347,12 +348,20 @@ public final class RpcGovernanceRuntime implements AutoCloseable {
         }
     }
 
-    /** 控制面诊断中的当前全局 revision，不读取远端 Registry。 */
+    /**
+     * 控制面诊断中的当前全局 revision，不读取远端 Registry。
+     *
+     * @return 最后经过认证的完整治理版本；初始为零
+     */
     public long revision() {
         return active.get().snapshot().revision();
     }
 
-    /** 没有暴露敏感业务字段的真实签名失效状态。 */
+    /**
+     * 没有暴露敏感业务字段的真实签名失效状态。
+     *
+     * @return 最近安全验证是否拒绝
+     */
     public boolean securityRejected() {
         return securityRejected.get();
     }
@@ -414,7 +423,11 @@ public final class RpcGovernanceRuntime implements AutoCloseable {
             this.counter = counter;
         }
 
-        /** 幂等释放；首次返回 true。 */
+        /**
+         * 幂等释放，避免取消和异步完成竞争时重复归还。
+         *
+         * @return 首次真实归还配额时为 true
+         */
         public boolean release() {
             if (counter == null) {
                 return false;

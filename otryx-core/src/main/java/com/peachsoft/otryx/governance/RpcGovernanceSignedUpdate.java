@@ -33,7 +33,11 @@ public record RpcGovernanceSignedUpdate(String issuer, RpcGovernanceSnapshot sna
         }
     }
 
-    /** 防止调用方更改已验证的签名字节。 */
+    /**
+     * 防止调用方更改已验证的签名字节。
+     *
+     * @return 签名数组的独立防修改副本
+     */
     @Override
     public byte[] signature() {
         return signature.clone();
