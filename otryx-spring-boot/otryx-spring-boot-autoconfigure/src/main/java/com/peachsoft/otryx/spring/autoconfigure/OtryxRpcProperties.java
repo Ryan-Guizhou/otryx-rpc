@@ -205,12 +205,20 @@ public class OtryxRpcProperties implements InitializingBean {
         public Governance() {
         }
 
-        /** 获取普通治理后端失联可暂时使用已验证规则的上限。 */
+        /**
+         * 获取普通治理后端失联后仍可使用最近可信快照的本地时限。
+         *
+         * @return 本地 Last-Known-Good 失联容忍时限
+         */
         public Duration getMaxLastKnownGood() {
             return maxLastKnownGood;
         }
 
-        /** 设置不可由远端策略放宽的本地 LKG 失联期限。 */
+        /**
+         * 设置不可由远端策略放宽的本地 LKG 失联期限。
+         *
+         * @param value 本地 Last-Known-Good 失联容忍时限
+         */
         public void setMaxLastKnownGood(Duration value) {
             maxLastKnownGood = value;
         }
