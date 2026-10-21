@@ -146,6 +146,108 @@ class RpcClientDirectorySecurityTest {
         }
     }
 
+
+    @Test
+    void ordinaryRefreshBeforeSendMustNotFailNonIdempotentCall() throws Exception {
+        assertOrdinaryRefreshCompletes(false);
+    }
+
+    @Test
+    void ordinaryRefreshBeforeSendMustNotSpendIdempotentNetworkRetry() throws Exception {
+        assertOrdinaryRefreshCompletes(true);
+    }
+
+    private static void assertOrdinaryRefreshCompletes(boolean idempotent) throws Exception {
+        try (var control = new RpcSecurityTestFixtures.ControlPlane()) {
+            var transport = new RpcSecurityTestFixtures.ClientTransport(control.clock);
+            var codec = new RpcSecurityTestFixtures.TestCodec();
+            java.util.concurrent.atomic.AtomicInteger selections = new java.util.concurrent.atomic.AtomicInteger();
+            try (OtryxRpcClient client = control.clientBuilder(transport, RpcCodecRegistry.of(codec))
+                    .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT).loadBalancer(new LoadBalancer() {
+                        @Override
+                        public ServiceInstance select(ServiceInstance[] instances, LoadBalanceMetrics metrics) {
+                            if (selections.incrementAndGet() == 1) {
+                                control.resolver.refresh(MAPPING, SCHEMA).toCompletableFuture().join();
+                            }
+                            return instances[0];
+                        }
+                    }).build()) {
+                control.publish(Api.class);
+                Api api = client.refer(Api.class, "1.0.0", "default");
+                ApplicationTestControlPlane.awaitReady(client, KEY);
+                assertEquals("ok", idempotent ? api.call() : api.mutate());
+                assertEquals(2, selections.get(), "A newer local projection must be selected exactly once");
+                assertEquals(1, transport.requests.get(), "Local reselection must never send twice");
+                assertEquals(1, codec.resultDecodes.get());
+                for (Object value : statistics(client).values()) {
+                    assertEquals(0, ((EndpointStats) value).inflight());
+                }
+            }
+        }
+    }
+
+    @Test
+    void successiveOrdinaryRefreshesMustStopAfterBoundedLocalSelections() throws Exception {
+        try (var control = new RpcSecurityTestFixtures.ControlPlane()) {
+            var transport = new RpcSecurityTestFixtures.ClientTransport(control.clock);
+            java.util.concurrent.atomic.AtomicInteger selections = new java.util.concurrent.atomic.AtomicInteger();
+            try (OtryxRpcClient client = control.clientBuilder(transport,
+                    RpcCodecRegistry.of(new RpcSecurityTestFixtures.TestCodec()))
+                    .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT).loadBalancer(new LoadBalancer() {
+                        @Override
+                        public ServiceInstance select(ServiceInstance[] instances, LoadBalanceMetrics metrics) {
+                            selections.incrementAndGet();
+                            control.resolver.refresh(MAPPING, SCHEMA).toCompletableFuture().join();
+                            return instances[0];
+                        }
+                    }).build()) {
+                control.publish(Api.class);
+                Api api = client.refer(Api.class, "1.0.0", "default");
+                ApplicationTestControlPlane.awaitReady(client, KEY);
+                CompletionException failure = assertThrows(CompletionException.class, api::mutate);
+                assertTrue(failure.getCause() instanceof RpcUnavailableException);
+                assertEquals(2, selections.get(), "Repeated retirement must not spin or schedule retries");
+                assertEquals(0, transport.requests.get());
+                for (Object value : statistics(client).values()) {
+                    assertEquals(0, ((EndpointStats) value).inflight());
+                }
+            }
+        }
+    }
+
+    @Test
+    void securityRevocationDuringLocalReselectionMustFailClosed() throws Exception {
+        AtomicBoolean denied = new AtomicBoolean();
+        try (var control = new RpcSecurityTestFixtures.ControlPlane(source -> new ControlledMappings(source, denied))) {
+            var transport = new RpcSecurityTestFixtures.ClientTransport(control.clock);
+            java.util.concurrent.atomic.AtomicInteger selections = new java.util.concurrent.atomic.AtomicInteger();
+            try (OtryxRpcClient client = control.clientBuilder(transport,
+                    RpcCodecRegistry.of(new RpcSecurityTestFixtures.TestCodec()))
+                    .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT).loadBalancer(new LoadBalancer() {
+                        @Override
+                        public ServiceInstance select(ServiceInstance[] instances, LoadBalanceMetrics metrics) {
+                            if (selections.incrementAndGet() == 1) {
+                                control.resolver.refresh(MAPPING, SCHEMA).toCompletableFuture().join();
+                            } else {
+                                rejectAnotherRoute(control, denied);
+                            }
+                            return instances[0];
+                        }
+                    }).build()) {
+                control.publish(Api.class);
+                Api api = client.refer(Api.class, "1.0.0", "default");
+                ApplicationTestControlPlane.awaitReady(client, KEY);
+                assertEquals(RegistrySecurityFailure.AUTHORIZATION_REJECTED,
+                        securityFailure(assertThrows(CompletionException.class, api::mutate)).reason());
+                assertEquals(2, selections.get());
+                assertEquals(0, transport.requests.get());
+                for (Object value : statistics(client).values()) {
+                    assertEquals(0, ((EndpointStats) value).inflight());
+                }
+            }
+        }
+    }
+
     private static void rejectAnotherRoute(RpcSecurityTestFixtures.ControlPlane control, AtomicBoolean denied) {
         denied.set(true);
         CompletionException failure = assertThrows(CompletionException.class,
@@ -172,6 +274,8 @@ class RpcClientDirectorySecurityTest {
     public interface Api {
         @OtryxRpcIdempotent
         String call();
+
+        String mutate();
     }
 
     private record ControlledMappings(ServiceMappingRepository delegate, AtomicBoolean denied)

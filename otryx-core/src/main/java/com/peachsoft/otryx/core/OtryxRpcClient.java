@@ -86,6 +86,7 @@ import org.slf4j.LoggerFactory;
 public final class OtryxRpcClient implements AutoCloseable {
     private static final Logger LOGGER =
             LoggerFactory.getLogger(OtryxRpcClient.class);
+    private static final int MAX_LOCAL_DIRECTORY_SELECTIONS = 2;
     private final RpcSecurityProfile securityProfile;
     private final Clock identityClock;
     private final LongSupplier identityNanoClock;
@@ -594,9 +595,23 @@ public final class OtryxRpcClient implements AutoCloseable {
             long deadlineNanos,
             int attempt,
             CompletableFuture<Object> result) {
+        attemptWithLocalSelection(reference, method, encodedArguments, propagatedMetadata, callContext,
+                deadlineNanos, attempt, 0, result);
+    }
+
+    private void attemptWithLocalSelection(
+            ClientReference reference,
+            ClientMethodBinding method,
+            byte[] encodedArguments,
+            Map<String, String> propagatedMetadata,
+            RpcCallContext callContext,
+            long deadlineNanos,
+            int attempt,
+            int localSelections,
+            CompletableFuture<Object> result) {
         try {
             attemptChecked(reference, method, encodedArguments, propagatedMetadata, callContext,
-                    deadlineNanos, attempt, result);
+                    deadlineNanos, attempt, localSelections, result);
         } catch (RpcAuthenticationException | RegistrySecurityException rejected) {
             observeClientAttempt(reference, method, null, attempt, 0L, RpcStatus.BAD_REQUEST, rejected);
             result.completeExceptionally(rejected);
@@ -613,6 +628,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             RpcCallContext callContext,
             long deadlineNanos,
             int attempt,
+            int localSelections,
             CompletableFuture<Object> result) {
         if (result.isDone()) {
             return;
@@ -721,15 +737,20 @@ public final class OtryxRpcClient implements AutoCloseable {
             }
             if (!reference.directory().isUsable(selection)) {
                 endpointStats.endSecurityRejected();
-                retryOrComplete(reference, method, encodedArguments, propagatedMetadata, callContext,
-                        deadlineNanos, attempt, result,
-                        new RpcUnavailableException("Verified directory changed before transport send"));
+                if (localSelections + 1 < MAX_LOCAL_DIRECTORY_SELECTIONS) {
+                    // 普通刷新只允许有限次本地重选，不发送旧端点，也不消耗网络重试额度。
+                    attemptWithLocalSelection(reference, method, encodedArguments, propagatedMetadata, callContext,
+                            deadlineNanos, attempt, localSelections + 1, result);
+                } else {
+                    result.completeExceptionally(
+                            new RpcUnavailableException("Verified directory changed before transport send"));
+                }
                 return;
             }
             CompletableFuture<RpcTransportResponse> transportFuture = transport.request(
                             selected.target(),
                             request,
-                            Duration.ofNanos(remainingNanos))
+                            Duration.ofNanos(wireRemainingNanos))
                     .toCompletableFuture();
             result.whenComplete((ignoredValue, completionError) -> {
                 if (closed.get()
