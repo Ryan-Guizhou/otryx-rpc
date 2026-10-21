@@ -172,3 +172,5 @@ Core 与 Spring Starter 的 `otryx.rpc.client.directory-max-staleness` 默认均
 ## 签名动态治理（V2-17）
 
 可选 `RpcGovernanceRuntime` 使用独立有界控制线程订阅完整签名治理快照，对应用/方法级 Timeout、标签路由、应用权重、熔断和并发额度执行**原子版本切换**。Consumer 同一逻辑调用捕获同一 revision；Provider 原业务 Admission 和 mTLS/授权/Codec 安全规则始终优先。未配置 Repository/Verifier 时无动态治理开销；配置后在首次正确签名到达前 Fail Closed。详见 [治理配置与安全契约](docs/reference/governance.md)。
+
+> V2-19 实证边界：固定物理机控制面原生计数、AB BA AB 六次完整 JMH 与每次至少 60 分钟 Soak **尚未采集**，不得以 Shared Runner CI Smoke 推断正式性能或容量。工具与证据入口参见 [注册规模量测](docs/reference/v2-19-performance-closure.md)。

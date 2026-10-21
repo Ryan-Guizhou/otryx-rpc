@@ -174,3 +174,5 @@ Configure an ordered `RpcInterceptor` chain. Consumer logical calls are distinct
 ## Signed dynamic governance (V2-17)
 
 Optional `RpcGovernanceRuntime` consumes complete signed governance snapshots on a bounded control executor and atomically switches timeout, tag routing, application weighting, circuit and concurrency limits. Each Consumer logical call pins one revision; the Provider's original admission and mTLS/auth/Codec security always take precedence. With no configured repository/verifier, there is no dynamic-governance overhead. Once enabled, calls fail closed until the first valid signed snapshot arrives. See [Governance and security contract](docs/reference/governance.md).
+
+> V2-19 evidence boundary: fixed-host native control-plane measurements and six controlled AB BA AB full JMH runs, each with a 60-minute soak, **have not yet been collected**. Shared-runner CI smoke is not capacity proof. See [registration-scale evidence](docs/reference/v2-19-performance-closure.md).
