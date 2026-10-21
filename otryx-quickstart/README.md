@@ -542,3 +542,18 @@ otryx:
 ```
 
 过大 Payload 和并发缓冲饱和会以 `OVERLOADED` 拒绝。它不表示业务任务可以被强制中断，仍需遵守实际工作完成后释放 Admission Lease 的规则。详见 [Transport 资源边界](../docs/reference/transport-admission.md)。
+
+
+## 可选业务 Interceptor SPI（不修改 Wire v1）
+
+Spring Boot 可直接声明多个 `RpcInterceptor` Bean（例如 `@Order(10)`）；Starter 使用 `ObjectProvider.orderedStream()` 在启动时编译有序列表，两端共享相同 Bean 列表，但各自独立有界执行器。在 `before` 中不得信任 Wire Metadata 自述身份；`RpcInvocation.caller()` 才表示实际应用成员/认证 Peer，匿名可信开发连接返回空值。
+
+```yaml
+otryx:
+  rpc:
+    interceptor:
+      workers: 4
+      max-active: 512
+```
+
+不提供 Hook Bean 时不创建线程或每次调用的拦截器事件。程序化 Client/Server 可用 `interceptors(List.of(...)).interceptorExecutionLimits(4, 512)`。默认仅做有序生命周期扩展，不允许替换身份、ServiceKey、Payload 和授权。详情见 [Interceptor 参考](../docs/reference/interceptors.md)。

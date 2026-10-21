@@ -62,6 +62,14 @@ final class OtryxRpcStartupDiagnostics {
         if (properties.isEnabled()) {
             validateExplicitProfile(properties);
         }
+        OtryxRpcProperties.Interceptor interceptor = properties.getInterceptor();
+        positive("interceptor.workers", interceptor.getWorkers());
+        positive("interceptor.max-active", interceptor.getMaxActive());
+        if (interceptor.getWorkers() > com.peachsoft.otryx.interceptor.RpcInterceptorRuntime.MAX_ALLOWED_WORKERS
+                || interceptor.getMaxActive()
+                        > com.peachsoft.otryx.interceptor.RpcInterceptorRuntime.MAX_ALLOWED_ACTIVE) {
+            throw invalid("interceptor", "worker or session capacity exceeds its hard limit");
+        }
         OtryxRpcProperties.Registry registry = properties.getRegistry();
         requireText("registry.type", registry.getType());
         positive("registry.lease-ttl-seconds", registry.getLeaseTtlSeconds());

@@ -2,6 +2,7 @@ package com.peachsoft.otryx.spring.autoconfigure;
 
 import com.peachsoft.otryx.observability.RpcSecurityMode;
 import com.peachsoft.otryx.api.RpcSecurityProfile;
+import com.peachsoft.otryx.interceptor.RpcInterceptorRuntime;
 import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
 import java.util.LinkedHashSet;
@@ -48,6 +49,7 @@ public class OtryxRpcProperties implements InitializingBean {
     private final Client client = new Client();
     private final Server server = new Server();
     private final Codec codec = new Codec();
+    private final Interceptor interceptor = new Interceptor();
 
     /**
      * 返回 OTRYX RPC 总开关。
@@ -128,6 +130,61 @@ public class OtryxRpcProperties implements InitializingBean {
      */
     public Codec getCodec() {
         return codec;
+    }
+
+    /**
+     * 返回专属拦截器 Worker 的容量设置；无拦截器时不创建 Worker。
+     *
+     * @return Hook 运行时设置
+     */
+    public Interceptor getInterceptor() {
+        return interceptor;
+    }
+
+    /** 每个 Provider/Consumer 独立使用的拦截器运行时设置。 */
+    public static class Interceptor {
+        private int workers = RpcInterceptorRuntime.DEFAULT_WORKERS;
+        private int maxActive = RpcInterceptorRuntime.DEFAULT_MAX_ACTIVE;
+
+        /** 供 Spring Binder 创建配置实例。 */
+        public Interceptor() {
+        }
+
+        /**
+         * 返回专用 Hook 平台 Worker 数（1 至 64）。
+         *
+         * @return 当前配置的固定 Worker 数
+         */
+        public int getWorkers() {
+            return workers;
+        }
+
+        /**
+         * 设置专用 Hook 平台 Worker 数（1 至 64）。
+         *
+         * @param value 不超过运行时硬上限的固定 Worker 数
+         */
+        public void setWorkers(int value) {
+            workers = value;
+        }
+
+        /**
+         * 返回 Hook Session Admission 上限（1 至 32768）。
+         *
+         * @return 当前有界 Hook 会话容量
+         */
+        public int getMaxActive() {
+            return maxActive;
+        }
+
+        /**
+         * 设置 Hook Session Admission 上限（1 至 32768）。
+         *
+         * @param value 不超过运行时硬上限的 Hook 会话容量
+         */
+        public void setMaxActive(int value) {
+            maxActive = value;
+        }
     }
 
     /** 编解码配置。 */

@@ -529,3 +529,18 @@ otryx:
 ```
 
 Oversized payloads and exhausted output reservations are rejected as `OVERLOADED`. This does not prove that arbitrary user work stopped when a request was cancelled. See [Transport admission and limitations](../docs/reference/transport-admission.md).
+
+
+## Optional business Interceptor SPI (Wire v1 unchanged)
+
+Spring Boot can declare multiple `RpcInterceptor` beans (for example, using `@Order(10)`). The Starter compiles a single ordered bean list with `ObjectProvider.orderedStream()` at startup. Consumer and Provider use the same configured list but independent bounded workers. Do not trust a caller identity asserted in Wire Metadata; `RpcInvocation.caller()` contains the actual application member or authenticated TLS peer, and is empty for anonymous trusted-development connections.
+
+```yaml
+otryx:
+  rpc:
+    interceptor:
+      workers: 4
+      max-active: 512
+```
+
+Without interceptor beans, no worker threads or per-call hook events are created. Programmatic Client/Server builders can use `interceptors(List.of(...)).interceptorExecutionLimits(4, 512)`. Hooks cannot replace transport identity, ServiceKey, Payload or authorization. See [Interceptor reference](../docs/reference/interceptors.md).

@@ -19,6 +19,9 @@ import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
 import com.peachsoft.otryx.generated.RpcGeneratedClients;
+import com.peachsoft.otryx.interceptor.RpcInterceptor;
+import com.peachsoft.otryx.interceptor.RpcInterceptorRuntime;
+import com.peachsoft.otryx.interceptor.RpcInvocation;
 import com.peachsoft.otryx.generated.RpcGeneratedInvocation;
 import com.peachsoft.otryx.loadbalance.LoadBalanceMetrics;
 import com.peachsoft.otryx.loadbalance.LoadBalancer;
@@ -47,6 +50,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CancellationException;
@@ -100,6 +104,7 @@ public final class OtryxRpcClient implements AutoCloseable {
     private final byte defaultCodecId;
     private final LoadBalancer loadBalancer;
     private final RpcRouter router;
+    private final RpcInterceptorRuntime interceptors;
     private final ProxyFactory proxyFactory;
     private final Duration timeout;
     private final Map<String, Duration> methodTimeouts;
@@ -159,6 +164,9 @@ public final class OtryxRpcClient implements AutoCloseable {
         this.router = builder.router != null
                 ? builder.router
                 : ExtensionLoader.getLoader(RpcRouter.class).getDefaultExtension();
+        this.interceptors = builder.interceptors.isEmpty() ? null : new RpcInterceptorRuntime(
+                builder.interceptors, builder.interceptorWorkers,
+                builder.interceptorMaxActive, "consumer");
         this.proxyFactory = builder.proxyFactory != null
                 ? builder.proxyFactory
                 : ExtensionLoader.getLoader(ProxyFactory.class).getDefaultExtension();
@@ -438,8 +446,8 @@ public final class OtryxRpcClient implements AutoCloseable {
             ClientMethodBinding method,
             byte[] encodedArguments,
             long callStartedAtNanos) {
-        CompletableFuture<Object> result =
-                new CompletableFuture<>();
+        CompletableFuture<Object> result = interceptors == null
+                ? new CompletableFuture<>() : new InterceptedCall();
         long[] circuitGeneration = {RpcCircuitBreaker.REJECTED};
         result.whenComplete((ignoredValue, error) -> {
             pendingCalls.remove(result);
@@ -553,15 +561,22 @@ public final class OtryxRpcClient implements AutoCloseable {
                     TimeUnit.NANOSECONDS);
             result.whenComplete((ignoredValue, error) ->
                     deadlineTask.cancel(false));
-            attempt(
-                    reference,
-                    method,
-                    encodedArguments,
-                    propagatedMetadata,
-                    currentCall,
-                    deadlineNanos,
-                    1,
-                    result);
+            if (interceptors != null) {
+                RpcInterceptorRuntime.Session session = interceptors.open(
+                        new RpcInvocation(RpcInvocation.Side.CONSUMER, reference.key(),
+                                method.methodId(), Optional.of(membership.application())), currentCall);
+                ((InterceptedCall) result).session = session;
+                result.whenComplete((value, error) -> session.finish(
+                        result.isCancelled() ? RpcStatus.UNAVAILABLE
+                                : error == null ? RpcStatus.OK : statusOf(unwrap(error)),
+                        result.isCancelled()));
+                long interceptorDeadlineNanos = deadlineNanos;
+                session.before(() -> attempt(reference, method, encodedArguments, propagatedMetadata,
+                        currentCall, interceptorDeadlineNanos, 1, result), result::completeExceptionally);
+            } else {
+                attempt(reference, method, encodedArguments, propagatedMetadata,
+                        currentCall, deadlineNanos, 1, result);
+            }
             return result;
         } catch (RuntimeException | Error setupError) {
             result.completeExceptionally(setupError);
@@ -600,8 +615,15 @@ public final class OtryxRpcClient implements AutoCloseable {
             long deadlineNanos,
             int attempt,
             CompletableFuture<Object> result) {
-        attemptWithLocalSelection(reference, method, encodedArguments, propagatedMetadata, callContext,
-                deadlineNanos, attempt, 0, result);
+        if (result instanceof InterceptedCall observed && observed.session != null) {
+            observed.session.beforeAttempt(attempt,
+                    () -> attemptWithLocalSelection(reference, method, encodedArguments,
+                            propagatedMetadata, callContext, deadlineNanos, attempt, 0, result),
+                    result::completeExceptionally);
+        } else {
+            attemptWithLocalSelection(reference, method, encodedArguments, propagatedMetadata,
+                    callContext, deadlineNanos, attempt, 0, result);
+        }
     }
 
     private void attemptWithLocalSelection(
@@ -618,7 +640,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             attemptChecked(reference, method, encodedArguments, propagatedMetadata, callContext,
                     deadlineNanos, attempt, localSelections, result);
         } catch (RpcAuthenticationException | RegistrySecurityException rejected) {
-            observeClientAttempt(reference, method, null, attempt, 0L, RpcStatus.BAD_REQUEST, rejected);
+            observeClientAttempt(reference, method, null, attempt, 0L, RpcStatus.BAD_REQUEST, rejected, result);
             result.completeExceptionally(rejected);
         } catch (RuntimeException failure) {
             result.completeExceptionally(failure);
@@ -659,7 +681,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                     attempt,
                     0L,
                     RpcStatus.DEADLINE_EXCEEDED,
-                    timeoutError);
+                    timeoutError, result);
             result.completeExceptionally(timeoutError);
             return;
         }
@@ -675,7 +697,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             if (routed.length == 0) {
                 RpcUnavailableException unavailable =
                         new RpcUnavailableException("RPC router excluded all verified providers");
-                observeClientAttempt(reference, method, null, attempt, 0L, RpcStatus.UNAVAILABLE, unavailable);
+                observeClientAttempt(reference, method, null, attempt, 0L, RpcStatus.UNAVAILABLE, unavailable, result);
                 result.completeExceptionally(unavailable);
                 return;
             }
@@ -701,7 +723,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                     attempt,
                     0L,
                     RpcStatus.UNAVAILABLE,
-                    unavailable);
+                    unavailable, result);
             retryOrComplete(
                     reference,
                     method,
@@ -819,7 +841,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             if (securityFailure(rejected)) {
                 endpointStats.endSecurityRejected();
                 observeClientAttempt(reference, method, selected.endpoint(), attempt,
-                        System.nanoTime() - startedAtNanos, RpcStatus.BAD_REQUEST, rejected);
+                        System.nanoTime() - startedAtNanos, RpcStatus.BAD_REQUEST, rejected, result);
                 result.completeExceptionally(rejected);
                 return;
             }
@@ -886,7 +908,7 @@ public final class OtryxRpcClient implements AutoCloseable {
             if (securityFailure(failure)) {
                 endpointStats.endSecurityRejected();
                 observeClientAttempt(reference, method, selected.endpoint(), attempt,
-                        elapsed, RpcStatus.BAD_REQUEST, failure);
+                        elapsed, RpcStatus.BAD_REQUEST, failure, result);
                 result.completeExceptionally(failure);
                 return;
             }
@@ -906,7 +928,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                     attempt,
                     elapsed,
                     statusOf(failure),
-                    failure);
+                    failure, result);
             retryOrComplete(
                     reference,
                     method,
@@ -938,12 +960,12 @@ public final class OtryxRpcClient implements AutoCloseable {
                     attempt,
                     elapsed,
                     RpcStatus.OK,
-                    null);
+                    null, result);
             result.complete(value);
         } catch (RpcAuthenticationException | RegistrySecurityException rejected) {
             endpointStats.endSecurityRejected();
             observeClientAttempt(reference, method, selected.endpoint(), attempt,
-                    elapsed, RpcStatus.BAD_REQUEST, rejected);
+                    elapsed, RpcStatus.BAD_REQUEST, rejected, result);
             result.completeExceptionally(rejected);
         } catch (RpcRemoteException remoteError) {
             if (ClientRetryController.isRetryable(remoteError)) {
@@ -959,7 +981,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                         attempt,
                         elapsed,
                         remoteError.status(),
-                        remoteError);
+                        remoteError, result);
                 retryOrComplete(
                         reference,
                         method,
@@ -979,7 +1001,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                         attempt,
                         elapsed,
                         remoteError.status(),
-                        remoteError);
+                        remoteError, result);
                 result.completeExceptionally(remoteError);
             }
         } catch (Throwable error) {
@@ -995,7 +1017,7 @@ public final class OtryxRpcClient implements AutoCloseable {
                     attempt,
                     elapsed,
                     statusOf(error),
-                    error);
+                    error, result);
             retryOrComplete(
                     reference,
                     method,
@@ -1116,7 +1138,11 @@ public final class OtryxRpcClient implements AutoCloseable {
             int attempt,
             long durationNanos,
             RpcStatus status,
-            Throwable error) {
+            Throwable error,
+            CompletableFuture<Object> result) {
+        if (result instanceof InterceptedCall intercepted && intercepted.session != null) {
+            intercepted.session.afterAttempt(attempt, status);
+        }
         if (observer.enabled()) {
             observer.onClientAttemptCompleted(
                     reference.key(),
@@ -1127,6 +1153,11 @@ public final class OtryxRpcClient implements AutoCloseable {
                     status,
                     error);
         }
+    }
+
+    /** 保存有拦截器的逻辑调用专属 Session；无拦截器时仍采用原生 CompletableFuture 快路径。 */
+    private static final class InterceptedCall extends CompletableFuture<Object> {
+        private volatile RpcInterceptorRuntime.Session session;
     }
 
     private static RpcStatus statusOf(Throwable error) {
@@ -1275,6 +1306,9 @@ public final class OtryxRpcClient implements AutoCloseable {
         // 执行器清理不能被任何不响应中断的外部 SPI 关闭调用推迟。
         responseCompletionExecutor.shutdownNow();
         deadlineScheduler.shutdownNow();
+        if (interceptors != null) {
+            interceptors.close();
+        }
 
         // Future 回调可能执行不配合中断的用户代码，必须独立于其他清理阶段。
         CompletableFuture<Void> settleCalls = new CompletableFuture<>();
@@ -1561,6 +1595,9 @@ public final class OtryxRpcClient implements AutoCloseable {
         private RpcCodecRegistry codecs;
         private LoadBalancer loadBalancer;
         private RpcRouter router;
+        private List<RpcInterceptor> interceptors = List.of();
+        private int interceptorWorkers = RpcInterceptorRuntime.DEFAULT_WORKERS;
+        private int interceptorMaxActive = RpcInterceptorRuntime.DEFAULT_MAX_ACTIVE;
         private ProxyFactory proxyFactory;
         private Duration timeout = Duration.ofSeconds(3);
         private Map<String, Duration> methodTimeouts = Map.of();
@@ -1658,6 +1695,34 @@ public final class OtryxRpcClient implements AutoCloseable {
          */
         public Builder router(RpcRouter value) {
             this.router = Objects.requireNonNull(value, "router");
+            return this;
+        }
+
+        /**
+         * 指定显式有序调用拦截器；空列表禁用并保留零 Hook 排队的快路径。
+         *
+         * @param value 不含 null 的拦截器实例
+         * @return Consumer Builder
+         */
+        public Builder interceptors(List<RpcInterceptor> value) {
+            this.interceptors = List.copyOf(Objects.requireNonNull(value, "interceptors"));
+            return this;
+        }
+
+        /**
+         * 指定每实例专属 Hook Worker 和逻辑调用配额。
+         *
+         * @param workers 有界固定 Worker 数
+         * @param maxActive 逻辑调用持有的 Hook 生命周期数量
+         * @return Consumer Builder
+         */
+        public Builder interceptorExecutionLimits(int workers, int maxActive) {
+            if (workers < 1 || workers > RpcInterceptorRuntime.MAX_ALLOWED_WORKERS
+                    || maxActive < 1 || maxActive > RpcInterceptorRuntime.MAX_ALLOWED_ACTIVE) {
+                throw new IllegalArgumentException("Invalid RPC interceptor worker or session capacity");
+            }
+            interceptorWorkers = workers;
+            interceptorMaxActive = maxActive;
             return this;
         }
 

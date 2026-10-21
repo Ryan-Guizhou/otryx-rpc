@@ -60,6 +60,15 @@ final class RpcAuthorizationGrant {
                 && now.isBefore(validUntil) && peerValidAt(now, nowNanos);
     }
 
+    /**
+     * 返回实际可信 Transport Peer 的应用身份，匿名开发连接不推断身份。
+     *
+     * @return 已完成实际证书校验的 Peer ApplicationKey；可能为空
+     */
+    java.util.Optional<com.peachsoft.otryx.api.ApplicationKey> callerApplication() {
+        return context.peer().application();
+    }
+
     boolean peerValidAt(Instant now, long nowNanos) {
         return !cancelled.getAsBoolean()
                 && RpcSecurityChecks.providerPeer(profile, context.peer(), context.localApplication(), now, nowNanos);
