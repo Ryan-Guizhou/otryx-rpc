@@ -167,3 +167,8 @@ Core 与 Spring Starter 的 `otryx.rpc.client.directory-max-staleness` 默认均
 通过 `RpcInterceptor` 配置有序 Hook 链：Consumer 的一次逻辑调用与每次 Retry Attempt 分开回调；Provider 只在真实 Peer 校验、服务/方法授权及业务 Admission 通过后运行。默认无 Hook 时不创建专属 Worker，也不改变现有调用快路径。配置 Hook 后采用固定 Worker、整条会话的容量配额及串行事件队列，超时/取消不会提前归还仍在运行的 Hook 槽位。
 
 [Interceptor 的生命周期、异常及线程边界](docs/reference/interceptors.md) · [Quickstart 配置](otryx-quickstart/README.md)。
+
+
+## 签名动态治理（V2-17）
+
+可选 `RpcGovernanceRuntime` 使用独立有界控制线程订阅完整签名治理快照，对应用/方法级 Timeout、标签路由、应用权重、熔断和并发额度执行**原子版本切换**。Consumer 同一逻辑调用捕获同一 revision；Provider 原业务 Admission 和 mTLS/授权/Codec 安全规则始终优先。未配置 Repository/Verifier 时无动态治理开销；配置后在首次正确签名到达前 Fail Closed。详见 [治理配置与安全契约](docs/reference/governance.md)。

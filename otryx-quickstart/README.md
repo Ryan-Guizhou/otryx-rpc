@@ -557,3 +557,17 @@ otryx:
 ```
 
 不提供 Hook Bean 时不创建线程或每次调用的拦截器事件。程序化 Client/Server 可用 `interceptors(List.of(...)).interceptorExecutionLimits(4, 512)`。默认仅做有序生命周期扩展，不允许替换身份、ServiceKey、Payload 和授权。详情见 [Interceptor 参考](../docs/reference/interceptors.md)。
+
+
+## 可选签名动态治理（V2-17）
+
+启动时若同时提供 `RpcGovernanceRepository`（异步完整快照 Load/Watch）和 `RpcGovernanceVerifier`（建议 `RpcHmacGovernanceVerifier`）Bean，单一 Starter 自动创建/关闭 `RpcGovernanceRuntime`。仅配置其中一个 Bean 会在 BeanFactory 阶段失败。**仓库不会自动从不可信 Nacos/Etcd/Eureka 元数据读取治理规则，也不会从 YAML 读取 HMAC 密钥**；必须由应用提供受保护的仓库 Adapter 和密钥来源。没有这两个 Bean 时所有现有 Quickstart 路径保持不变。
+
+```yaml
+otryx:
+  rpc:
+    governance:
+      max-last-known-good: 5m
+```
+
+普通治理控制面短暂失联允许带时限使用上一次验证规则；签名/权限拒绝立即 Fail Closed，不能将已经失效的安全规则当作健康数据。发布/回滚均须新的单调 revision 与完整 HMAC。Provider/Consumer 应用成员注册主键和 Wire v1 完全不变。参考 [治理说明](../docs/reference/governance.md)。

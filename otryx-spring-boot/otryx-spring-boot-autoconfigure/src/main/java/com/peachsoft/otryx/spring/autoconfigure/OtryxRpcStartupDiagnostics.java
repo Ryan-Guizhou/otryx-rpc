@@ -70,6 +70,11 @@ final class OtryxRpcStartupDiagnostics {
                         > com.peachsoft.otryx.interceptor.RpcInterceptorRuntime.MAX_ALLOWED_ACTIVE) {
             throw invalid("interceptor", "worker or session capacity exceeds its hard limit");
         }
+        Duration governanceLkg = properties.getGovernance().getMaxLastKnownGood();
+        positive("governance.max-last-known-good", governanceLkg);
+        if (governanceLkg.compareTo(Duration.ofMinutes(30)) > 0) {
+            throw invalid("governance.max-last-known-good", "must not exceed 30 minutes");
+        }
         OtryxRpcProperties.Registry registry = properties.getRegistry();
         requireText("registry.type", registry.getType());
         positive("registry.lease-ttl-seconds", registry.getLeaseTtlSeconds());

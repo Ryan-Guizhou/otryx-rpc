@@ -100,3 +100,8 @@ Consumer 的 `RpcRouter` 位于 `com.peachsoft.otryx.routing`，默认 `rules` �
 `com.peachsoft.otryx.interceptor.RpcInterceptor` 是有序 Java 扩展点，由唯一 Starter 按 Spring `@Order` 注入或通过 Core Builder 显式配置。调用方无需在热路径进行 ServiceLoader 扫描；空列表保持无 Hook 的既有同步调度路径。Context 只包含枚举角色、业务 ServiceKey、Method ID 与实际应用身份，不接收可伪造的 Metadata 身份、Payload 或证书字节。
 
 Consumer `before/after/onFailure/onCancel` 对应一个逻辑调用，`beforeAttempt/afterAttempt` 只对应网络 Retry 序号，本地目录重新选点不增加 Attempt。Provider Hook 必须在真实身份、授权和 Provider Admission 后运行，且执行业务前再次验证有限许可。Hook 在专属有界 Worker 上运行，事件按单个调用顺序串行化；失败前置 Hook 会阻止业务执行，终态 Hook 异常不会覆盖已经产生的调用结果。详细安全、线程、容量与调用图见 [Interceptor 参考](reference/interceptors.md)。
+
+
+## 11. RpcGovernanceRepository：有签名的完整快照控制面
+
+`com.peachsoft.otryx.governance.RpcGovernanceRepository` 必须实现异步初始 `load()` 与可关闭 `watch(...)`，交付完整 `RpcGovernanceSignedUpdate`，不能只推字段差异。框架的唯一写入路径先由 `RpcGovernanceVerifier` 验证发行人与 HMAC 覆盖的全部字段，再在单线程有界工作池编译并原子发布；失败时保持静态安全基线和有期限的治理 LKG。当前 Starter **不隐式选择远端配置后端**，必须提供受保护 Adapter + 验证器两个 Bean。不可在 RPC 热路径发起 Nacos/Etcd/Consul IO。完整说明、回滚、配额所有权与故障处理见 [治理参考](reference/governance.md)。

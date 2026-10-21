@@ -544,3 +544,17 @@ otryx:
 ```
 
 Without interceptor beans, no worker threads or per-call hook events are created. Programmatic Client/Server builders can use `interceptors(List.of(...)).interceptorExecutionLimits(4, 512)`. Hooks cannot replace transport identity, ServiceKey, Payload or authorization. See [Interceptor reference](../docs/reference/interceptors.md).
+
+
+## Optional signed dynamic governance (V2-17)
+
+The single Spring Starter creates and closes `RpcGovernanceRuntime` only when both `RpcGovernanceRepository` (asynchronous full-snapshot Load/Watch) and `RpcGovernanceVerifier` (preferably `RpcHmacGovernanceVerifier`) beans are available. Configuring just one fails during BeanFactory preflight. **No remote governance rules are implicitly read from untrusted Nacos/Etcd/Eureka metadata and HMAC secrets are not read from YAML**; applications must provide protected repository adapters and secret sources. Without these beans, existing Quickstart behavior is unchanged.
+
+```yaml
+otryx:
+  rpc:
+    governance:
+      max-last-known-good: 5m
+```
+
+A transient control-plane outage permits a bounded last-known-good window; signature/authorization failure fails closed immediately. Updates and rollbacks require a higher monotonic revision and an authenticated full snapshot. Application-level Registry keys and Wire v1 remain unchanged. See [governance reference](../docs/reference/governance.md).

@@ -104,6 +104,7 @@ public final class OtryxRpcClient implements AutoCloseable {
     private final byte defaultCodecId;
     private final LoadBalancer loadBalancer;
     private final RpcRouter router;
+    private final RpcGovernanceRuntime governance;
     private final RpcInterceptorRuntime interceptors;
     private final ProxyFactory proxyFactory;
     private final Duration timeout;
@@ -167,6 +168,7 @@ public final class OtryxRpcClient implements AutoCloseable {
         this.interceptors = builder.interceptors.isEmpty() ? null : new RpcInterceptorRuntime(
                 builder.interceptors, builder.interceptorWorkers,
                 builder.interceptorMaxActive, "consumer");
+        this.governance = builder.governance;
         this.proxyFactory = builder.proxyFactory != null
                 ? builder.proxyFactory
                 : ExtensionLoader.getLoader(ProxyFactory.class).getDefaultExtension();
@@ -446,12 +448,30 @@ public final class OtryxRpcClient implements AutoCloseable {
             ClientMethodBinding method,
             byte[] encodedArguments,
             long callStartedAtNanos) {
-        CompletableFuture<Object> result = interceptors == null
+        RpcGovernanceRuntime.Selection selectedGovernance;
+        RpcGovernanceRuntime.QuotaLease governanceLease;
+        try {
+            selectedGovernance = governance == null ? null : governance.capture(reference.key(), method.methodId());
+            governanceLease = governance == null ? null : governance.acquireQuota(selectedGovernance,
+                    RpcGovernanceRuntime.QuotaSide.CONSUMER, reference.key(), method.methodId());
+        } catch (RuntimeException rejected) {
+            responseCompletionPermits.release();
+            return CompletableFuture.failedFuture(rejected);
+        }
+        CompletableFuture<Object> result = interceptors == null && selectedGovernance == null
                 ? new CompletableFuture<>() : new InterceptedCall();
+        if (result instanceof InterceptedCall tracked) {
+            tracked.governance = selectedGovernance;
+        }
+        RpcCircuitBreaker governedCircuit = selectedGovernance == null ? null : selectedGovernance.circuit();
+        long[] governedGeneration = {RpcCircuitBreaker.REJECTED};
         long[] circuitGeneration = {RpcCircuitBreaker.REJECTED};
         result.whenComplete((ignoredValue, error) -> {
             pendingCalls.remove(result);
             responseCompletionPermits.release();
+            if (governanceLease != null) {
+                governanceLease.release();
+            }
         });
         pendingCalls.add(result);
         // 与 close() 的关闭标记和快照遍历协同；编码与关闭并发时也必须结算 Future。
@@ -479,8 +499,10 @@ public final class OtryxRpcClient implements AutoCloseable {
                 Throwable failure;
                 RpcStatus finalStatus;
                 if (result.isCancelled()) {
-                    method.circuitBreaker().onCancelled(
-                            circuitGeneration[0]);
+                    method.circuitBreaker().onCancelled(circuitGeneration[0]);
+                    if (governedCircuit != null) {
+                        governedCircuit.onCancelled(governedGeneration[0]);
+                    }
                     failure = new CancellationException(
                             "RPC call cancelled");
                     finalStatus = RpcStatus.UNAVAILABLE;
@@ -491,14 +513,21 @@ public final class OtryxRpcClient implements AutoCloseable {
                             : statusOf(failure);
                     if (securityFailure(failure)) {
                         method.circuitBreaker().onCancelled(circuitGeneration[0]);
+                        if (governedCircuit != null) {
+                            governedCircuit.onCancelled(governedGeneration[0]);
+                        }
                     } else if (failure == null
                             || (failure instanceof RpcRemoteException
                                     && !ClientRetryController.isRetryable(failure))) {
-                        method.circuitBreaker().onSuccess(
-                                circuitGeneration[0]);
+                        method.circuitBreaker().onSuccess(circuitGeneration[0]);
+                        if (governedCircuit != null) {
+                            governedCircuit.onSuccess(governedGeneration[0]);
+                        }
                     } else {
-                        method.circuitBreaker().onFailure(
-                                circuitGeneration[0]);
+                        method.circuitBreaker().onFailure(circuitGeneration[0]);
+                        if (governedCircuit != null) {
+                            governedCircuit.onFailure(governedGeneration[0]);
+                        }
                     }
                 }
                 observeCircuitState(reference, method);
@@ -538,10 +567,28 @@ public final class OtryxRpcClient implements AutoCloseable {
                 return result;
             }
 
+            if (governedCircuit != null) {
+                governedGeneration[0] = governedCircuit.tryAcquire();
+                if (governedGeneration[0] == RpcCircuitBreaker.REJECTED) {
+                    method.circuitBreaker().onCancelled(circuitGeneration[0]);
+                    circuitGeneration[0] = RpcCircuitBreaker.REJECTED;
+                    result.completeExceptionally(new RpcUnavailableException(
+                            "RPC governance circuit is open"));
+                    return result;
+                }
+            }
+
             RpcCallContext parent = currentCall;
             Duration selectedTimeout = parent != null && parent.options().timeout() != null
                     ? parent.options().timeout()
                     : methodTimeouts.getOrDefault(method.methodKey(), timeout);
+            if (selectedGovernance != null && selectedGovernance.method() != null
+                    && selectedGovernance.method().maxTimeout() != null) {
+                Duration policyLimit = selectedGovernance.method().maxTimeout();
+                if (policyLimit.compareTo(selectedTimeout) < 0) {
+                    selectedTimeout = policyLimit;
+                }
+            }
             long selectedBudgetNanos = selectedTimeout.toNanos();
             long deadlineNanos = callStartedAtNanos + selectedBudgetNanos;
             if (parent != null && parent.deadlineNanos() != Long.MAX_VALUE
@@ -665,6 +712,9 @@ public final class OtryxRpcClient implements AutoCloseable {
                     new RpcUnavailableException("RPC client is closed"));
             return;
         }
+        if (governance != null) {
+            governance.checkActive();
+        }
         if (!membershipReady.isDone() || membershipReady.isCompletedExceptionally()) {
             result.completeExceptionally(new RpcUnavailableException(
                     "RPC consumer application membership is not ready"));
@@ -702,9 +752,22 @@ public final class OtryxRpcClient implements AutoCloseable {
                 return;
             }
         }
+        if (governance != null && result instanceof InterceptedCall tracked
+                && tracked.governance != null && instances.length > 0) {
+            ServiceInstance[] controlled = governance.route(tracked.governance, instances);
+            requireVerifiedRoute(instances, controlled);
+            instances = controlled;
+            if (controlled.length == 0) {
+                RpcUnavailableException excluded = new RpcUnavailableException(
+                        "RPC governance excluded all verified providers");
+                observeClientAttempt(reference, method, null, attempt, 0L,
+                        RpcStatus.UNAVAILABLE, excluded, result);
+                result.completeExceptionally(excluded);
+                return;
+            }
+        }
         ServiceInstance selected = instances.length == 0
-                ? null
-                : loadBalancer.select(instances, loadMetrics);
+                ? null : loadBalancer.select(instances, loadMetrics);
         if (selected == null) {
             String reason = switch (selection.status()) {
                 case NOT_READY -> "Registry directory has no initial snapshot for ";
@@ -1158,6 +1221,7 @@ public final class OtryxRpcClient implements AutoCloseable {
     /** 保存有拦截器的逻辑调用专属 Session；无拦截器时仍采用原生 CompletableFuture 快路径。 */
     private static final class InterceptedCall extends CompletableFuture<Object> {
         private volatile RpcInterceptorRuntime.Session session;
+        private RpcGovernanceRuntime.Selection governance;
     }
 
     private static RpcStatus statusOf(Throwable error) {
@@ -1595,6 +1659,7 @@ public final class OtryxRpcClient implements AutoCloseable {
         private RpcCodecRegistry codecs;
         private LoadBalancer loadBalancer;
         private RpcRouter router;
+        private RpcGovernanceRuntime governance;
         private List<RpcInterceptor> interceptors = List.of();
         private int interceptorWorkers = RpcInterceptorRuntime.DEFAULT_WORKERS;
         private int interceptorMaxActive = RpcInterceptorRuntime.DEFAULT_MAX_ACTIVE;
@@ -1695,6 +1760,17 @@ public final class OtryxRpcClient implements AutoCloseable {
          */
         public Builder router(RpcRouter value) {
             this.router = Objects.requireNonNull(value, "router");
+            return this;
+        }
+
+        /**
+         * 安装显式受信治理运行时；没有配置源时继续走零治理对象快路径。
+         *
+         * @param value 已配备认证验证器且只在控制面订阅的运行时
+         * @return Consumer Builder
+         */
+        public Builder governanceRuntime(RpcGovernanceRuntime value) {
+            this.governance = Objects.requireNonNull(value, "governanceRuntime");
             return this;
         }
 

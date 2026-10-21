@@ -459,3 +459,8 @@ CLI 通过 `QUICKSTART_REGISTRY_SECURITY_FILE` 读取独立安全文件：配置
 ### Interceptor SPI 注入与容量
 
 同一 Starter 在运行时创建之前读取 `ObjectProvider<RpcInterceptor>.orderedStream()`，Provider/Consumer 使用这份启动时冻结的扩展列表分别建立有界执行器。配置 `otryx.rpc.interceptor.workers`（默认 4）及 `otryx.rpc.interceptor.max-active`（默认 512）；空列表不创建额外线程或每次请求对象。自定义 Hook 的权限边界、顺序、取消和过载见 [Interceptor 参考](interceptors.md)。
+
+
+### 有签名动态治理
+
+唯一 Starter 在出现 `RpcGovernanceRepository` + `RpcGovernanceVerifier` 配套 Bean 时创建 `RpcGovernanceRuntime`，异步拉取完整快照并在受限控制线程验证 HMAC 与单调 revision。配置 `otryx.rpc.governance.max-last-known-good: 5m`（严格正且最多 `30m`）。与原 Registry/Manifest/认证的安全边界分离，缺少任一 Bean 启动预检拒绝；未配置两个 Bean 时不产生治理控制线程或每次调用快照对象。Provider 和 Consumer 一起复用已验证的版本发布，但并发 quota 按侧隔离。[完整治理安全与回滚说明](governance.md)。

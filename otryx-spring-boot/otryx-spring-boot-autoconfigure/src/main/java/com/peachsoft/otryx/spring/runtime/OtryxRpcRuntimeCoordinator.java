@@ -7,6 +7,7 @@ import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.core.ApplicationMembershipCoordinator;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.RpcDirectoryFreshnessOptions;
+import com.peachsoft.otryx.core.RpcGovernanceRuntime;
 import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.core.RpcAuthorizer;
 import com.peachsoft.otryx.core.RpcShutdownOptions;
@@ -67,6 +68,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     private final LoadBalancer loadBalancer;
     private final RpcRouter router;
     private List<RpcInterceptor> interceptors = List.of();
+    private RpcGovernanceRuntime governance;
     private int interceptorWorkers = RpcInterceptorRuntime.DEFAULT_WORKERS;
     private int interceptorMaxActive = RpcInterceptorRuntime.DEFAULT_MAX_ACTIVE;
     private final ProxyFactory proxyFactory;
@@ -342,9 +344,27 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
         }
     }
 
+    /**
+     * 在唯一 Starter 创建 Consumer/Provider 前绑定同一个签名治理源。
+     *
+     * @param value 已启动、由 Spring 独立管理关闭的控制面实例
+     */
+    public synchronized void configureGovernanceRuntime(RpcGovernanceRuntime value) {
+        if (client != null || server != null || closed) {
+            throw new IllegalStateException("Governance must be configured before RPC runtime creation");
+        }
+        governance = Objects.requireNonNull(value, "governance");
+        if (preparedClientBuilder != null) {
+            preparedClientBuilder.governanceRuntime(governance);
+        }
+        if (preparedServerBuilder != null) {
+            preparedServerBuilder.governanceRuntime(governance);
+        }
+    }
+
     private OtryxRpcClient.Builder clientBuilder(RpcTransportClient transport) {
         OtryxRpcProperties.Client clientProperties = properties.getClient();
-        return OtryxRpcClient.builder()
+        OtryxRpcClient.Builder builder = OtryxRpcClient.builder()
                 .securityProfile(securityProfile)
                 .applicationControlPlane(resolver, membership, identity.application().namespace())
                 .codecRegistry(codecRegistry)
@@ -362,6 +382,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .observer(observer())
                 .metadataPropagator(metadataPropagator())
                 .tracingBridge(tracingBridge());
+        return governance == null ? builder : builder.governanceRuntime(governance);
     }
 
     private OtryxRpcClient createClient() {
@@ -433,7 +454,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
 
     private OtryxRpcServer.Builder serverBuilder(RpcTransportServer transport, RpcAuthorizer policy) {
         OtryxRpcProperties.Server serverProperties = properties.getServer();
-        return OtryxRpcServer.builder()
+        OtryxRpcServer.Builder builder = OtryxRpcServer.builder()
                 .securityProfile(securityProfile)
                 .applicationMembership(membership)
                 .codecRegistry(codecRegistry)
@@ -463,6 +484,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .observer(observer())
                 .metadataPropagator(metadataPropagator())
                 .tracingBridge(tracingBridge());
+        return governance == null ? builder : builder.governanceRuntime(governance);
     }
 
     private OtryxRpcServer createServer() {

@@ -166,3 +166,8 @@ QPS、线程数、连接数、Heap 和 p99/p99.9 的建议值都需要目标环�
 `otryx.rpc.interceptor.workers` 默认 4（允许 1–64），`otryx.rpc.interceptor.max-active` 默认 512（允许 1–32768）。配置数值只在声明至少一个 `RpcInterceptor` Bean 时创建真正的 Consumer/Provider 独立 Worker。每条逻辑调用占用一个会话槽直到终态 Hook 真正执行结束；阻塞 Hook 不在 EventLoop 执行，过载拒绝而非无限排队。过慢 Hook 无法被安全地强制停止，应用必须为 Hook 本身提供可停止的超时及外部 I/O 管控。
 
 Starter 按已声明 Bean 的 `@Order` 顺序解析配置，具体调用钩子次序由接口的 `order()` 决定（较小值先进入）。空 Bean 列表不建立 Hook Runtime。详情见 [Interceptor 生命周期](reference/interceptors.md)。
+
+
+## 13. 有签名动态治理配置（V2-17）
+
+可选 `otryx.rpc.governance.max-last-known-good` 默认 `5m`，必须是正数且不超过 `30m`，只约束普通治理仓库故障时已验证快照的延续。签名错误、发行人越权、配置完整性拒绝立即 Fail Closed；同 revision 重播无变更，旧 revision 不能覆盖新版本，回滚必须签发更高版本的完整配置。配置不控制 mTLS 身份、Codec 安全能力、Transport Frame 或 Provider 静态强限额。只有 `RpcGovernanceRepository` 与 `RpcGovernanceVerifier` Bean 配对时启用治理，默认仍使用原始配置；详见 [治理说明](reference/governance.md)。

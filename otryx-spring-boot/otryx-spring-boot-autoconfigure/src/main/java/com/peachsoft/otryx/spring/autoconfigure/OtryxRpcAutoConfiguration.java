@@ -10,6 +10,9 @@ import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.core.RpcAuthorizer;
 import com.peachsoft.otryx.core.RpcClientResilienceOptions;
+import com.peachsoft.otryx.core.RpcGovernanceRuntime;
+import com.peachsoft.otryx.governance.RpcGovernanceRepository;
+import com.peachsoft.otryx.governance.RpcGovernanceVerifier;
 import com.peachsoft.otryx.core.RpcProviderExecutionOptions;
 import com.peachsoft.otryx.interceptor.RpcInterceptor;
 import com.peachsoft.otryx.loadbalance.LoadBalancer;
@@ -48,6 +51,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.core.env.Environment;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -146,6 +150,14 @@ public class OtryxRpcAutoConfiguration {
                 return;
             }
             OtryxRpcStartupDiagnostics.validateExplicitProfile(properties);
+            boolean repositoryPresent = beanFactory.getBeanNamesForType(
+                    RpcGovernanceRepository.class, true, false).length > 0;
+            boolean verifierPresent = beanFactory.getBeanNamesForType(
+                    RpcGovernanceVerifier.class, true, false).length > 0;
+            if (repositoryPresent != verifierPresent) {
+                throw new IllegalStateException(
+                        "Governance requires both RpcGovernanceRepository and RpcGovernanceVerifier beans");
+            }
             if (properties.getSecurityProfile() == RpcSecurityProfile.NETWORK_MTLS
                     && properties.getServer().isEnabled()
                     && beanFactory.getBeanNamesForType(RpcAuthorizer.class, true, false).length == 0) {
@@ -602,6 +614,28 @@ public class OtryxRpcAutoConfiguration {
     }
 
     /**
+     * 只有同时提供签名验证器及控制面 Repository 时才启用动态治理。
+     *
+     * <p>启动快照异步加载，在第一份有权限完整签名配置到达前，数据面 Fail Closed。
+     * 不在 EventLoop 执行 Watch、HMAC 或配置编译。
+     *
+     * @param repository 受保护控制面来源
+     * @param verifier 完整 HMAC 或自定义严格验证器
+     * @param properties 本地不可放宽的 LKG 上限
+     * @return 在 Spring 销毁时关闭 Watch 与控制池的治理运行时
+     */
+    @Bean(destroyMethod = DESTROY_METHOD_CLOSE)
+    @ConditionalOnMissingBean
+    @ConditionalOnBean({RpcGovernanceRepository.class, RpcGovernanceVerifier.class})
+    public RpcGovernanceRuntime peachRpcGovernanceRuntime(
+            RpcGovernanceRepository repository, RpcGovernanceVerifier verifier, OtryxRpcProperties properties) {
+        RpcGovernanceRuntime runtime = new RpcGovernanceRuntime(
+                repository, verifier, properties.getGovernance().getMaxLastKnownGood());
+        runtime.start();
+        return runtime;
+    }
+
+    /**
      * 创建运行时协调器。
      *
      * @param registry 应用级成员注册中心
@@ -621,6 +655,7 @@ public class OtryxRpcAutoConfiguration {
      * @param tracingBridgeProvider 分布式 Trace Bridge 提供器
      * @param authorizerProvider 非阻塞 RPC 授权策略提供器
      * @param interceptorProvider 启动阶段一次性发现的有序业务 Hook
+     * @param governanceProvider 可选的唯一受保护治理 Runtime
      * @param properties OTRYX RPC 配置
      * @return 运行时协调器
      */
@@ -644,6 +679,7 @@ public class OtryxRpcAutoConfiguration {
             ObjectProvider<RpcTracingBridge> tracingBridgeProvider,
             ObjectProvider<RpcAuthorizer> authorizerProvider,
             ObjectProvider<RpcInterceptor> interceptorProvider,
+            ObjectProvider<RpcGovernanceRuntime> governanceProvider,
             OtryxRpcProperties properties) {
         OtryxRpcRuntimeCoordinator runtime = new OtryxRpcRuntimeCoordinator(
                 registry,
@@ -665,6 +701,10 @@ public class OtryxRpcAutoConfiguration {
                 properties);
         runtime.configureInterceptors(interceptorProvider.orderedStream().toList(),
                 properties.getInterceptor().getWorkers(), properties.getInterceptor().getMaxActive());
+        RpcGovernanceRuntime governance = governanceProvider.getIfAvailable();
+        if (governance != null) {
+            runtime.configureGovernanceRuntime(governance);
+        }
         return runtime;
     }
 
