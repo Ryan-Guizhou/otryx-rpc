@@ -150,22 +150,38 @@ public class OtryxRpcProperties implements InitializingBean {
         public Interceptor() {
         }
 
-        /** 返回专用 Hook 平台 Worker 数（1 至 64）。 */
+        /**
+         * 返回专用 Hook 平台 Worker 数（1 至 64）。
+         *
+         * @return 当前配置的固定 Worker 数
+         */
         public int getWorkers() {
             return workers;
         }
 
-        /** 设置专用 Hook 平台 Worker 数（1 至 64）。 */
+        /**
+         * 设置专用 Hook 平台 Worker 数（1 至 64）。
+         *
+         * @param value 不超过运行时硬上限的固定 Worker 数
+         */
         public void setWorkers(int value) {
             workers = value;
         }
 
-        /** 返回 Hook Session Admission 上限（1 至 32768）。 */
+        /**
+         * 返回 Hook Session Admission 上限（1 至 32768）。
+         *
+         * @return 当前有界 Hook 会话容量
+         */
         public int getMaxActive() {
             return maxActive;
         }
 
-        /** 设置 Hook Session Admission 上限（1 至 32768）。 */
+        /**
+         * 设置 Hook Session Admission 上限（1 至 32768）。
+         *
+         * @param value 不超过运行时硬上限的 Hook 会话容量
+         */
         public void setMaxActive(int value) {
             maxActive = value;
         }
