@@ -11,6 +11,7 @@ import com.peachsoft.otryx.core.OtryxRpcServer;
 import com.peachsoft.otryx.core.RpcAuthorizer;
 import com.peachsoft.otryx.core.RpcClientResilienceOptions;
 import com.peachsoft.otryx.core.RpcProviderExecutionOptions;
+import com.peachsoft.otryx.interceptor.RpcInterceptor;
 import com.peachsoft.otryx.loadbalance.LoadBalancer;
 import com.peachsoft.otryx.routing.RpcRouter;
 import com.peachsoft.otryx.observability.RpcMetadataPropagator;
@@ -619,6 +620,7 @@ public class OtryxRpcAutoConfiguration {
      * @param metadataPropagatorProvider Metadata 传播器提供器
      * @param tracingBridgeProvider 分布式 Trace Bridge 提供器
      * @param authorizerProvider 非阻塞 RPC 授权策略提供器
+     * @param interceptorProvider 启动阶段一次性发现的有序业务 Hook
      * @param properties OTRYX RPC 配置
      * @return 运行时协调器
      */
@@ -641,8 +643,9 @@ public class OtryxRpcAutoConfiguration {
             ObjectProvider<RpcMetadataPropagator> metadataPropagatorProvider,
             ObjectProvider<RpcTracingBridge> tracingBridgeProvider,
             ObjectProvider<RpcAuthorizer> authorizerProvider,
+            ObjectProvider<RpcInterceptor> interceptorProvider,
             OtryxRpcProperties properties) {
-        return new OtryxRpcRuntimeCoordinator(
+        OtryxRpcRuntimeCoordinator runtime = new OtryxRpcRuntimeCoordinator(
                 registry,
                 membership,
                 resolver,
@@ -660,6 +663,9 @@ public class OtryxRpcAutoConfiguration {
                 tracingBridgeProvider,
                 authorizerProvider,
                 properties);
+        runtime.configureInterceptors(interceptorProvider.orderedStream().toList(),
+                properties.getInterceptor().getWorkers(), properties.getInterceptor().getMaxActive());
+        return runtime;
     }
 
     /**

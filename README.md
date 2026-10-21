@@ -160,3 +160,10 @@ Nacos 的 Manifest/Mapping 读取只接受远端查询结果及其权威 MD5，S
 ## Registry Freshness / 服务发现可靠性
 
 Core 与 Spring Starter 的 `otryx.rpc.client.directory-max-staleness` 默认均为 `30s`，只接受严格正的有限预算。普通 Registry 同步失败可在预算内使用最后有效目录，安静的 Watch 不代表失联；认证、授权、TLS 或元数据完整性拒绝则立即使旧验证代次失效。每次发送前本地复核选中端点所属的同一候选，安全失败不重试、不累计 Endpoint 故障或更新延迟 EWMA。状态语义见[目录新鲜度](docs/reference/registry-freshness.md)与[当前安全边界](docs/reference/starter.md)。
+
+
+## 可选的 Consumer / Provider Interceptor SPI
+
+通过 `RpcInterceptor` 配置有序 Hook 链：Consumer 的一次逻辑调用与每次 Retry Attempt 分开回调；Provider 只在真实 Peer 校验、服务/方法授权及业务 Admission 通过后运行。默认无 Hook 时不创建专属 Worker，也不改变现有调用快路径。配置 Hook 后采用固定 Worker、整条会话的容量配额及串行事件队列，超时/取消不会提前归还仍在运行的 Hook 槽位。
+
+[Interceptor 的生命周期、异常及线程边界](docs/reference/interceptors.md) · [Quickstart 配置](otryx-quickstart/README.md)。

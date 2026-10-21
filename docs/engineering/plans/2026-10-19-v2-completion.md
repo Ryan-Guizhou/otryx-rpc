@@ -140,3 +140,10 @@ revision 6 准确 `ae9a573a660d27d75f520e694a1f07cdc5e1bb08` 的全部 15 条工
 ## 9. #147 与 #127：最终收口
 
 按各 Issue 的依赖逐项核验 Maven Reactor、Java 风格、Javadoc、JaCoCo、漏洞/SBOM、真实 Registry、文档图链和发行 dry-run。依赖未完成时保留受影响验收项。同步准确 PR/Head/main/CI 证据及下一可执行命令；交付以实际源码与工作流结果为准。
+
+
+### 2026-10-21 #143 开发候选的状态断点
+
+- 上游已验收：#141 PR #163 合并到 `main@53f3dd9ffd85d4cee40417f20aefcf0cedd8b572`，主线 16/16 checks success。#142 的 Provider 路由 SPI 已在更早的 main 验证。
+- #143 当前为代码候选，拟增加有序 `RpcInterceptor`、独立逻辑与 Retry Attempt、Provider 授权后 Hook、固定 Worker/会话配额、Spring Bean 注入和安全回归。**直到准确 Head CI、合并后 main CI 及 Issue 验收完成前不得标为实现**。
+- #144 仍依赖 #143，#145/#146 依赖 #141 的正式容量/诊断证据。#146 固定物理主机 60 分钟 Soak 缺口不可用共享 CI Smoke 代替。

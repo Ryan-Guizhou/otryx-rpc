@@ -15,6 +15,8 @@ import com.peachsoft.otryx.core.RpcShutdownReport;
 import com.peachsoft.otryx.core.RpcProviderAdmissionOptions;
 import com.peachsoft.otryx.core.RpcClientResilienceOptions;
 import com.peachsoft.otryx.core.RpcProviderExecutionOptions;
+import com.peachsoft.otryx.interceptor.RpcInterceptor;
+import com.peachsoft.otryx.interceptor.RpcInterceptorRuntime;
 import com.peachsoft.otryx.loadbalance.LoadBalancer;
 import com.peachsoft.otryx.routing.RpcRouter;
 import com.peachsoft.otryx.observability.RpcMetadataPropagator;
@@ -63,6 +65,9 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     private final RpcTransportOptions transportOptions;
     private final LoadBalancer loadBalancer;
     private final RpcRouter router;
+    private List<RpcInterceptor> interceptors = List.of();
+    private int interceptorWorkers = RpcInterceptorRuntime.DEFAULT_WORKERS;
+    private int interceptorMaxActive = RpcInterceptorRuntime.DEFAULT_MAX_ACTIVE;
     private final ProxyFactory proxyFactory;
     private final RpcClientResilienceOptions resilienceOptions;
     private final RpcProviderExecutionOptions executionOptions;
@@ -308,6 +313,34 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 : Optional.empty();
     }
 
+    /**
+     * 由唯一 Starter 在 Bean 返回前一次性提供有序 Hook，支持预构建的 NETWORK_MTLS Builder。
+     *
+     * <p>任何一侧已创建运行时时不得热替换；动态治理归独立 Issue。
+     *
+     * @param configured 由 Spring 按 Order 排序的 Hook Bean
+     * @param workers 有界 Worker 数
+     * @param maxActive 每侧独立逻辑会话配额
+     */
+    public synchronized void configureInterceptors(List<RpcInterceptor> configured, int workers, int maxActive) {
+        if (client != null || server != null || closed) {
+            throw new IllegalStateException("RPC interceptor configuration must precede runtime construction");
+        }
+        if (workers < 1 || workers > RpcInterceptorRuntime.MAX_ALLOWED_WORKERS
+                    || maxActive < 1 || maxActive > RpcInterceptorRuntime.MAX_ALLOWED_ACTIVE) {
+            throw new IllegalArgumentException("Invalid RPC interceptor worker or session capacity");
+        }
+        interceptors = List.copyOf(Objects.requireNonNull(configured, "interceptors"));
+        interceptorWorkers = workers;
+        interceptorMaxActive = maxActive;
+        if (preparedClientBuilder != null) {
+            preparedClientBuilder.interceptors(interceptors).interceptorExecutionLimits(workers, maxActive);
+        }
+        if (preparedServerBuilder != null) {
+            preparedServerBuilder.interceptors(interceptors).interceptorExecutionLimits(workers, maxActive);
+        }
+    }
+
     private OtryxRpcClient.Builder clientBuilder(RpcTransportClient transport) {
         OtryxRpcProperties.Client clientProperties = properties.getClient();
         return OtryxRpcClient.builder()
@@ -317,6 +350,8 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .transportClient(transport)
                 .loadBalancer(loadBalancer)
                 .router(router)
+                .interceptors(interceptors)
+                .interceptorExecutionLimits(interceptorWorkers, interceptorMaxActive)
                 .proxyFactory(proxyFactory)
                 .timeout(clientProperties.getTimeout())
                 .methodTimeouts(clientProperties.getMethodTimeouts())
@@ -416,6 +451,8 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .drainTimeout(serverProperties.getDrainTimeout())
                 .controlPlaneTimeout(serverProperties.getControlPlaneTimeout())
                 .executionOptions(executionOptions)
+                .interceptors(interceptors)
+                .interceptorExecutionLimits(interceptorWorkers, interceptorMaxActive)
                 .authorizer(policy)
                 .maxAuthorizationGrantLifetime(serverProperties.getAuthorization().getMaxGrantLifetime())
                 .maxPendingAuthorizations(serverProperties.getAuthorization().getMaxPending())

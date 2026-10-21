@@ -159,3 +159,10 @@ QPS、线程数、连接数、Heap 和 p99/p99.9 的建议值都需要目标环�
 ## 11. 有界结果编码的生产 Codec 契约（V2-14）
 
 `NETWORK_MTLS` Provider 的每一个方法级 Codec 在注册前必须是 `RpcBoundedResultMethodCodec`，不接受使用兼容 `encodeResult()` 完整数组的默认方法级适配。Fory 直接向有界 OutputStream 写入；最终 Wire Frame 根据有效底层数组区间构造，创建前同时对输出缓冲与完整 Frame 的瞬时内存预留额度，避免中间 Payload 拷贝。该额度不包含第三方 Codec 内部堆分配、返回后异步持有的 Frame、Netty/SSL/操作系统缓冲，需结合 [Transport 配额](reference/transport-admission.md) 和 #146 固定物理性能证据验收。
+
+
+## 12. Interceptor Worker 与逻辑会话限额（V2-16）
+
+`otryx.rpc.interceptor.workers` 默认 4（允许 1–64），`otryx.rpc.interceptor.max-active` 默认 512（允许 1–32768）。配置数值只在声明至少一个 `RpcInterceptor` Bean 时创建真正的 Consumer/Provider 独立 Worker。每条逻辑调用占用一个会话槽直到终态 Hook 真正执行结束；阻塞 Hook 不在 EventLoop 执行，过载拒绝而非无限排队。过慢 Hook 无法被安全地强制停止，应用必须为 Hook 本身提供可停止的超时及外部 I/O 管控。
+
+Starter 按已声明 Bean 的 `@Order` 顺序解析配置，具体调用钩子次序由接口的 `order()` 决定（较小值先进入）。空 Bean 列表不建立 Hook Runtime。详情见 [Interceptor 生命周期](reference/interceptors.md)。

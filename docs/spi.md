@@ -93,3 +93,10 @@ Provider 使用显式 `RpcAuthorizer`，返回 `CompletionStage<RpcAuthorization
 Consumer 的 `RpcRouter` 位于 `com.peachsoft.otryx.routing`，默认 `rules` 实现为 `RuleBasedRpcRouter`。调用链为 Mapping → Directory → Manifest/Schema/Health → **Router** → LoadBalancer → Transport。应用成员的 `attributes` 投影到本地 `ServiceInstance.metadata`；标签不可用于冒充身份或授权。
 
 自定义 Router 必须只返回已验证数组中的原始 Provider 对象，不得修改输入、增加端点或执行 Registry IO。Core 会校验输出的引用身份并在发送前再次复核目录安全代次；空路由明确失败且不能偷偷回退到其他应用。规则按 `ServiceKey` 加载有界原子快照，更新和回滚均使用递增 revision。详细规则、灰度、优先级与配置示例见 [Router 参考](reference/routing.md)。
+
+
+## 10. Interceptor SPI：独立调用生命周期
+
+`com.peachsoft.otryx.interceptor.RpcInterceptor` 是有序 Java 扩展点，由唯一 Starter 按 Spring `@Order` 注入或通过 Core Builder 显式配置。调用方无需在热路径进行 ServiceLoader 扫描；空列表保持无 Hook 的既有同步调度路径。Context 只包含枚举角色、业务 ServiceKey、Method ID 与实际应用身份，不接收可伪造的 Metadata 身份、Payload 或证书字节。
+
+Consumer `before/after/onFailure/onCancel` 对应一个逻辑调用，`beforeAttempt/afterAttempt` 只对应网络 Retry 序号，本地目录重新选点不增加 Attempt。Provider Hook 必须在真实身份、授权和 Provider Admission 后运行，且执行业务前再次验证有限许可。Hook 在专属有界 Worker 上运行，事件按单个调用顺序串行化；失败前置 Hook 会阻止业务执行，终态 Hook 异常不会覆盖已经产生的调用结果。详细安全、线程、容量与调用图见 [Interceptor 参考](reference/interceptors.md)。

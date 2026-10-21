@@ -13,6 +13,9 @@ import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.RpcAuthorizationDecision;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
+import com.peachsoft.otryx.interceptor.RpcInterceptor;
+import com.peachsoft.otryx.interceptor.RpcInterceptorRuntime;
+import com.peachsoft.otryx.interceptor.RpcInvocation;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
 import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.observability.RpcMetadataPropagator;
@@ -98,6 +101,7 @@ public final class OtryxRpcServer implements AutoCloseable {
     private final Duration controlPlaneTimeout;
     private final RpcProviderExecutionOptions executionOptions;
     private final RpcObserver observer;
+    private final RpcInterceptorRuntime interceptors;
     private final RpcMetadataPropagator metadataPropagator;
     private final RpcTracingBridge tracingBridge;
     private final RpcAuthorizationGate authorizationGate;
@@ -157,6 +161,9 @@ public final class OtryxRpcServer implements AutoCloseable {
                 List.of(Objects.requireNonNull(
                         builder.observer,
                         "observer")));
+        this.interceptors = builder.interceptors.isEmpty() ? null : new RpcInterceptorRuntime(
+                builder.interceptors, builder.interceptorWorkers,
+                builder.interceptorMaxActive, "provider");
         this.metadataPropagator = Objects.requireNonNull(
                 builder.metadataPropagator,
                 "metadataPropagator");
@@ -805,6 +812,57 @@ public final class OtryxRpcServer implements AutoCloseable {
                             error));
         }
 
+        if (interceptors != null) {
+            RpcInterceptorRuntime.Session session;
+            try {
+                session = interceptors.open(
+                        new RpcInvocation(RpcInvocation.Side.PROVIDER, binding.serviceKey(),
+                                request.methodId(), grant.callerApplication()), callContext);
+            } catch (com.peachsoft.otryx.api.RpcOverloadedException capacity) {
+                observeAdmissionRejected(request, "interceptor-capacity");
+                result.complete(frameworkError(request, RpcStatus.OVERLOADED,
+                        "Provider interceptor admission exhausted"));
+                markWorkFinished.run();
+                return result;
+            }
+            result.whenComplete((bytes, failure) ->
+                    session.finish(responseStatus(bytes, failure), result.isCancelled()));
+            session.before(() -> {
+                if (result.isDone() || !permitExecution(request, result, callContext, grant)) {
+                    markWorkFinished.run();
+                    return;
+                }
+                dispatchProviderExecution(request, binding, methodCodec, propagatedMetadata,
+                        trace, callContext, grant, result, executionMode, markWorkFinished);
+            }, rejected -> {
+                result.complete(frameworkError(request, RpcStatus.INTERNAL_ERROR,
+                        "Provider interceptor rejected request"));
+                markWorkFinished.run();
+            });
+        } else {
+            dispatchProviderExecution(request, binding, methodCodec, propagatedMetadata,
+                    trace, callContext, grant, result, executionMode, markWorkFinished);
+        }
+        return result;
+    }
+
+    /**
+     * 原始准入/授权检查完成后的唯一 Provider 执行路径，DIRECT 在 Hook Worker 上调用。
+     *
+     * <p>带拦截器时被有界 Worker 调用；无拦截器时保留原来的执行线程和热路径。
+     * 真实 Stage 和响应终态的双租约由既有 markWorkFinished 逻辑保持不变。
+     */
+    private void dispatchProviderExecution(
+            RpcFrameView request,
+            ServiceBinding binding,
+            RpcMethodCodec methodCodec,
+            Map<String, String> propagatedMetadata,
+            RpcTraceContext trace,
+            RpcCallContext callContext,
+            RpcAuthorizationGrant grant,
+            CompletableFuture<byte[]> result,
+            RpcExecutionMode executionMode,
+            Runnable markWorkFinished) {
         if (executionMode == RpcExecutionMode.DIRECT) {
             execute(
                     request,
@@ -817,7 +875,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     result,
                     cpuExecutor,
                     markWorkFinished);
-            return result;
+            return;
         }
 
         ExecutorService selectedExecutor =
@@ -850,7 +908,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     RpcException.class.getName(),
                     "Provider execution queue is full"));
             markWorkFinished.run();
-            return result;
+            return;
         }
         result.whenComplete((ignoredValue, ignoredError) -> {
             if (result.isCancelled()
@@ -860,7 +918,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                 markWorkFinished.run();
             }
         });
-        return result;
+        return;
     }
 
     private void observeAdmissionRejected(
@@ -1305,6 +1363,9 @@ public final class OtryxRpcServer implements AutoCloseable {
             return shutdownResult.get();
         }
         State previous = state.getAndSet(State.DRAINING);
+        if (interceptors != null) {
+            interceptors.close();
+        }
         RpcShutdownBudget budget = RpcShutdownBudget.start(options);
         ShutdownProgress progress = new ShutdownProgress();
 
@@ -1527,6 +1588,9 @@ public final class OtryxRpcServer implements AutoCloseable {
         private RpcProviderExecutionOptions executionOptions =
                 RpcProviderExecutionOptions.DEFAULT;
         private RpcObserver observer = RpcObserver.noop();
+        private List<RpcInterceptor> interceptors = List.of();
+        private int interceptorWorkers = RpcInterceptorRuntime.DEFAULT_WORKERS;
+        private int interceptorMaxActive = RpcInterceptorRuntime.DEFAULT_MAX_ACTIVE;
         private RpcMetadataPropagator metadataPropagator =
                 RpcMetadataPropagator.noop();
         private RpcTracingBridge tracingBridge =
@@ -1730,6 +1794,34 @@ public final class OtryxRpcServer implements AutoCloseable {
             this.executionOptions = Objects.requireNonNull(
                     value,
                     "executionOptions");
+            return this;
+        }
+
+        /**
+         * 指定仅在真实对端身份与方法授权后运行的 Provider 拦截器集合。
+         *
+         * @param value 不含 null 的扩展集合；空集合禁用扩展
+         * @return Provider Builder
+         */
+        public Builder interceptors(List<RpcInterceptor> value) {
+            this.interceptors = List.copyOf(Objects.requireNonNull(value, "interceptors"));
+            return this;
+        }
+
+        /**
+         * 设置专属 Hook Worker 数量与整条调用链的并发额度。
+         *
+         * @param workers 有界 Worker 数
+         * @param maxActive 最多同时保留的 Hook Session 数
+         * @return Provider Builder
+         */
+        public Builder interceptorExecutionLimits(int workers, int maxActive) {
+            if (workers < 1 || workers > RpcInterceptorRuntime.MAX_ALLOWED_WORKERS
+                    || maxActive < 1 || maxActive > RpcInterceptorRuntime.MAX_ALLOWED_ACTIVE) {
+                throw new IllegalArgumentException("Invalid RPC interceptor worker or session capacity");
+            }
+            interceptorWorkers = workers;
+            interceptorMaxActive = maxActive;
             return this;
         }
 

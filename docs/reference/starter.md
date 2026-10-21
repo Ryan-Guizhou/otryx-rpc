@@ -453,4 +453,9 @@ CLI 通过 `QUICKSTART_REGISTRY_SECURITY_FILE` 读取独立安全文件：配置
 
 ### Provider 流式编码输出容量
 
-唯一 Starter 允许 `otryx.rpc.server.encoding.max-buffered-bytes`（默认 67108864）与 `max-response-bytes`（默认 16777216）。Core Builder 对应 `responseEncodingLimits(totalBytes, singleBytes)`。限额在实际输出缓冲扩容前获取，关闭或异常幂等释放；实际 Codec 报告的 `maxPayloadBytes` 若更小则优先。Fory 覆盖 `RpcMethodCodec.encodeResultTo` 直接流式写入，未覆盖的第三方 Codec 默认先编码为完整数组，不具备同等的分配前保护。两项数值均必须为正，单响应上限不能超过全局缓冲额度。完整生命周期和保留风险见 [Transport 接入容量](transport-admission.md)。
+唯一 Starter 允许 `otryx.rpc.server.encoding.max-buffered-bytes`（默认 67108864）与 `max-response-bytes`（默认 16777216）。Core Builder 对应 `responseEncodingLimits(totalBytes, singleBytes)`。限额在实际输出缓冲扩容前获取，关闭或异常幂等释放；实际 Codec 报告的 `maxPayloadBytes` 若更小则优先。Fory 覆盖 `RpcMethodCodec.encodeResultTo` 直接流式写入，可信开发中未覆盖的第三方 Codec 默认先编码为完整数组；NETWORK_MTLS Provider 的方法绑定则要求 RpcBoundedResultMethodCodec。两项数值均必须为正，单响应上限不能超过全局缓冲额度。完整生命周期和保留风险见 [Transport 接入容量](transport-admission.md)。
+
+
+### Interceptor SPI 注入与容量
+
+同一 Starter 在运行时创建之前读取 `ObjectProvider<RpcInterceptor>.orderedStream()`，Provider/Consumer 使用这份启动时冻结的扩展列表分别建立有界执行器。配置 `otryx.rpc.interceptor.workers`（默认 4）及 `otryx.rpc.interceptor.max-active`（默认 512）；空列表不创建额外线程或每次请求对象。自定义 Hook 的权限边界、顺序、取消和过载见 [Interceptor 参考](interceptors.md)。
