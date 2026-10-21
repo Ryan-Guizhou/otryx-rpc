@@ -172,3 +172,7 @@ Core 与 Spring Starter 的 `otryx.rpc.client.directory-max-staleness` 默认均
 ## 签名动态治理（V2-17）
 
 可选 `RpcGovernanceRuntime` 使用独立有界控制线程订阅完整签名治理快照，对应用/方法级 Timeout、标签路由、应用权重、熔断和并发额度执行**原子版本切换**。Consumer 同一逻辑调用捕获同一 revision；Provider 原业务 Admission 和 mTLS/授权/Codec 安全规则始终优先。未配置 Repository/Verifier 时无动态治理开销；配置后在首次正确签名到达前 Fail Closed。详见 [治理配置与安全契约](docs/reference/governance.md)。
+<!-- doc-section:runtime-diagnostics -->
+## 运行时只读诊断
+
+通过 `OtryxRpcClient.diagnose(ServiceKey)` 查看已经引用的服务的可信本地目录状态、固定失败原因与候选数量；不访问远端 Registry、不执行 Router 或新建订阅。Micrometer `otryx.rpc.client.directory.failures` 和 JFR 只使用固定枚举原因。Provider `responseEncodingDiagnostics()` 返回编码临时缓冲预留量和峰值，不等于进程 Heap/DirectMemory。详见[诊断指南](docs/reference/runtime-diagnostics.md)。
