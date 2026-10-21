@@ -9,6 +9,7 @@ import com.peachsoft.otryx.api.RpcAuthorizationDecision;
 import com.peachsoft.otryx.api.RpcCertificateBinding;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcExecutionMode;
+import com.peachsoft.otryx.core.RpcProviderExecutionOptions;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcSecurityProfile;
@@ -138,6 +139,7 @@ class RpcProviderInterceptorIntegrationTest {
                 .applicationMembership(control.membership())
                 .codecRegistry(RpcCodecRegistry.of(codec))
                 .transportServer(transport)
+                .executionOptions(new RpcProviderExecutionOptions(true, 2, 8))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19090));
     }
 

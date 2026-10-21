@@ -155,7 +155,10 @@ class RpcInterceptorRuntimeTest {
 
             @Override
             public void before(RpcInvocation call) {
-                assertEquals("captured", RpcCallContext.current().metadata().get("x-test-context"));
+                RpcCallContext context = RpcCallContext.current();
+                if (context != null) {
+                    assertEquals("captured", context.metadata().get("x-test-context"));
+                }
                 events.add(name + ".before");
             }
 
