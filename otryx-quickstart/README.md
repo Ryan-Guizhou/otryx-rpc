@@ -527,3 +527,18 @@ otryx:
 ```
 
 默认无规则时不会过滤 Provider。需要部署级标签、区域、灰度或固定应用路由时，应用配置一个 `RuleBasedRpcRouter` Bean，并调用 `publish(RpcRoutingSnapshot)` 原子发布规则；参见 [Router 使用及安全边界](../docs/reference/routing.md)。这不是额外的 E2E 场景；灰度和切换测试由 Core 的 Router 回归测试覆盖。
+
+## Provider 输出编码容量（可选）
+
+以下设置示范如何限制**流式编码输出缓冲**，与 Transport 待写响应预算分开记账；Fory 内部对象图、临时复制、TLS 与 Netty 内存仍需目标环境压力验证：
+
+```yaml
+otryx:
+  rpc:
+    server:
+      encoding:
+        max-buffered-bytes: 67108864
+        max-response-bytes: 16777216
+```
+
+过大 Payload 和并发缓冲饱和会以 `OVERLOADED` 拒绝。它不表示业务任务可以被强制中断，仍需遵守实际工作完成后释放 Admission Lease 的规则。详见 [Transport 资源边界](../docs/reference/transport-admission.md)。

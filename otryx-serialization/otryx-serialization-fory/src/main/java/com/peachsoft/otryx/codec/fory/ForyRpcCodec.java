@@ -236,6 +236,17 @@ public final class ForyRpcCodec implements RpcCodec {
             return encodeChecked(value);
         }
 
+        /**
+         * 直接写入调用者的有界 OutputStream，避免在 Codec 出口创建无额度的完整结果数组。
+         *
+         * @param value 实际业务返回值
+         * @param output 调用方预留容量的输出流
+         */
+        @Override
+        public void encodeResultTo(Object value, java.io.OutputStream output) {
+            fory.serialize(output, value);
+        }
+
         @Override
         public Object decodeResult(byte[] payload) {
             return decodeChecked(payload);

@@ -1,5 +1,8 @@
 package com.peachsoft.otryx.codec;
 
+import java.io.IOException;
+import java.io.OutputStream;
+
 /**
  * 已在服务方法粒度预绑定的 Codec 热路径接口。
  *
@@ -140,6 +143,21 @@ public interface RpcMethodCodec {
      * @return 编码结果
      */
     byte[] encodeResult(Object value);
+
+    /**
+     * 将结果编码写入调用者提供的有界 OutputStream。
+     *
+     * <p>默认实现兼容第三方 Codec，但会先产生完整 Payload 数组；
+     * 对高并发或不可信大对象应覆盖此方法并直接写入有界输出。
+     * Provider 在调用前已校验身份、方法授权和执行预算。
+     *
+     * @param value 业务返回值
+     * @param output 已预留资源并检查写入长度的 OutputStream
+     * @throws IOException 输出失败
+     */
+    default void encodeResultTo(Object value, OutputStream output) throws IOException {
+        output.write(encodeResult(value));
+    }
 
     /**
      * 解码成功返回值。

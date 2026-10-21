@@ -1630,6 +1630,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private Duration shutdownTimeout = Duration.ofSeconds(25);
         private final Execution execution = new Execution();
         private final Admission admission = new Admission();
+        private final Encoding encoding = new Encoding();
         private final Authorization authorization = new Authorization();
 
         /**
@@ -1819,6 +1820,69 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public Authorization getAuthorization() {
             return authorization;
+        }
+
+        /**
+         * 获取 Provider 编码输出的字节预算。
+         *
+         * @return 全进程共享的响应编码参数
+         */
+        public Encoding getEncoding() {
+            return encoding;
+        }
+    }
+
+    /**
+     * Provider 实际输出缓冲与每响应最大 Payload 的容量约束。
+     *
+     * <p>内存统计仅包含框架持有的流式缓冲，不包含 Fory 自身对象图分配、帧复制或网络缓存。
+     *
+     * @Author OpenAI
+     * @Version 1.0.0-SNAPSHOT
+     * @CreateTime 2026/10/21 15:05
+     */
+    public static class Encoding {
+        private long maxBufferedBytes = 64L * 1024L * 1024L;
+        private int maxResponseBytes = 16 * 1024 * 1024;
+
+        /** 创建响应编码预算配置。 */
+        public Encoding() {
+        }
+
+        /**
+         * 全部并发编码器的累计输出缓冲字节额度。
+         *
+         * @return 正数字节
+         */
+        public long getMaxBufferedBytes() {
+            return maxBufferedBytes;
+        }
+
+        /**
+         * 设置共享编码输出缓冲预算。
+         *
+         * @param bytes 正数，必须大于等于单个响应额度
+         */
+        public void setMaxBufferedBytes(long bytes) {
+            this.maxBufferedBytes = bytes;
+        }
+
+        /**
+         * 返回单次响应 Payload 的最大允许长度。
+         *
+         * @return 正数 byte 长度
+         */
+        public int getMaxResponseBytes() {
+            return maxResponseBytes;
+        }
+
+        /**
+         * 设置单个响应 Payload 输出预算。
+         *
+         * @param bytes 正数，必须不超过共享额度
+         */
+        public void setMaxResponseBytes(int bytes) {
+            this.maxResponseBytes = bytes;
         }
     }
 

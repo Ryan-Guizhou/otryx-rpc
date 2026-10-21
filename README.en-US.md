@@ -30,7 +30,7 @@ The project has not yet reached GA and makes no backward-compatibility promise t
 - **Registry**: Memory, Etcd, Nacos, Consul, Eureka; the consumer hot path reads a locally verified directory. Network security support depends on the actual adapter.
 - **Routing / load balancing**: application-aware Router SPI, versioned local rules, application priority, labels, zones, deployment releases and percentage-based canary routing, followed by P2C + EWMA. Routing labels never grant authorization.
 - **Resilience**: method/per-call timeouts, inherited monotonic deadline budgets, explicitly idempotent retries, retry budget, circuit breaker, outlier ejection and provider admission.
-- **Execution**: virtual threads, bounded CPU resources, Fory and stable type IDs.
+- **Execution / bounds**: virtual threads, bounded CPU resources, pre-TLS admission with idempotent cleanup, plus a bounded Provider encoding output buffer. Fory and stable type IDs.
 - **Observability**: Micrometer, OpenTelemetry, JFR and Grafana / Prometheus examples.
 - **Engineering**: JMH, 10k logical-concurrency soak harness, chaos and independent-process tests.
 

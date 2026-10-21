@@ -30,7 +30,7 @@
 - **Registry**：Memory、Etcd、Nacos、Consul、Eureka；Consumer 热路径读取本地验证目录。后端的网络安全支持范围按实际 Adapter 区分。
 - **Routing / Load Balancing**：应用级 Router SPI、本地版本化规则、应用优先级、标签/区域/发布版本与 10%/90% 灰度，先过滤再经 P2C + EWMA 负载均衡；路由标签不构成授权依据。
 - **Resilience**：方法级/单次超时、父级单调 Deadline 预算传播、显式幂等 Retry、Retry Budget、Circuit Breaker、Outlier Ejection、Provider Admission。
-- **Execution**：Virtual Thread、CPU 有界资源；Fory Codec 与 Stable Type ID。
+- **Execution / Bounds**：Virtual Thread、CPU 有界资源、TLS 前握手准入及幂等释放；Provider 流式输出编码具独立字节预算，Fory Codec 与 Stable Type ID。
 - **Observability**：Micrometer、OpenTelemetry、JFR、Grafana 和 Prometheus 示例配置。
 - **Engineering**：JMH、10k logical-concurrency soak harness、Chaos、独立 JVM E2E 与兼容性验证。
 

@@ -115,7 +115,7 @@ revision 6 准确 `ae9a573a660d27d75f520e694a1f07cdc5e1bb08` 的全部 15 条工
 
 ## 3. #141：连接、编码与取消资源上界
 
-依赖 #140。检查 TLS 预握手配额、Frame/Codec 字节峰值、慢消费和异步取消；每项新增边界先有可复现失败用例，再验证拒绝与实际释放。记录内存、Future、Lease、线程及连接，禁止以无证据零拷贝变更替代预算控制。
+依赖 #140。开发中的 [PR #163](https://github.com/Ryan-Guizhou/otryx-rpc/pull/163) 从已验证 main@61ef70c2 建立草稿：TLS 原始 TCP accept 前移 Handshake/Connection Lease、fail/close/Drain 所有权；Provider Fory 有界流式编码输出、全局增长前字节预留、Spring 配置和负/并发测试。准确 PR Head 全 CI、Heap/DirectMemory/FD 高水位、取消异步所有权矩阵均尚待验收，不可将阶段性实现宣称 #141 completed。默认不改 Wire、依赖版本或单一 Starter。
 
 ## 4. #142：Router SPI
 

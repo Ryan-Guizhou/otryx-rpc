@@ -33,7 +33,7 @@ class VertxTlsPreHandshakeAdmissionTest {
     @Test
     void stalledTlsHandshakeMustExhaustCapacityBeforeAClientHelloIsSent() throws Exception {
         try (TlsTestCertificates certificates = TlsTestCertificates.create()) {
-            RpcTransportOptions serverOptions = limitedServer( certificates);
+            RpcTransportOptions serverOptions = limitedServer(certificates);
             VertxRpcTransportServer server = new VertxRpcTransportServer(serverOptions);
             RpcEndpoint endpoint = start(server);
             try (Socket stalled = rawSocket(endpoint)) {
@@ -79,7 +79,13 @@ class VertxTlsPreHandshakeAdmissionTest {
                 await(() -> server.pendingTlsHandshakes() == 0
                         && server.admittedHandshakes() == 0
                         && server.admittedConnections() == 0);
-                assertEquals(-1, stalled.getInputStream().read());
+                // JSSE 可先发送 TLS Alert record (content type 21)，随后正常 EOF。
+                int firstRecord = stalled.getInputStream().read();
+                if (firstRecord >= 0) {
+                    assertEquals(21, firstRecord, "Only a TLS alert is allowed before close");
+                    byte[] trailingAlert = stalled.getInputStream().readNBytes(1024);
+                    assertTrue(trailingAlert.length < 1024, "Alert must be followed by a bounded close");
+                }
             } finally {
                 server.close();
             }

@@ -449,3 +449,8 @@ Consumer 示例中的 [QuickstartCallObserver](../../otryx-quickstart/otryx-quic
 应用注册状态另由 Quickstart 的只读 `QuickstartRegistrySnapshot` CLI 观察。它输出指定应用的成员与 Manifest，并查询三个固定 Quickstart 契约的 ServiceMapping 候选与已验证 Provider；服务视图可能包含同 scope 中其他导出相同契约的应用。观察过程只执行读取，不创建观察者成员、不发布 Manifest/Mapping、不导出任意 attributes，也不替代调用遥测或事务快照。
 
 CLI 通过 `QUICKSTART_REGISTRY_SECURITY_FILE` 读取独立安全文件：配置与凭据引用文件须为私有 `0600` 普通文件，严格限制大小和 JSON 结构，拒绝符号链接、未知字段和矛盾凭据。文件存在时按 `NETWORK_MTLS` 检查实际 Resolver 的全部来源；未提供文件的公开开发调用显式使用 `TRUSTED_DEVELOPMENT`。配置只存秘密文件引用，Eureka 的元数据链仍单独声明。命令要求新输出文件，保留 15 秒默认读取预算、30 秒上限和固定输出限额，详见 [Quickstart 成员诊断](../../otryx-quickstart/README.md)。
+
+
+### Provider 流式编码输出容量
+
+唯一 Starter 允许 `otryx.rpc.server.encoding.max-buffered-bytes`（默认 67108864）与 `max-response-bytes`（默认 16777216）。Core Builder 对应 `responseEncodingLimits(totalBytes, singleBytes)`。限额在实际输出缓冲扩容前获取，关闭或异常幂等释放；实际 Codec 报告的 `maxPayloadBytes` 若更小则优先。Fory 覆盖 `RpcMethodCodec.encodeResultTo` 直接流式写入，未覆盖的第三方 Codec 默认先编码为完整数组，不具备同等的分配前保护。两项数值均必须为正，单响应上限不能超过全局缓冲额度。完整生命周期和保留风险见 [Transport 接入容量](transport-admission.md)。

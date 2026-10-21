@@ -47,9 +47,9 @@
 | `max-inflight-per-connection` | 1024 | 单个 Provider 连接内尚未结束的请求；超限返回 `OVERLOADED`，不进入 Handler |
 | `admission.max-buffered-response-bytes` | 67108864 | Transport Server 已编码且待写的 RESPONSE 字节；写 Future 终态或断连后释放 |
 
-CANCEL 可以结束连接层的逻辑请求，不能证明业务或授权策略已经停止。真实 TLS 握手不自动在 Vert.x 回调前执行：先进行有限的 TCP 准入，再主动升级，拒绝明文应用数据。真正执行的资源继续受 Core 所有权约束。待写响应额度耗尽时拒绝新写入，Drain 等待尚未完成的写入；这一预算不控制 Codec 编码峰值、TLS、Netty Direct Memory 或操作系统缓冲。
+CANCEL 可以结束连接层的逻辑请求，不能证明业务或授权策略已经停止。真实 TLS 握手不自动在 Vert.x 回调前执行：先进行有限的 TCP 准入，再主动升级，拒绝明文应用数据。真正执行的资源继续受 Core 所有权约束。待写响应额度耗尽时拒绝新写入，Drain 等待尚未完成的写入；这一预算不控制 Codec 内部对象图和数组复制峰值、TLS、Netty Direct Memory 或操作系统缓冲；新增的 Provider 输出编码预算另行计算框架已保留的流式输出缓冲。
 
-Codec 在网络 Profile 下还必须声明正数的载荷大小、对象图深度和估算图内存上限，并在 DTO 实例化前验证载荷。这些声明不是编码分配或 JVM Heap 的硬内存租约。详见 [Transport 接入容量](reference/transport-admission.md) 与 [Codec 能力模型](../otryx-core/src/main/java/com/peachsoft/otryx/codec/RpcCodecSecurityDescriptor.java)。
+Provider 另外提供 `otryx.rpc.server.encoding.max-buffered-bytes=67108864` 和 `max-response-bytes=16777216`。编码缓冲在分配前预留全局额度，Fory 响应采用有界 OutputStream；单响应额度与 Codec 声明上限取更小值。第三方 Codec 的默认方法可能先创建完整 Payload，因此不可把当前额度视作任意自定义编码器的分配硬上限。Codec 在网络 Profile 下还必须声明正数的载荷大小、对象图深度和估算图内存上限，并在 DTO 实例化前验证载荷。这些声明不是编码分配或 JVM Heap 的硬内存租约。详见 [Transport 接入容量](reference/transport-admission.md) 与 [Codec 能力模型](../otryx-core/src/main/java/com/peachsoft/otryx/codec/RpcCodecSecurityDescriptor.java)。
 
 ## 3. Provider 授权、执行与关闭
 
