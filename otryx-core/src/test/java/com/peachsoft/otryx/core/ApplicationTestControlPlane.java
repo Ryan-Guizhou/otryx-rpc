@@ -71,7 +71,9 @@ final class ApplicationTestControlPlane implements AutoCloseable {
     }
 
     OtryxRpcClient.Builder clientBuilder() {
-        return OtryxRpcClient.builder().applicationControlPlane(resolver, membership(), NAMESPACE);
+        return OtryxRpcClient.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
+                .applicationControlPlane(resolver, membership(), NAMESPACE);
     }
 
     ApplicationMembershipCoordinator publishProvider(Class<?> api, String version, String group, RpcEndpoint endpoint) {

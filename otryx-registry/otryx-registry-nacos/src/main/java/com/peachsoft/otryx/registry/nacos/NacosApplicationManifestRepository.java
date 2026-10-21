@@ -4,6 +4,9 @@ import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationManifest;
 import com.peachsoft.otryx.api.ApplicationManifestCodec;
 import com.peachsoft.otryx.registry.ApplicationManifestRepository;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Objects;
@@ -36,6 +39,12 @@ public final class NacosApplicationManifestRepository implements ApplicationMani
     NacosApplicationManifestRepository(
             NacosV2ConfigStore store, NacosControlExecutor executor, String namespace) {
         this(store, executor, namespace, System::nanoTime);
+    }
+
+    /** 返回同一实际 Config 客户端的保护来源。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return store.securityDescriptor();
     }
 
     /** 使用可注入的单调纳秒时钟核验发布后的总确认预算。 */
@@ -89,7 +98,7 @@ public final class NacosApplicationManifestRepository implements ApplicationMani
             if (confirmed.content() != null) {
                 requireContent(confirmed.content(), manifest);
                 if (!created && !encoded.equals(confirmed.content())) {
-                    throw new IllegalStateException("Nacos Manifest CAS was rejected");
+                    throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
                 }
                 remainingConfirmationNanos(startedAt);
                 return;
@@ -122,21 +131,35 @@ public final class NacosApplicationManifestRepository implements ApplicationMani
             if (record.content() == null) {
                 return Optional.empty();
             }
-            if (!record.content().startsWith(FORMAT_PREFIX)) {
-                throw new IllegalArgumentException("Unexpected Nacos Manifest metadata format");
+            ApplicationManifest decoded;
+            try {
+                decoded = ApplicationManifestCodec.decode(decodeContent(record.content()));
+            } catch (IllegalArgumentException rejected) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
             }
-            byte[] payload = Base64.getDecoder().decode(record.content().substring(FORMAT_PREFIX.length()));
-            return Optional.of(ApplicationManifestCodec.decode(payload).requireReference(application, revision));
+            try {
+                return Optional.of(decoded.requireReference(application, revision));
+            } catch (IllegalArgumentException rejected) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
+            }
         });
     }
 
     private static void requireContent(String content, ApplicationManifest expected) {
-        if (!content.startsWith(FORMAT_PREFIX)) {
-            throw new IllegalStateException("Unexpected Nacos immutable Manifest value");
-        }
-        byte[] actual = Base64.getDecoder().decode(content.substring(FORMAT_PREFIX.length()));
+        byte[] actual = decodeContent(content);
         if (!Arrays.equals(actual, expected.canonicalBytes())) {
-            throw new IllegalStateException("Nacos immutable Manifest revision collision");
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+        }
+    }
+
+    private static byte[] decodeContent(String content) {
+        if (!content.startsWith(FORMAT_PREFIX)) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+        }
+        try {
+            return Base64.getDecoder().decode(content.substring(FORMAT_PREFIX.length()));
+        } catch (IllegalArgumentException rejected) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
         }
     }
 

@@ -2,6 +2,10 @@ package com.peachsoft.otryx.registry.memory;
 
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.ChannelProtection;
+import com.peachsoft.otryx.registry.RegistryChannel;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySourceProtection;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
@@ -33,6 +37,19 @@ public final class MemoryServiceMappingRepository implements ServiceMappingRepos
     private final Map<OwnerId, Ownership> owners = new HashMap<>();
     private long generation;
     private long revision;
+
+    /**
+     * 由审核过的实际进程内实现声明本通道，无远端或调用方可填的信任开关。
+     *
+     * @return 进程内实际来源
+     */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        ChannelProtection local = new ChannelProtection(RegistrySourceProtection.LOCAL_PROCESS,
+                java.util.Set.of(), java.util.Optional.empty(), java.util.Optional.empty());
+        return new RegistrySecurityDescriptor(java.util.Map.of(
+                RegistryChannel.MAPPING, java.util.List.of(local)));
+    }
 
     /** 创建隔离的内存映射仓库，不与其他进程共享所有权。 */
     public MemoryServiceMappingRepository() {

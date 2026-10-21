@@ -1,10 +1,12 @@
 package com.peachsoft.otryx.transport.vertx;
 
+import com.peachsoft.otryx.api.RpcAuthenticationException;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcRemoteError;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcTimeoutException;
+import com.peachsoft.otryx.api.RpcUnavailableException;
 import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.observability.RpcCertificateReloadOutcome;
 import com.peachsoft.otryx.observability.RpcConnectionCloseReason;
@@ -21,28 +23,27 @@ import com.peachsoft.otryx.protocol.RpcProtocolException;
 import com.peachsoft.otryx.transport.ResponseByteBudget;
 import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
+import com.peachsoft.otryx.transport.RpcTransportSecurityDescriptor;
 import com.peachsoft.otryx.transport.RpcTransportServer;
 import io.vertx.core.Context;
+import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.net.NetServer;
 import io.vertx.core.net.NetServerOptions;
 import io.vertx.core.net.NetSocket;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.cert.CertificateEncodingException;
-import java.security.cert.X509Certificate;
+import java.time.Clock;
 import java.time.Duration;
-import java.util.HexFormat;
-import javax.net.ssl.SSLPeerUnverifiedException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,135 +68,166 @@ final class VertxRpcTransportServer implements RpcTransportServer {
     private static final String INFLIGHT_OVERLOADED_MESSAGE =
             "RPC connection inflight capacity exhausted";
 
-    private final Vertx vertx = Vertx.vertx();
-    private final NetServer server;
+    private final Object lifecycleLock = new Object();
+    private volatile Vertx vertx;
+    private volatile NetServer server;
+    private final NetServerOptions serverOptions;
     private final RpcTransportOptions options;
+    private final Clock identityClock;
+    private final LongSupplier identityNanoTime;
+    private final long identitySweepMillis;
     private final TransportAdmissionController admission;
     private final ResponseByteBudget responseBudget;
-    private final VertxTlsSupport.FileState initialTlsFileState;
-    private final Set<ServerConnection> connections =
-            ConcurrentHashMap.newKeySet();
+    private volatile VertxTlsSupport.PreparedMaterial tlsMaterial;
+    private VertxTlsSupport.PreparedMaterial pendingTlsMaterial;
+    private final Set<ServerConnection> connections = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean draining = new AtomicBoolean();
     private final AtomicBoolean closingServer = new AtomicBoolean();
+    private final AtomicBoolean closed = new AtomicBoolean();
     private volatile CompletableFuture<Void> drainFuture;
     private volatile long drainTimerId = -1L;
+    private volatile long identitySweepTimerId = -1L;
     private volatile long tlsReloadTimerId = -1L;
-    private volatile TlsReloadController<VertxTlsSupport.FileState> tlsReloadController;
+    private volatile TlsReloadController<VertxTlsSupport.RawMaterial,
+            VertxTlsSupport.PreparedMaterial> tlsReloadController;
 
     VertxRpcTransportServer(RpcTransportOptions options) {
-        this.options = options;
+        this(options, Clock.systemUTC(), System::nanoTime);
+    }
+
+    VertxRpcTransportServer(RpcTransportOptions options, Clock identityClock, LongSupplier identityNanoTime) {
+        this(options, identityClock, identityNanoTime, new BoundedJdkSslEngineOptions());
+    }
+
+    VertxRpcTransportServer(RpcTransportOptions options, Clock identityClock, LongSupplier identityNanoTime,
+            BoundedJdkSslEngineOptions engineOptions) {
+        this(options, identityClock, identityNanoTime, engineOptions, VertxTlsSupport.IDENTITY_SWEEP_MILLIS);
+    }
+
+    VertxRpcTransportServer(RpcTransportOptions options, Clock identityClock, LongSupplier identityNanoTime,
+            BoundedJdkSslEngineOptions engineOptions, long identitySweepMillis) {
+        if (identitySweepMillis <= 0L) {
+            throw new IllegalArgumentException("Identity maintenance interval must be positive");
+        }
+        this.identitySweepMillis = identitySweepMillis;
+        this.options = Objects.requireNonNull(options, "options");
+        this.identityClock = Objects.requireNonNull(identityClock, "identityClock");
+        this.identityNanoTime = Objects.requireNonNull(identityNanoTime, "identityNanoTime");
         this.admission = new TransportAdmissionController(options.admission());
-        this.responseBudget = new ResponseByteBudget(
-                options.admission().maxBufferedResponseBytes());
-        NetServerOptions serverOptions =
-                new NetServerOptions()
-                        .setTcpKeepAlive(true)
-                        .setTcpNoDelay(true);
-        VertxTlsSupport.configureServer(
-                serverOptions,
-                options.security(),
-                options.observer());
-        // 与初始 SSL 配置在同一构造阶段建立基线；运行期不在 EventLoop 读取文件。
-        this.initialTlsFileState = options.security().enabled()
-                ? VertxTlsSupport.fileState(options.security())
-                : null;
-        this.server = vertx.createNetServer(serverOptions);
+        this.responseBudget = new ResponseByteBudget(options.admission().maxBufferedResponseBytes());
+        tlsMaterial = VertxTlsSupport.prepare(options.security(), false, options.observer(), options.codecIds(),
+                identityClock, identityNanoTime);
+        serverOptions = new NetServerOptions().setTcpKeepAlive(true).setTcpNoDelay(true);
+        VertxTlsSupport.configureServer(serverOptions, tlsMaterial);
+        if (options.security().enabled()) {
+            serverOptions.setSslEngineOptions(Objects.requireNonNull(engineOptions, "engineOptions"));
+        }
     }
 
     @Override
-    public CompletionStage<RpcEndpoint> start(
-            RpcEndpoint bind,
-            RpcRequestHandler handler) {
-        CompletableFuture<RpcEndpoint> started =
-                new CompletableFuture<>();
-        server.connectHandler(socket -> {
-                    if (draining.get()) {
-                        socket.close();
-                        return;
-                    }
-                    TransportAdmissionController.Lease connectionLease =
-                            admission.tryAcquireConnection();
-                    if (connectionLease == null) {
-                        // 配额已满：在进入连接状态机之前立即关闭。
-                        socket.close();
-                        return;
-                    }
-                    TransportAdmissionController.Lease handshakeLease =
-                            admission.tryAcquireHandshake();
-                    if (handshakeLease == null) {
-                        connectionLease.close();
-                        socket.close();
-                        return;
-                    }
-                    try {
-                        if (options.security().enabled()
-                                && options.observer().enabled()) {
-                            RpcEndpoint remote = new RpcEndpoint(
-                                    socket.remoteAddress().host(),
-                                    Math.max(socket.remoteAddress().port(), 1));
-                            options.observer()
-                                    .onTlsHandshakeCompleted(
-                                            RpcConnectionRole.SERVER,
-                                            remote,
-                                            options.security().mode(),
-                                            0L,
-                                            null);
-                        }
-                        ServerConnection connection =
-                                new ServerConnection(
-                                        socket, handler, connectionLease, handshakeLease);
-                        connections.add(connection);
-                        if (draining.get()) {
-                            connection.closeLocally();
-                        }
-                    } catch (RuntimeException error) {
-                        handshakeLease.close();
-                        connectionLease.close();
-                        socket.close();
-                        LOGGER.warn(
-                                "RPC admission setup failed: errorType={}",
-                                error.getClass().getName());
-                    }
-                })
+    public RpcTransportSecurityDescriptor securityDescriptor() {
+        return tlsMaterial.descriptor();
+    }
+
+    @Override
+    public CompletionStage<RpcEndpoint> start(RpcEndpoint bind, RpcRequestHandler handler) {
+        Objects.requireNonNull(bind, "bind");
+        Objects.requireNonNull(handler, "handler");
+        CompletableFuture<RpcEndpoint> started = new CompletableFuture<>();
+        NetServer activated;
+        synchronized (lifecycleLock) {
+            if (closed.get() || draining.get() || server != null) {
+                return CompletableFuture.failedFuture(new RpcUnavailableException("RPC transport server cannot start"));
+            }
+            try {
+                tlsMaterial.checkLocal();
+                vertx = Vertx.vertx();
+                activated = vertx.createNetServer(serverOptions);
+                server = activated;
+            } catch (RuntimeException error) {
+                closed.set(true);
+                if (vertx != null) {
+                    vertx.close();
+                }
+                return CompletableFuture.failedFuture(VertxTlsSupport.connectionFailure(error));
+            }
+        }
+        activated.exceptionHandler(error -> LOGGER.debug("RPC inbound connection failed: errorType={}",
+                        VertxTlsSupport.connectionFailure(error).getClass().getName()))
+                .connectHandler(socket -> acceptConnection(socket, handler))
                 .listen(bind.port(), bind.host())
                 .onComplete(result -> {
                     if (result.failed()) {
-                        started.completeExceptionally(result.cause());
+                        started.completeExceptionally(VertxTlsSupport.connectionFailure(result.cause()));
+                        return;
+                    }
+                    synchronized (lifecycleLock) {
+                        if (!closed.get() && !draining.get()) {
+                            startTlsReload();
+                            if (options.security().enabled()) {
+                                identitySweepTimerId = vertx.setPeriodic(identitySweepMillis,
+                                        ignored -> verifyConnections());
+                            }
+                        }
+                    }
+                    if (closed.get() || draining.get()) {
+                        activated.close();
+                        started.completeExceptionally(new RpcUnavailableException("RPC transport server is closed"));
                     } else {
-                        startTlsReload();
-                        started.complete(new RpcEndpoint(
-                                bind.host(),
-                                result.result().actualPort()));
+                        started.complete(new RpcEndpoint(bind.host(), result.result().actualPort()));
                     }
                 });
         return started;
     }
 
-    /**
-     * 只信任成功完成 mTLS 客户端证书校验的连接主体；其他模式一律匿名。
-     *
-     * @param socket 已建立的 TLS/明文连接
-     * @return Transport 验证的身份，不能从请求 Metadata 取得
-     */
-    private RpcPeerIdentity verifiedPeer(NetSocket socket) {
-        if (!options.security().mutualTls()) {
-            return RpcPeerIdentity.anonymous();
+    private void acceptConnection(NetSocket socket, RpcRequestHandler handler) {
+        if (closed.get() || draining.get()) {
+            socket.close();
+            return;
+        }
+        TransportAdmissionController.Lease connectionLease = admission.tryAcquireConnection();
+        if (connectionLease == null) {
+            socket.close();
+            return;
+        }
+        TransportAdmissionController.Lease handshakeLease = admission.tryAcquireHandshake();
+        if (handshakeLease == null) {
+            connectionLease.close();
+            socket.close();
+            return;
         }
         try {
-            var certificates = socket.peerCertificates();
-            if (certificates == null || certificates.isEmpty()
-                    || !(certificates.getFirst() instanceof X509Certificate certificate)) {
-                throw new IllegalStateException("Verified mTLS client certificate is missing");
+            VertxTlsSupport.ConnectionSecurity security = tlsMaterial.verifyConnection(socket, null);
+            ServerConnection connection = new ServerConnection(socket, handler, connectionLease, handshakeLease,
+                    security);
+            synchronized (lifecycleLock) {
+                security.check(tlsMaterial);
+                if (closed.get() || draining.get()) {
+                    throw new RpcUnavailableException("RPC transport server is closed");
+                }
+                connections.add(connection);
             }
-            byte[] fingerprint = MessageDigest.getInstance("SHA-256")
-                    .digest(certificate.getEncoded());
-            return RpcPeerIdentity.verifiedClientCertificate(
-                    certificate.getSubjectX500Principal().getName(),
-                    HexFormat.of().formatHex(fingerprint));
-        } catch (SSLPeerUnverifiedException | CertificateEncodingException
-                 | NoSuchAlgorithmException error) {
-            throw new IllegalStateException("Failed to resolve verified mTLS client identity", error);
+            observeTlsHandshake(socket, null);
+        } catch (RuntimeException error) {
+            handshakeLease.close();
+            connectionLease.close();
+            socket.close();
+            observeTlsHandshake(socket, VertxTlsSupport.connectionFailure(error));
+            LOGGER.warn("RPC admission setup failed: errorType={}", error.getClass().getName());
         }
+    }
+
+    private void observeTlsHandshake(NetSocket socket, Throwable error) {
+        if (options.security().enabled() && options.observer().enabled()) {
+            RpcEndpoint remote = new RpcEndpoint(socket.remoteAddress().host(),
+                    Math.max(socket.remoteAddress().port(), 1));
+            options.observer().onTlsHandshakeCompleted(RpcConnectionRole.SERVER, remote,
+                    options.security().mode(), 0L, error);
+        }
+    }
+
+    void verifyConnections() {
+        connections.forEach(ServerConnection::verifyOnContext);
     }
 
     private final class ServerConnection {
@@ -206,6 +238,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         private final Context context;
         private final RpcEndpoint remote;
         private final RpcPeerIdentity peerIdentity;
+        private final VertxTlsSupport.ConnectionSecurity security;
         private final FrameAccumulator accumulator =
                 new FrameAccumulator(options.maxFrameBytes(), admission);
         private final Map<Long, CompletableFuture<byte[]>> inflight =
@@ -232,9 +265,11 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 NetSocket socket,
                 RpcRequestHandler handler,
                 TransportAdmissionController.Lease connectionLease,
-                TransportAdmissionController.Lease handshakeLease) {
+                TransportAdmissionController.Lease handshakeLease,
+                VertxTlsSupport.ConnectionSecurity security) {
             this.socket = socket;
-            this.peerIdentity = verifiedPeer(socket);
+            this.security = security;
+            this.peerIdentity = security.peer();
             this.connectionLease = connectionLease;
             this.handshakeLease = handshakeLease;
             this.handler = handler;
@@ -252,7 +287,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
             socket.setWriteQueueMaxSize(
                     options.maxWriteQueueBytes());
             socket.handler(this::onBuffer);
-            socket.exceptionHandler(this::closeWithError);
+            socket.exceptionHandler(error -> closeWithError(VertxTlsSupport.connectionFailure(error)));
             socket.closeHandler(ignored -> {
                 cancelHandshakeTimer();
                 cancelHeartbeatTimer();
@@ -278,7 +313,45 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                             "RPC handshake timed out")));
         }
 
+        private void verifyOnContext() {
+            if (Vertx.currentContext() == context) {
+                validateSecurity();
+            } else {
+                context.runOnContext(ignored -> validateSecurity());
+            }
+        }
+
+        private boolean validateSecurity() {
+            if (!open) {
+                return false;
+            }
+            try {
+                security.check(tlsMaterial);
+                return true;
+            } catch (RpcAuthenticationException error) {
+                closeWithError(error);
+                return false;
+            }
+        }
+
+        private Future<Void> writeChecked(byte[] bytes) {
+            synchronized (lifecycleLock) {
+                try {
+                    security.check(tlsMaterial);
+                    if (closed.get() || !open) {
+                        return Future.failedFuture(new RpcUnavailableException("RPC transport server is closed"));
+                    }
+                    return socket.write(Buffer.buffer(bytes));
+                } catch (RpcAuthenticationException error) {
+                    return Future.failedFuture(error);
+                }
+            }
+        }
+
         private void onBuffer(Buffer buffer) {
+            if (!validateSecurity()) {
+                return;
+            }
             try {
                 boolean consumedFrame =
                         accumulator.accept(buffer, this::onFrame);
@@ -317,6 +390,9 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         }
 
         private void onFrame(byte[] frame) {
+            if (!validateSecurity()) {
+                return;
+            }
             lastReadNanos = System.nanoTime();
             pingSentAtNanos = 0L;
             if (!handshakeComplete) {
@@ -417,7 +493,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                         INFLIGHT_OVERLOADED_MESSAGE);
                 return;
             }
-            socket.write(Buffer.buffer(rejected))
+            writeChecked(rejected)
                     .onFailure(this::closeWithError);
         }
 
@@ -451,7 +527,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                                 options.capabilities()));
                 byte[] encoded = RpcProtocolCodec.encode(ack);
                 handshakeComplete = true;
-                socket.write(Buffer.buffer(encoded))
+                writeChecked(encoded)
                         .onSuccess(ignored -> {
                             // 握手超时覆盖 HELLO_ACK 写出全过程，避免挂起的 ACK 租约。
                             cancelHandshakeTimer();
@@ -486,7 +562,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 finishConnectionDrainIfIdle();
                 return;
             }
-            if (!open) {
+            if (!validateSecurity()) {
                 return;
             }
             if (error != null) {
@@ -531,7 +607,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
             }
             pendingResponses.add(lease);
             try {
-                socket.write(Buffer.buffer(response))
+                writeChecked(response)
                         .onComplete(result -> {
                             pendingResponses.remove(lease);
                             lease.close();
@@ -593,9 +669,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                 return;
             }
             pingSentAtNanos = now;
-            socket.write(Buffer.buffer(
-                            RpcProtocolCodec.encodeHeartbeat(
-                                    RpcMessageType.PING)))
+            writeChecked(RpcProtocolCodec.encodeHeartbeat(RpcMessageType.PING))
                     .onFailure(this::closeWithError);
         }
 
@@ -614,9 +688,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                             "Invalid RPC heartbeat frame");
                 }
                 if (frame.messageType() == RpcMessageType.PING) {
-                    socket.write(Buffer.buffer(
-                                    RpcProtocolCodec.encodeHeartbeat(
-                                            RpcMessageType.PONG)))
+                    writeChecked(RpcProtocolCodec.encodeHeartbeat(RpcMessageType.PONG))
                             .onFailure(this::closeWithError);
                     return;
                 }
@@ -665,7 +737,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                     RpcErrorCodec.encode(new RpcRemoteError(
                             RpcProtocolException.class.getName(),
                             "RPC server is draining")));
-            socket.write(Buffer.buffer(response))
+            writeChecked(response)
                     .onFailure(this::closeWithError);
         }
 
@@ -715,8 +787,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                     RpcErrorCodec.encode(new RpcRemoteError(
                             RpcProtocolException.class.getName(),
                             message)));
-            socket.write(Buffer.buffer(
-                            RpcProtocolCodec.encode(goAway)))
+            writeChecked(RpcProtocolCodec.encode(goAway))
                     .onFailure(this::closeWithError);
         }
 
@@ -736,6 +807,10 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         }
 
         private void closeMalformed(Throwable error) {
+            if (error instanceof RpcAuthenticationException) {
+                closeWithError(error);
+                return;
+            }
             LOGGER.warn(
                     "Closing malformed RPC connection: remote={}, errorType={}",
                     remote.authority(),
@@ -777,11 +852,16 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                     RpcErrorCodec.encode(new RpcRemoteError(
                             RpcProtocolException.class.getName(),
                             message)));
-            socket.end(Buffer.buffer(
-                    RpcProtocolCodec.encode(goAway)));
+            writeChecked(RpcProtocolCodec.encode(goAway))
+                    .onSuccess(ignored -> socket.end())
+                    .onFailure(this::closeWithError);
         }
 
         private void closeWithError(Throwable error) {
+            if (!(error instanceof RpcAuthenticationException) && !(error instanceof RpcTimeoutException)
+                    && !(error instanceof RpcProtocolException)) {
+                error = VertxTlsSupport.connectionFailure(error);
+            }
             if (!open) {
                 return;
             }
@@ -835,26 +915,51 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         if (!options.security().enabled()) {
             return;
         }
-        TlsReloadController<VertxTlsSupport.FileState> controller =
-                new TlsReloadController<>(
-                        vertx.getOrCreateContext(),
-                        initialTlsFileState,
-                        () -> VertxTlsSupport.fileState(
-                                options.security()),
-                        ignored -> VertxTlsSupport.reloadOptions(
-                                options.security(),
-                                false,
-                                options.observer()),
-                        sslOptions -> server.updateSSLOptions(
-                                sslOptions,
-                                true),
-                        this::observeCertificateReload);
+        TlsReloadController<VertxTlsSupport.RawMaterial, VertxTlsSupport.PreparedMaterial> controller =
+                new TlsReloadController<>(vertx.getOrCreateContext(), tlsMaterial.raw(),
+                        () -> VertxTlsSupport.readMaterial(options.security()),
+                        raw -> VertxTlsSupport.prepare(raw, options.security(), false, options.observer(),
+                                options.codecIds(), identityClock, identityNanoTime),
+                        this::publishTlsMaterial, this::observeCertificateReload);
         tlsReloadController = controller;
-        tlsReloadTimerId = vertx.setPeriodic(
-                options.security().reloadInterval().toMillis(),
+        tlsReloadTimerId = vertx.setPeriodic(options.security().reloadInterval().toMillis(),
                 ignored -> controller.requestReload());
-        // 首次校验同样必须在控制面执行器中执行，不在 EventLoop 读取文件。
         controller.requestReload();
+    }
+
+    private Future<?> publishTlsMaterial(VertxTlsSupport.PreparedMaterial candidate) {
+        synchronized (lifecycleLock) {
+            if (closed.get() || draining.get() || pendingTlsMaterial != null) {
+                return Future.failedFuture(new RpcUnavailableException("RPC TLS reload cannot start"));
+            }
+            pendingTlsMaterial = candidate;
+        }
+        Future<?> updated;
+        try {
+            updated = server.updateSSLOptions(candidate.sslOptions(), true);
+        } catch (RuntimeException error) {
+            synchronized (lifecycleLock) {
+                if (pendingTlsMaterial == candidate) {
+                    pendingTlsMaterial = null;
+                }
+            }
+            return Future.failedFuture(VertxTlsSupport.reloadFailure(error));
+        }
+        return updated.transform(result -> {
+            synchronized (lifecycleLock) {
+                if (pendingTlsMaterial != candidate || closed.get() || draining.get()) {
+                    pendingTlsMaterial = null;
+                    return Future.failedFuture(new RpcUnavailableException("RPC TLS reload was stopped"));
+                }
+                pendingTlsMaterial = null;
+                if (result.failed()) {
+                    return Future.failedFuture(VertxTlsSupport.reloadFailure(result.cause()));
+                }
+                tlsMaterial = candidate;
+            }
+            verifyConnections();
+            return Future.succeededFuture();
+        });
     }
 
     private void observeCertificateReload(
@@ -870,7 +975,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                                 ? RpcCertificateReloadOutcome.SUCCESS
                                 : RpcCertificateReloadOutcome.FAILURE,
                         System.nanoTime() - startedAtNanos,
-                        error);
+                        VertxTlsSupport.reloadFailure(error));
     }
 
     private void cancelTlsReload() {
@@ -878,7 +983,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
             vertx.cancelTimer(tlsReloadTimerId);
             tlsReloadTimerId = -1L;
         }
-        TlsReloadController<VertxTlsSupport.FileState> controller =
+        TlsReloadController<VertxTlsSupport.RawMaterial, VertxTlsSupport.PreparedMaterial> controller =
                 tlsReloadController;
         tlsReloadController = null;
         if (controller != null) {
@@ -893,17 +998,23 @@ final class VertxRpcTransportServer implements RpcTransportServer {
                     new IllegalArgumentException(
                             "drain timeout must be positive"));
         }
-        CompletableFuture<Void> current = drainFuture;
-        if (current != null) {
-            return current;
+        CompletableFuture<Void> created;
+        synchronized (lifecycleLock) {
+            if (drainFuture != null) {
+                return drainFuture;
+            }
+            created = new CompletableFuture<>();
+            drainFuture = created;
+            draining.set(true);
+            pendingTlsMaterial = null;
+            if (vertx == null) {
+                closingServer.set(true);
+                created.complete(null);
+                return created;
+            }
         }
-        CompletableFuture<Void> created = new CompletableFuture<>();
-        drainFuture = created;
-        draining.set(true);
         connections.forEach(ServerConnection::beginDrain);
-        drainTimerId = vertx.setTimer(
-                timeout.toMillis(),
-                ignored -> forceDrainTimeout());
+        drainTimerId = vertx.setTimer(Math.max(1L, timeout.toMillis()), ignored -> forceDrainTimeout());
         checkDrainComplete();
         return created;
     }
@@ -928,6 +1039,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
             drainTimerId = -1L;
         }
         cancelTlsReload();
+        cancelIdentitySweep();
         server.close().onComplete(result -> {
             CompletableFuture<Void> future = drainFuture;
             if (future == null) {
@@ -961,10 +1073,27 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         return responseBudget.reservedBytes();
     }
 
+    private void cancelIdentitySweep() {
+        if (identitySweepTimerId >= 0L) {
+            vertx.cancelTimer(identitySweepTimerId);
+            identitySweepTimerId = -1L;
+        }
+    }
+
     @Override
     public void close() {
-        draining.set(true);
-        cancelTlsReload();
+        synchronized (lifecycleLock) {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            draining.set(true);
+            pendingTlsMaterial = null;
+            if (vertx == null) {
+                return;
+            }
+            cancelTlsReload();
+            cancelIdentitySweep();
+        }
         connections.forEach(ServerConnection::closeLocally);
         server.close();
         vertx.close();

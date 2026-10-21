@@ -55,6 +55,10 @@ final class EndpointStats {
         end(nanos);
     }
 
+    void endSecurityRejected() {
+        inflight.decrementAndGet();
+    }
+
     boolean endFailure(
             long nanos,
             RpcClientResilienceOptions options) {

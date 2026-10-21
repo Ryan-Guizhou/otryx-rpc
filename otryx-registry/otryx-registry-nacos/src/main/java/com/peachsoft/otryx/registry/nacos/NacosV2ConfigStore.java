@@ -2,14 +2,17 @@ package com.peachsoft.otryx.registry.nacos;
 
 import com.alibaba.nacos.api.config.ConfigQueryResult;
 import com.alibaba.nacos.api.config.ConfigService;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 /**
  * Nacos Config 的有界、严格 MD5-CAS 访问层。
  *
- * <p>Nacos SDK 会在网络故障时尝试本地 Snapshot，但 Snapshot 缺乏权威 MD5；
- * 对于需要 fencing 的元数据操作绝不接受没有 MD5 的非空数据。
+ * <p>生产读取仅接受远端 Config 响应；本地 Snapshot 不能代替权威 MD5。
+ * 对于需要 fencing 的元数据操作仍拒绝没有 MD5 的非空数据。
  * 所有调用须运行在 NacosControlExecutor 上，不得阻塞 RPC EventLoop。
  *
  * @Author OpenAI
@@ -22,12 +25,22 @@ final class NacosV2ConfigStore {
     static final int MAX_CAS_ATTEMPTS = 12;
     private static final long CONFIG_TIMEOUT_MILLIS = 3000L;
 
-    private final ConfigService config;
+    private final RegistrySecurityDescriptor descriptor;
+    private final NacosConfigOperations config;
     private final String group;
 
     NacosV2ConfigStore(ConfigService config, String group) {
+        this(NacosConfigOperations.fromInjectedService(config), group, RegistrySecurityDescriptor.unknown());
+    }
+
+    NacosV2ConfigStore(NacosConfigOperations config, String group, RegistrySecurityDescriptor descriptor) {
+        this.descriptor = Objects.requireNonNull(descriptor, "descriptor");
         this.config = Objects.requireNonNull(config, "config");
         this.group = Objects.requireNonNull(group, "group");
+    }
+
+    RegistrySecurityDescriptor securityDescriptor() {
+        return descriptor;
     }
 
     /** 从服务端获取数据和真正的 CAS MD5；没有服务端 MD5 的旧快照必须拒绝。 */
@@ -43,7 +56,7 @@ final class NacosV2ConfigStore {
         if (Thread.currentThread().isInterrupted()) {
             throw new InterruptedException("Nacos Config read interrupted");
         }
-        ConfigQueryResult response = config.getConfigWithResult(
+        ConfigQueryResult response = config.query(
                 dataId, group, Math.min(remainingTimeoutMillis, CONFIG_TIMEOUT_MILLIS));
         if (Thread.currentThread().isInterrupted()) {
             throw new InterruptedException("Nacos Config read interrupted");
@@ -55,7 +68,7 @@ final class NacosV2ConfigStore {
         requireSize(value);
         String md5 = response.getMd5();
         if (md5 == null || !md5.matches("[0-9a-fA-F]{32}")) {
-            throw new IllegalStateException("Nacos Config did not return an authoritative CAS MD5");
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
         }
         return new Entry(value, md5);
     }
@@ -68,7 +81,7 @@ final class NacosV2ConfigStore {
             throw new IllegalStateException(
                     "Nacos mapping CAS requires a preinitialized Config document with authoritative MD5");
         }
-        return config.publishConfigCas(dataId, group, next, expected.md5());
+        return config.compareAndSet(dataId, group, next, expected.md5());
     }
 
     /**
@@ -77,16 +90,21 @@ final class NacosV2ConfigStore {
      */
     boolean publishImmutable(String dataId, String value) throws Exception {
         requireSize(value);
-        return config.publishConfig(dataId, group, value);
+        return config.publishImmutable(dataId, group, value);
     }
 
     private static void requireSize(String content) {
         Objects.requireNonNull(content, "config content");
-        if (content.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG_BYTES) {
-            throw new IllegalArgumentException("Nacos Config metadata exceeds safe byte limit");
+        if (content.length() > MAX_CONFIG_BYTES
+                || content.getBytes(StandardCharsets.UTF_8).length > MAX_CONFIG_BYTES) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
         }
     }
 
     record Entry(String content, String md5) {
+        @Override
+        public String toString() {
+            return "NacosConfigEntry[present=" + (content != null) + ", authoritative=" + (md5 != null) + ']';
+        }
     }
 }

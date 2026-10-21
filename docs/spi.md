@@ -27,13 +27,13 @@ OTRYX RPC 的 SPI 隔离可独立替换的实现技术和策略。当前 `1.0.0-
 ```java
 ApplicationRegistryFactory factory = ExtensionLoader.getLoader(ApplicationRegistryFactory.class)
         .getExtension("etcd");
-ApplicationRegistry registry = factory.create(new RegistryOptions(
+ApplicationRegistry registry = factory.create(RegistryOptions.trustedDevelopment(
         List.of("http://127.0.0.1:2379"), "demo", Map.of()));
 ApplicationRegistrar registrar = registry.registrar().orElseThrow();
 ApplicationMetadataBackend metadata = (ApplicationMetadataBackend) registry;
 ```
 
-此片段说明扩展查找；完整运行时必须使用 `ApplicationMembershipCoordinator` 建立固定身份，再通过 Client `applicationControlPlane`、Server `applicationMembership` 装配并负责关闭。普通 Spring 应用使用 Starter 自动装配，参见 [Starter](reference/starter.md)。
+此片段只用于隔离开发环境的扩展查找，明确选择 `TRUSTED_DEVELOPMENT`。完整运行时必须使用 `ApplicationMembershipCoordinator` 建立固定身份，再通过 Client `applicationControlPlane`、Server `applicationMembership` 装配并负责关闭；两个 Builder 也必须显式指定同一部署安全 Profile。普通 Spring 应用使用 Starter 自动装配，参见 [Starter](reference/starter.md)。
 
 Provider、Consumer、BOTH 都按 `ApplicationKey(namespace, applicationName) + instanceId` 入册。纯 Consumer 的 RPC Endpoint 和 Manifest Revision 为空、权重为零；它存在于成员目录，但永远不进入 RPC Provider 池。一个进程导出多个接口仍只产生一条应用成员记录。
 
@@ -55,20 +55,34 @@ Adapter 只能声明实际能力；原生 Watch、轮询订阅和本地 Revision
 
 ## 5. RegistryOptions 与配置
 
-`RegistryOptions` 包含 endpoints、namespace、providerOptions 和可选 Observer。endpoints/namespace 为公共字段；SDK 专属设置放入 `providerOptions`，Core 不引入厂商 SDK。
+`RegistryOptions` 包含 endpoints、namespace、非安全 providerOptions、Observer、显式 securityProfile、当前链的 security，以及 Eureka 外置元数据链的可选 metadataSecurity。三/四参数构造与 `fromCsv(...)` 保留 `UNSPECIFIED`，不能用于 Factory 启动；`trustedDevelopment(...)` 只表达明确的隔离开发意图。
+
+TLS 信任、可选客户端证书和后端凭据通过 `RegistrySecurityOptions`、`RegistryTlsOptions`、`RegistryCredentials` 建模。凭据种类为 `NONE`、`USER_PASSWORD`、`ACL_TOKEN` 或 `CLIENT_CERTIFICATE`；具体 Adapter 必须拒绝自己不支持的组合。非安全 SDK 设置才进入 `providerOptions`，未知键或凭据键不能静默透传。Eureka membership 与外置 Metadata 分别提供安全配置和实际来源，不能把一条安全链的凭据或声明自动继承给另一条。Core 不引入厂商 SDK。
 
 后端默认值、超时、ACL、容量和失败边界分别见 [Etcd](reference/registry-etcd.md)、[Nacos](reference/registry-nacos-v2.md)、[Consul](reference/registry-consul-v2.md)、[Eureka](reference/registry-eureka-v2.md)。Nacos 每个新 namespace/group 必须在业务启动前显式初始化 Mapping 分片；Eureka 缺少可靠外置元数据配置直接失败。
 
-应用目录的新鲜度预算必须为严格正的有限值，默认 30 秒；远端读取、订阅、重试、取消与关闭均在控制面处理。RPC 热路径只读取不可变本地快照。快照读取成功与内容改变是不同事件，详见 [新鲜度与恢复](reference/registry-freshness.md)。
+应用目录的新鲜度预算必须为严格正的有限值，默认 30 秒；远端读取、订阅、重试、取消与关闭均在控制面处理。RPC 热路径只读取不可变本地快照。安全失败使旧候选的安全代次立即失效，不能借普通失联的 LKG 规则继续路由；恢复后必须重新完整验证。快照读取成功与内容改变是不同事件，详见 [新鲜度与恢复](reference/registry-freshness.md) 和 [安全指南](security.md)。
 
 ## 6. Codec 与代理
 
 `RpcCodec.bind(RpcMethodDescriptor)` 在方法粒度预绑定 encoder/decoder，单次请求不重新解析反射 Method 或 Schema。Codec ID 不按 SPI 加载顺序动态分配。
 
+`NETWORK_MTLS` 检查实际 `RpcCodecRegistry` 的全部 Codec，以及每个最终 `RpcMethodCodec` 的 `RpcCodecSecurityDescriptor`：类型策略必须受限，契约声明与 Payload 解码边界必须明确，资源限额必须有限。默认 `UNKNOWN` 不能通过；`TRUSTED_COMPATIBILITY` 不能作为网络部署能力。安全的自定义 Codec 可以替换 Fory，未使用的默认 Fory 模式不会代替实际能力校验。Fory 当前的图内存估算不等同于编码前峰值分配硬上限，后者仍由 #141 单独验收。
+
 标注 `@OtryxRpcContract` 并启用 `otryx-codegen` 后，编译期生成 Consumer Stub。运行时优先发现生成类，缺失才回退 `ProxyFactory`。JDK Proxy 为默认 fallback，CGLIB 与 Byte Buddy 按需添加。
 
-## 7. 验证扩展
+## 7. Transport、身份和有限授权契约
 
-新增后端须执行相同的应用成员、角色、Manifest、Mapping Owner、订阅健康、失败和关闭契约，不能仅有工厂加载测试。受控计数应分别报告原生成员、SPI 方法入口调用数、订阅创建调用数及快照/健康通知和收敛时间，不能将它们表述为后端全部 HTTP、keepalive 或 server Watch 流量。
+`RpcTransportClient.request(RpcTarget, byte[], Duration)` 接受预期 `ApplicationKey` 与 Endpoint，并返回 `CompletionStage<RpcTransportResponse>`。响应必须包含该请求实际使用连接的 `RpcPeerIdentity`，不能借用其他连接或配置文件里的静态身份。双向 TLS 身份绑定完整叶证书 DER SHA-256、ApplicationKey 和有限期限，并受证书有效期、原始墙钟/单调时间锚及当前安全代次限制。
+
+Client/Server 的 `securityDescriptor()` 只能说明本对象已安装的真实能力，读取时不能启动线程、连接或监听器。未实现的默认描述是 `UNKNOWN`；NETWORK Builder 对它失败关闭。Client 在发送、响应解码和交付前复核目标身份；`RpcAuthenticationException` 的固定原因不能被转换成可重试的普通连接失败，也不能更新端点失败、EWMA 或熔断状态。
+
+Provider 使用显式 `RpcAuthorizer`，返回 `CompletionStage<RpcAuthorizationDecision>`。允许结果必须包含有限 `validUntil`，不能超出接收时间、请求 Deadline、Peer 身份期限与配置的最大 grant lifetime；解码和方法执行前均复核。同步策略体在有界工作线程执行，逻辑超时或取消会释放等待帧预算，但工作槽位须等策略体和其原始 Stage 都真正结束才释放。缺少授权器的 NETWORK Provider/BOTH 在启动与注册副作用之前拒绝，应用 Metadata 不能代替认证身份或授权器。
+
+这些契约由 Core 最终校验，SPI 替换不能降低它们。具体原因与迁移示例见 [安全指南](security.md) 和 [Starter](reference/starter.md)。
+
+## 8. 验证扩展
+
+新增后端须执行相同的应用成员、角色、Manifest、Mapping Owner、订阅健康、失败和关闭契约，不能仅有工厂加载测试。NETWORK 扩展还须验证三类实际 Registry 来源的保护、错误信任/凭据、内容篡改与安全失效；Transport/Codec 替换须有未知能力拒绝及真实安全正例。受控计数应分别报告原生成员、SPI 方法入口调用数、订阅创建调用数及快照/健康通知和收敛时间，不能将它们表述为后端全部 HTTP、keepalive 或 server Watch 流量。
 
 运行入口和真实证据边界见 [应用级注册验收](reference/application-registry-acceptance.md)。

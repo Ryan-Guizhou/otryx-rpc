@@ -1,8 +1,8 @@
 # OTRYX V2：应用级注册身份与 SPI 契约
 
-> **当前源码：唯一应用级注册模型。#128–#138 的身份、后端、Starter 和 Quickstart 已接入；#139 正在完成全仓清理、共享契约与四后端独立 JVM 验收。源码存在或脚本夹具通过不能替代准确 Head 的真实后端与 CI 证据。**
+> **当前源码采用唯一应用级注册模型。#139 已由 PR #160 合入 main `783bf8115c9523e5667023678dafe659315b2b66`，该合并提交的 main 门禁已核验。#140 安全加固仍在实现与验证；本文记录当前工作树契约，不宣称新安全端到端场景已经通过。**
 >
-> 总控 [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139)。#138 由 [PR #159](https://github.com/Ryan-Guizhou/otryx-rpc/pull/159) 合并；当前验收与剩余限制见[断点记录](../engineering/agent-governance-checkpoint.md)，不沿用前一工作包的绿色检查。
+> 总控 [#127](https://github.com/Ryan-Guizhou/otryx-rpc/issues/127)，当前工作包 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140)。#138 由 [PR #159](https://github.com/Ryan-Guizhou/otryx-rpc/pull/159) 合并，#139 由 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 完成；当前验收与剩余限制见[断点记录](../engineering/agent-governance-checkpoint.md)。历史阶段说明保留当时交付边界，当前安全契约见第 16 节。
 > 版本 JDK 21、Spring Boot 3.5.4、1.0.0-SNAPSHOT、Wire v1 均保持不变。
 
 ## 1. 核心决策
@@ -41,11 +41,12 @@ Provider/BOTH 必须包含实际 RPC Endpoint、正整数权重及 Manifest Revi
 | Core | 应用身份、Manifest、ServiceMapping、Resolver、有界缓存、共享成员生命周期 |
 | Registry | Memory 与 Etcd/Nacos/Consul/Eureka 应用成员，原生或显式外置元数据 |
 | Starter / Quickstart | 唯一 Starter、四模块示例、真实成员诊断、多个 Manifest revision 与 mTLS 授权 |
-| #139 | 删除过渡代码与注册路径，统一共享契约，完整五组 rolling 和四真实后端独立 JVM 门禁 |
+| #139，已合并 | 删除过渡代码与注册路径，统一共享契约，完成对应完整五组 rolling 和四真实后端独立 JVM 门禁 |
+| #140，当前实现验证 | 显式安全意图、实际能力预检、有限应用身份/授权、Registry 来源保护与安全代次 |
 
 不保留接口注册模式、运行时双模式开关或双读双写。缺少必需成员注册、元数据能力或配置时直接失败。ServiceKey 只表示业务契约，ServiceInstance 只表示本地负载均衡候选，RegistrySubscription 仍是应用订阅的关闭句柄。
 
-#139 的实现和验收须作为完整纵向 PR 完成；每次结论绑定准确 PR Head，合并后独立核验 main。共享测试计数和实际后端、进程边界详见[应用级注册验收](../reference/application-registry-acceptance.md)。
+#139 的完整纵向交付已随 PR #160 合并，并核验对应 main。此后的变更仍须绑定自己的准确 PR Head 与合并后 main，不能沿用旧结果。共享测试计数和实际后端、进程边界详见[应用级注册验收](../reference/application-registry-acceptance.md)。
 
 ## 4. 质量验证
 
@@ -171,7 +172,8 @@ flowchart TD
 
 - 控制面使用 `ServiceMappingCache.refresh` 与 `ApplicationServiceResolver.refresh`。
   `ServiceMappingCache.current` / `ApplicationServiceResolver.current` 不执行远端 IO；
-  最后一步成功才一次性发布完整不可变 Provider 快照。未就绪、合法空、限期 LKG、超时陈旧、关闭可区分。
+  最后一步成功才一次性发布完整不可变 Provider 快照。未就绪、合法空、限期 LKG、超时陈旧、
+  安全拒绝与关闭可区分；当前安全拒绝不会沿用普通 LKG 宽限。
 - 目录实例必须属于该 Application。纯 Consumer、无 RPC Endpoint、0 端口或通配监听地址
   不得进入候选池；每个实例的 Manifest Revision 必须存在、归属匹配，
   且确实导出目标 ServiceKey + 预期 Schema Fingerprint + 当前 Wire 版本。
@@ -180,8 +182,8 @@ flowchart TD
   单次未决获取 15 秒超时。失败不伪装成缓存空结果；
   未被引用的 Revision 不通过此缓存直接删除远端仓库数据。
 - 本地 Resolver 上限为 512 个 Service/Schema 组合、32 并行刷新、单次最多 1024 候选节点，
-  30 秒本地刷新上限。失联是否继续使用快照由配置 `maxStale` 决定；
-  Core Client 的应用级路径已由 #132 接入，Starter 的装配由 #137 接入。
+  30 秒本地刷新上限。普通失联是否继续使用快照由配置 `maxStale` 决定；
+  安全拒绝使旧验证代次立即失效。Core Client 的应用级路径由 #132 接入，Starter 由 #137 接入。
 - 当前 Manifest 内容寻址只验证完整性，不构成身份认证与运行时授权。
   远端 ACL、身份和真实证书授权必须按后端与安全 Profile 分别配置和验证，不能由 Metadata 替代。
 
@@ -270,7 +272,8 @@ sequenceDiagram
 - 一个监听 Endpoint 对应一个实例发布域；同一应用若有多个 Listener，应分别配置稳定、不同的
   instanceId 和协调器，不能让不同端点对同一实例互相覆盖。服务数量只增加 Manifest 中导出项，
   不增加同一监听实例的注册记录。
-- 启动顺序：绑定业务服务 → 发布不可变 Manifest → claim 带 fencing 的映射 owner
+- 当前启动前先验证显式 Profile、最终安全能力和必需授权器；BOTH 的已启用两端都通过预检后，
+  才进入业务启动顺序：绑定业务服务 → 发布不可变 Manifest → claim 带 fencing 的映射 owner
   → 原子替换该实例完整服务集合 → 启动 Transport → 得到真实对外 Endpoint
   → 注册应用成员。任一步失败必须回滚已发布的映射、关闭 Transport，并返回异常。
   Manifest 内容 Revision 因滚动发布与回滚可能仍被引用，不做危险删除。
@@ -290,13 +293,15 @@ sequenceDiagram
   未入册或已关闭，业务调用 fail closed，不发送 Transport。
 - 对每个业务接口提前计算 `ServiceKey + RpcSchemaFingerprint`；
   后台有界调度器刷新 Mapping → Application Directory → Revision Manifest
-  → Wire/Schema 校验后更新内存快照。一次 RPC 的负载均衡只读取本地 `ServiceInstance[]`
-  端点投影，不进行注册中心 IO，也绝不把纯 Consumer 端点纳入候选。
+  → Wire/Schema 校验后更新内存快照。一次 RPC 的负载均衡读取本地 `ServiceInstance[]`
+  及其对应的原始验证候选，attempt 发送前本地复核同一候选，不进行注册中心 IO，
+  也绝不把纯 Consumer 端点纳入候选。`RpcTarget` 同时携带目标 ApplicationKey 与 Endpoint。
 - 应用级目录默认强制有限的 LKG：未显式配置时为 30 秒，
   显式配置无界策略直接拒绝；可通过
   `directoryFreshnessOptions(new RpcDirectoryFreshnessOptions(Duration.ofSeconds(...)))`
   调整。缓存的 `ApplicationServiceResolver.maxStale` 也是有限预算；网络异常
-  与健康空目录必须区分，不得因缓存错误而发布非法空快照。
+  与健康空目录必须区分，不得因缓存错误而发布非法空快照。TLS、认证、授权或完整性拒绝
+  使用类型化安全失败，不能转换成普通网络不可用后继续发送旧候选。
 - `OtryxRpcServer.Builder.applicationMembership(membership)` 选择新 Provider
   发布路径。必须向 Client/Server 传入同一个应用生命周期实例才能正确得到 BOTH，
   且注册中心、Manifest/Mapping 后端需是同一控制面部署域。
@@ -385,7 +390,9 @@ Starter 要求自定义扩展实现应用级成员与元数据 SPI，并严格�
 
 Starter 默认依赖仍仅为 AutoConfiguration、Core/Memory、JDK Proxy、Fory、Vert.x；外部 Registry SDK 按需加入。配置与实现入口详见 [Starter](../reference/starter.md)。
 
-### 13.4 迁移矩阵与剩余验收
+当前安全预检要求每个入口显式选择 Profile，实际 Codec/Method Codec、Transport Client/Server 和 Coordinator/Resolver 均提供能力描述。网络 Profile 的默认 Fory 要求严格 allowlist，自定义 Codec 使用同等有限契约检查，不靠实现类名取得许可。NETWORK 且 server.enabled=true 时缺少 RpcAuthorizer 会在工厂/运行时创建前失败；BOTH 必须先完成两端 validate，再启动任一角色。
+
+### 13.4 迁移矩阵与每次变更的验收
 
 滚动检查要求两个 checkout 的 Starter 工厂、Consumer 发现和 Provider 成员装配全部为应用级。未知、历史接口模式、双模式或不一致装配直接失败；应用级 N/N、N+1/N、N/N+1、N+1/N+1 和回滚五组必须全部执行。旧基线不能触发缩减矩阵，参见[迁移指南](../migration.md)。
 
@@ -395,7 +402,7 @@ Starter 默认依赖仍仅为 AutoConfiguration、Core/Memory、JDK Proxy、Fory
 ./mvnw -B -ntp -pl otryx-spring-boot/otryx-spring-boot-autoconfigure -am test
 ```
 
-此命令、源码中的测试和矩阵选择都不是某个新提交已经通过的声明；每次变更须核验准确 PR Head 的真实执行结果，合并后再核对 main CI。#139 同时要求仓库清理、共享契约和四真实后端纵向门禁，不能沿用历史验收结果。
+此命令、源码中的测试和矩阵选择都不是某个新提交已经通过的声明；每次变更须核验准确 PR Head 的真实执行结果，合并后再核对 main CI。#139 的仓库清理、共享契约和四真实后端纵向门禁已随 PR #160 完成；#140 需要自己的安全验证记录。
 
 ## 14. V2-11：应用级 Quickstart 与独立进程证据（#138）
 
@@ -415,20 +422,71 @@ JSON 白名单包含指定应用成员的 instanceId、role、真实可选 Endpo
 | 双进程 | 独立 Provider/Consumer JVM；Provider 停止后 Consumer 成员仍在且无可路由 Provider；同一 Consumer 在恢复后重新调用成功 |
 | 三进程链 | A 为 Consumer-only，B 为一个 BOTH 成员，C 为 Provider；5 秒上游 Deadline 不被 B 的 10 秒本地配置扩展，Metadata 随调用传播 |
 | 双 revision | 同一 JAR、ApplicationName、ServiceKey version/group；实际导出 `{Greeting}` 与 `{Greeting, Details}` 得到不同 Manifest revision，验证共存、升级、回滚与 Provider 全停后的 Consumer-only 状态 |
-| mTLS | 同 CA 的两张客户端叶子证书均受信；仅允许指纹可调用 Greeting hello，其他指纹与 Details 方法收到精确授权拒绝；切回允许客户端后成功 |
+| mTLS（当前 #140 路径） | 自管 Etcd TLS/RBAC、独立 RPC/Registry CA、完整应用证书绑定、轮换证书保持同一应用、有限 Greeting hello 许可、Details 拒绝、启动前缺策略拒绝及只读观察权限 |
 
 Details 不是标签模拟：新增 `GreetingDetailsService.details(GreetingRequest)` 契约，Provider 由 `otryx.rpc.quickstart.details-enabled=true` 条件装配真实 Bean，返回 `GreetingReply("DETAILS_OK")`。相同服务的 version/group 保持 `1.0.0`/`default`；revision 变化来自真实导出集合。这一场景验证当前应用级路径内的变化，不扩大为历史注册代际的混合互通承诺。
 
-Quickstart 的 `mtls` Provider 示例授权器同时校验 Transport 已验证的叶子证书 DER SHA-256、完整 ServiceKey 和 MethodId。`otryx.rpc.quickstart.mtls.allowed-client-sha256` 要求恰好 64 位小写 hex，缺失或非法即启动失败。CN/SAN 和 Registry attributes 不提供业务授权证据。Consumer 只接受精确 `BAD_REQUEST` / `RPC authorization denied` 作为预期拒绝，TLS 认证失败或连接失败不算通过；通用 Starter 的默认拒绝策略不变。
+当前 `mtls` Profile 把证书指纹用于 Transport 的完整应用绑定，业务策略使用 `allowed-consumer.namespace`、`allowed-consumer.application-name` 与 `policy-valid-until`。同一应用的轮换证书不改变方法授权对象；示例按完整来源 ApplicationKey、Greeting ServiceKey 和 hello MethodId 返回有限 `RpcAuthorizationDecision`。CN/SAN、请求 Metadata 和 Registry attributes 不能替代应用身份。Consumer 分别核对类型化认证 reason 与精确 `BAD_REQUEST` / `RPC authorization denied`，普通连接错误不能算作相同结果。通用 Starter 和 Core 在网络 Provider 缺少显式授权器时拒绝启动。
 
 ### 14.3 验证入口与剩余边界
 
-在 JDK 21、已构建 JAR、Bash、Python 3、GNU `timeout`、OpenSSL 和运行中的本地 Nacos 环境下执行完整示例：
+在 Linux 上准备 JDK 21、已构建 JAR、Bash、Python 3、GNU `timeout`、OpenSSL、Etcd 3.5.21 可执行文件以及默认开发场景所需的本地 Nacos，再执行完整示例。Linux 是安全自动验收的前置条件：
 
 ```bash
-NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
+ETCD_BINARY=/absolute/path/to/etcd \
+  NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
 ```
 
-入口依次运行 Memory、process、chain、revision、mTLS，失败即停止。Nacos 场景在新隔离 group 中初始化分片，再启动应用。Etcd/Consul/Eureka 的 process、chain、revision 使用相同脚本与独立 namespace，Eureka 显式使用真实 Consul metadata；参数和 CI 矩阵见[应用级注册验收](../reference/application-registry-acceptance.md)。四个 Nacos 场景的证据保存在 `target/quickstart-e2e/<scenario>.<随机后缀>/` 的受限 JSON 与 `summary.log`；Memory 标记在控制台输出，临时私钥不进入证据。可用 `OTRYX_QUICKSTART_EVIDENCE_DIR` 覆盖目录。细化入口为 `run_quickstart_revision_e2e.sh` 和 `run_quickstart_mtls_e2e.sh`，已有 Memory/process/chain 入口保持可用。
+入口依次运行 Memory、process、chain、revision、mTLS，失败即停止。默认 process/chain/revision 在各自隔离 Nacos group 中初始化分片再启动应用；选择 Etcd/Consul/Eureka 时复用相同脚本与独立 namespace，Eureka 显式使用真实 Consul metadata。mTLS 独立管理只监听 loopback 的受保护 Etcd，分开 RPC/Registry CA 与管理、Provider、Consumer、观察者凭据。受限 JSON 和 `summary.log` 保存在 `target/quickstart-e2e/<scenario>.<随机后缀>/`，Memory 标记在控制台，临时私钥与凭据不进入证据。可用 `OTRYX_QUICKSTART_EVIDENCE_DIR` 覆盖目录。参数见[应用级注册验收](../reference/application-registry-acceptance.md)与 [Quickstart](../../otryx-quickstart/README.md)。
 
-测试用例、脚本和教程描述的是验收契约；实际完成结论须绑定对应提交的执行日志、准确 PR Head 与合并后 main CI。短时本地或共享 CI 验收不代表 10k soak、生产容量、安全部署全流程或正式发布。#139 的全仓清理、共享后端契约、真实 JVM 与准确 Head CI 均通过后才可宣布该工作包验收完成。
+测试用例、脚本和教程描述的是验收契约；实际完成结论须绑定对应提交的执行日志、准确 PR Head 与合并后 main CI。#139 已完成其验收，#140 安全改造尚在实现验证。短时本地或共享 CI 验收不代表 10k soak、生产容量、安全部署全流程或正式发布。
+
+## 15. V2-12：应用级契约收口（#139，已完成）
+
+[#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139) 通过 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合入 main `783bf8115c9523e5667023678dafe659315b2b66`，对应 main 门禁已经核验。交付包含旧接口级注册路径与过渡 API/配置清理、共享后端契约、四真实后端 process/chain/revision、完整五组 rolling，以及相应故障与清理验证。
+
+ServiceKey 保留业务契约含义，ServiceInstance 保留本地候选职责，RegistrySubscription 仍负责关闭应用订阅。清理不意味着删除仍被 Eureka/Consul 使用的共享 HTTP 基础设施。后续提交继续执行完整门禁，不把这次合并结果复用为新代码通过证明。
+
+## 16. V2-13：应用身份与安全边界（#140，实现验证中）
+
+本节记录当前工作树已接入的安全契约。#140 尚未完成独立端到端与新提交门禁验收；它不改变 Wire v1，也不把 Codec 的估算图内存限制扩大解释为硬内存租约。
+
+### 16.1 显式意图与实际能力
+
+Spring 配置、Core Client/Server Builder 和 RegistryOptions 默认均为 `UNSPECIFIED`，必须显式选择 `TRUSTED_DEVELOPMENT` 或 `NETWORK_MTLS`。前者用于可信隔离开发，后者要求实际保护：
+
+| 边界 | 必需事实 |
+|---|---|
+| Transport | 实际双向 TLS、证书链校验、应用绑定、Peer 交付与身份期限；Client 另校验目标应用、hostname 并按目标隔离连接池 |
+| Codec / Method Codec | 显式允许的类型或已注册契约类型，声明类型检查、DTO 实例化前校验，以及有限载荷、深度和估算图内存上限 |
+| Registry | MEMBERSHIP、MANIFEST、MAPPING 每个实际来源均有明确保护；多来源不能互相覆盖 |
+| Provider / BOTH | 显式 RpcAuthorizer，缺失时启动前拒绝；全部已启用角色先通过实际 Builder 预检 |
+
+缺省 `UNKNOWN` descriptor 不能用于网络 Profile。Coordinator 从实际 Registrar、Manifest Repository 和 Mapping Repository 聚合来源；Eureka Mapping 同时保留元数据与成员健康两条链。只有经来源边界识别的框架 Memory 实现可使用 `LOCAL_PROCESS`，自定义 SPI 不能以同名字面声明获得豁免。
+
+Registry 安全参数使用有类型的 TLS 与凭据对象，实际 Factory 安装到客户端后才报告保护。Spring 的 `registry.security` 与 Eureka 独立 `registry.metadata-security` 不互相继承 CA/凭据；普通 providerOptions 只承载受支持的非敏感配置。当前 Etcd 使用明确 CA 与 USER_PASSWORD，Consul 使用 HTTPS 与 ACL_TOKEN，Eureka 成员使用 HTTPS 与 USER_PASSWORD 并另外保护元数据链；Nacos 在 SDK 创建前拒绝 NETWORK/TLS 意图。
+
+### 16.2 证书绑定、有限许可与响应证明
+
+| 类型或接口 | 当前职责 |
+|---|---|
+| `RpcCertificateBinding` | 叶证书 DER SHA-256 → 完整 ApplicationKey + 有限 validUntil |
+| `RpcPeerIdentity` | 来自真实 TLS 会话的已验证身份，证书与绑定期限共同生效 |
+| `RpcTarget` | ApplicationKey + RpcEndpoint，供目标校验和连接池隔离 |
+| `RpcTransportResponse` | Frame 与同一连接验证得到的 Peer；Core 解码前和结果交付前重新校验 |
+| `RpcAuthorizationContext` | 已验证 Peer、实际本端应用、预绑定 ServiceKey/MethodId 与最大许可期限，不含业务 Payload |
+| `RpcAuthorizationDecision` | `deny()` 或 `allowUntil(Instant)`，不存在无限期许可 |
+
+CN/SAN、请求 Metadata 和 Registry attributes 不能替代完整应用身份。策略许可取决于真实来源应用与目标方法，并受原请求预算、服务端最大许可期限和 Peer 剩余有效期约束。壁钟与单调时间同时复核，回拨不能延长身份或许可。
+
+授权策略体运行在独立有界工作池，超时先于策略调用安装。逻辑终态后帧预算先清理再发布结果；正在运行的工作槽位仍须等策略体退出和原始 Stage 实际完成，取消或中断不能冒充双终态。未运行的 owned 任务可以明确放弃。异步 DIRECT 恢复原请求执行器，许可在队列、解码及业务调用边界再次复核。
+
+### 16.3 本地验证代次与安全失败
+
+Resolver 成功提交的 `VerifiedProviderSnapshot` 携带私有 authority、epoch 与 route 凭据。公开四参构造仅保留业务值，不能生成受信候选。`isSnapshotUsable(ServiceMappingKey, String, VerifiedProviderSnapshot)` 是无网络 I/O 的本地 guard：未就绪、普通陈旧、已替换或关闭返回 false；安全拒绝抛类型化 `RegistrySecurityException`，null 候选也不能掩盖当前安全终态。
+
+Directory 原子保存候选及其端点投影。每次 attempt 发送前核对选中端点所属的同一候选；安全 epoch 检查先于“是否仍为当前快照”的判断，一个路由恢复后不能让其他路由持有的旧代次结果复活。Resolver 只维护当前安全代次、稳定原因与有界 Slots，不增加无限历史 Map。
+
+`RpcAuthenticationException` 与 `RegistrySecurityException` 在 attempt 内终结调用，不重试、不累计 Endpoint/熔断故障、不更新延迟 EWMA；已有 inflight 或探测额度正常归还，健康历史不重置。真实 TLS 材料代次变化使用 `SECURITY_CONTEXT_CHANGED`，遵循同一中性统计规则。普通 Registry 同步故障仍保留原有限 LKG 语义。
+
+源码入口：[安全预检](../../otryx-core/src/main/java/com/peachsoft/otryx/core/RpcSecurityChecks.java)、[授权工作所有权](../../otryx-core/src/main/java/com/peachsoft/otryx/core/RpcAuthorizationGate.java)、[ServiceDirectory](../../otryx-core/src/main/java/com/peachsoft/otryx/core/ServiceDirectory.java)、[Resolver](../../otryx-core/src/main/java/com/peachsoft/otryx/registry/ApplicationServiceResolver.java)。部署字段与当前边界见 [Starter](../reference/starter.md)、[安全指南](../security.md)；真实独立 Etcd 场景与只读观察见 [Quickstart](../../otryx-quickstart/README.md)。

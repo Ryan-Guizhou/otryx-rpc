@@ -1,13 +1,14 @@
 package com.peachsoft.otryx.registry.nacos;
 
-import com.alibaba.nacos.api.NacosFactory;
-import com.alibaba.nacos.api.config.ConfigService;
 import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Nacos V2 Config 分片的独占维护期初始化工具。
@@ -23,8 +24,10 @@ import java.util.concurrent.TimeUnit;
  */
 public final class NacosV2MetadataBootstrap {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(NacosV2MetadataBootstrap.class);
+
     private static final String OPTION_GROUP = "nacosGroup";
-    private static final int COMMAND_ARGUMENT_COUNT = 3;
+    private static final int COMMAND_ARGUMENT_COUNT = 4;
     private static final String VALID_GROUP = "[A-Za-z0-9._:-]{1,128}";
     private static final int VERIFY_ATTEMPTS = 16;
     private static final long VERIFY_DELAY_MILLIS = 250L;
@@ -39,7 +42,7 @@ public final class NacosV2MetadataBootstrap {
      * 不得嵌入 Spring 启动、EventLoop 或业务故障恢复回调。连接与验证失败直接
      * 终止命令；已有分片仍遵守 {@link #initialize(RegistryOptions)} 的保留规则。
      *
-     * @param args 依次为逗号分隔 endpoint、namespace、group，三项均须显式非空
+     * @param args 依次为 endpoint、namespace、group 和显式 TRUSTED_DEVELOPMENT
      * @throws IllegalArgumentException 参数缺失、目标为空或 endpoint 内嵌凭据时抛出
      * @throws IllegalStateException Nacos 初始化或已有分片验证失败时抛出
      */
@@ -50,7 +53,8 @@ public final class NacosV2MetadataBootstrap {
     /** 解析显式部署目标；验证阶段不创建 SDK Client，也不允许回退到默认目标。 */
     static RegistryOptions commandLineOptions(String[] args) {
         if (args == null || args.length != COMMAND_ARGUMENT_COUNT) {
-            throw new IllegalArgumentException("Nacos bootstrap requires endpoint, namespace and group");
+            throw new IllegalArgumentException(
+                    "Nacos bootstrap requires endpoint, namespace, group and TRUSTED_DEVELOPMENT");
         }
         for (String argument : args) {
             if (argument == null || argument.isBlank()) {
@@ -61,7 +65,13 @@ public final class NacosV2MetadataBootstrap {
         if (!group.matches(VALID_GROUP)) {
             throw new IllegalArgumentException("Invalid Nacos bootstrap group");
         }
-        RegistryOptions options = RegistryOptions.fromCsv(args[0], args[1], Map.of(OPTION_GROUP, group));
+        if (!"TRUSTED_DEVELOPMENT".equals(args[3])) {
+            throw new com.peachsoft.otryx.registry.RegistrySecurityException(
+                    com.peachsoft.otryx.registry.RegistrySecurityFailure.UNSUPPORTED_PROTECTION);
+        }
+        RegistryOptions parsed = RegistryOptions.fromCsv(args[0], args[1], Map.of(OPTION_GROUP, group));
+        RegistryOptions options = RegistryOptions.trustedDevelopment(
+                parsed.endpoints(), parsed.namespace(), parsed.providerOptions());
         if (options.endpoints().isEmpty()) {
             throw new IllegalArgumentException("Nacos bootstrap requires at least one explicit endpoint");
         }
@@ -76,6 +86,7 @@ public final class NacosV2MetadataBootstrap {
      */
     public static void initialize(RegistryOptions options) {
         Objects.requireNonNull(options, "options");
+        NacosApplicationRegistryFactory.requireSecurity(options);
         List<String> endpoints = options.endpoints().isEmpty()
                 ? List.of(NacosApplicationRegistryFactory.DEFAULT_ENDPOINT) : options.endpoints();
         for (String endpoint : endpoints) {
@@ -88,41 +99,75 @@ public final class NacosV2MetadataBootstrap {
         String group = options.providerOption(OPTION_GROUP, NacosApplicationRegistryFactory.DEFAULT_GROUP);
         Properties properties = NacosApplicationRegistryFactory.clientProperties(options, endpoints, namespace);
         try {
-            ConfigService config = NacosFactory.createConfigService(properties);
-            try {
-                NacosV2ConfigStore store = new NacosV2ConfigStore(config, group);
-                for (int shard = 0; shard < NacosV2Names.MAPPING_SHARDS; shard++) {
-                    String dataId = NacosV2Names.shardId(shard);
-                    NacosV2ConfigStore.Entry existing = store.read(dataId);
-                    if (existing.content() == null) {
-                        String empty = NacosV2MappingCodec.encode(Map.of());
-                        if (!config.publishConfig(dataId, group, empty)) {
-                            throw new IllegalStateException("Nacos Mapping bootstrap could not publish a shard");
-                        }
-                    }
-                    // Nacos Config publish ACK and query visibility can be briefly out of phase.
-                    // Never turn a missing CAS MD5 into a computed or locally cached substitute.
-                    for (int attempt = 0; attempt < VERIFY_ATTEMPTS
-                            && (existing.content() == null || existing.md5() == null); attempt++) {
-                        TimeUnit.MILLISECONDS.sleep(VERIFY_DELAY_MILLIS);
-                        existing = store.read(dataId);
-                    }
-                    if (existing.content() == null || existing.md5() == null) {
-                        throw new IllegalStateException(
-                                "Nacos bootstrap has no authoritative Config state: contentPresent="
-                                        + (existing.content() != null)
-                                        + ", md5Present=" + (existing.md5() != null));
-                    }
-                    NacosV2MappingCodec.decode(existing.content(), namespace, shard);
-                }
-            } finally {
-                config.shutDown();
-            }
+            initializeOwnedConfig(new NacosConfigClient(properties), namespace, group);
         } catch (Exception error) {
             if (error instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            throw new IllegalStateException("Nacos Mapping bootstrap failed; keep application writes disabled", error);
+            Throwable safe = NacosFailures.normalize(error);
+            if (safe instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new IllegalStateException("Nacos Mapping bootstrap failed; keep application writes disabled");
+        }
+    }
+
+    /**
+     * 执行完整分片初始化并接管配置客户端关闭，包内测试沿同一实际路径注入 SDK 边界。
+     *
+     * <p>正常初始化后的关闭失败仍向调用方报告；初始化已有失败时保留主要异常，
+     * 次要关闭错误仅按类型记录，不覆盖认证、权限或元数据完整性拒绝。
+     *
+     * @param config 已创建的非 null 配置客户端，方法接管其关闭责任
+     * @param namespace 已确定的应用命名空间
+     * @param group 已确定的 Config 组
+     * @throws Exception 初始化或正常完成后的 SDK 关闭失败时抛出
+     */
+    static void initializeOwnedConfig(NacosConfigOperations config, String namespace, String group) throws Exception {
+        Objects.requireNonNull(config, "config");
+        boolean initialized = false;
+        try {
+            NacosV2ConfigStore store = new NacosV2ConfigStore(
+                    config, group, RegistrySecurityDescriptor.unknown());
+            for (int shard = 0; shard < NacosV2Names.MAPPING_SHARDS; shard++) {
+                String dataId = NacosV2Names.shardId(shard);
+                NacosV2ConfigStore.Entry existing = store.read(dataId);
+                if (existing.content() == null) {
+                    String empty = NacosV2MappingCodec.encode(Map.of());
+                    if (!config.publishImmutable(dataId, group, empty)) {
+                        throw new IllegalStateException("Nacos Mapping bootstrap could not publish a shard");
+                    }
+                }
+                // Nacos Config publish ACK and query visibility can be briefly out of phase.
+                // Never turn a missing CAS MD5 into a computed or locally cached substitute.
+                for (int attempt = 0; attempt < VERIFY_ATTEMPTS
+                        && (existing.content() == null || existing.md5() == null); attempt++) {
+                    TimeUnit.MILLISECONDS.sleep(VERIFY_DELAY_MILLIS);
+                    existing = store.read(dataId);
+                }
+                if (existing.content() == null || existing.md5() == null) {
+                    throw new IllegalStateException(
+                            "Nacos bootstrap has no authoritative Config state: contentPresent="
+                                    + (existing.content() != null)
+                                    + ", md5Present=" + (existing.md5() != null));
+                }
+                NacosV2MappingCodec.decode(existing.content(), namespace, shard);
+            }
+            initialized = true;
+        } finally {
+            if (initialized) {
+                config.shutDown();
+            } else {
+                try {
+                    config.shutDown();
+                } catch (Throwable cleanupFailure) {
+                    if (cleanupFailure instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                    }
+                    LOGGER.warn("Nacos bootstrap secondary cleanup failed: errorType={}",
+                            cleanupFailure.getClass().getSimpleName());
+                }
+            }
         }
     }
 }

@@ -4,6 +4,9 @@ import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationManifest;
 import com.peachsoft.otryx.api.ApplicationManifestCodec;
 import com.peachsoft.otryx.registry.ApplicationManifestRepository;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import io.etcd.jetcd.ByteSequence;
 import io.etcd.jetcd.Client;
 import io.etcd.jetcd.op.Cmp;
@@ -29,12 +32,24 @@ import java.util.concurrent.CompletionStage;
  */
 public final class EtcdApplicationManifestRepository implements ApplicationManifestRepository {
 
+    private final RegistrySecurityDescriptor descriptor;
     private final Client client;
     private final EtcdV2Paths paths;
 
     EtcdApplicationManifestRepository(Client client, EtcdV2Paths paths) {
+        this(client, paths, RegistrySecurityDescriptor.unknown());
+    }
+
+    EtcdApplicationManifestRepository(Client client, EtcdV2Paths paths, RegistrySecurityDescriptor descriptor) {
+        this.descriptor = Objects.requireNonNull(descriptor, "descriptor");
         this.client = Objects.requireNonNull(client, "client");
         this.paths = Objects.requireNonNull(paths, "paths");
+    }
+
+    /** 返回当前实际 Etcd 客户端的通道来源。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return descriptor;
     }
 
     /** 发布以应用身份和完整 SHA256 修订号定位的不可变清单。 */
@@ -46,7 +61,7 @@ public final class EtcdApplicationManifestRepository implements ApplicationManif
         ByteSequence key = bytes(path);
         byte[] canonical = ApplicationManifestCodec.encode(manifest);
         Cmp absent = new Cmp(key, Cmp.Op.EQUAL, CmpTarget.version(0));
-        return client.getKVClient().txn()
+        return EtcdFailures.safe(client.getKVClient().txn()
                 .If(absent)
                 .Then(Op.put(key, ByteSequence.from(canonical), PutOption.DEFAULT))
                 .commit()
@@ -60,11 +75,11 @@ public final class EtcdApplicationManifestRepository implements ApplicationManif
                         }
                         byte[] recorded = existing.getKvs().getFirst().getValue().getBytes();
                         if (!Arrays.equals(recorded, canonical)) {
-                            throw new IllegalStateException("Etcd immutable Manifest revision collision");
+                            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
                         }
                         return null;
                     });
-                });
+                }));
     }
 
     /** 按 Revision 校验完整 Manifest 字节，错误和未命中有严格不同的终态。 */
@@ -74,15 +89,26 @@ public final class EtcdApplicationManifestRepository implements ApplicationManif
         Objects.requireNonNull(application, "application");
         ApplicationManifest.requireRevision(revision);
         paths.requireNamespace(application);
-        return client.getKVClient().get(bytes(paths.manifestKey(application, revision)))
-                .thenApply(response -> {
-                    if (response.getKvs().isEmpty()) {
-                        return Optional.empty();
-                    }
-                    ApplicationManifest manifest = ApplicationManifestCodec.decode(
-                            response.getKvs().getFirst().getValue().getBytes());
-                    return Optional.of(manifest.requireReference(application, revision));
-                });
+        ByteSequence requested = bytes(paths.manifestKey(application, revision));
+        return EtcdFailures.safe(client.getKVClient().get(requested).thenApply(response -> {
+            if (response.getKvs().isEmpty()) {
+                return Optional.empty();
+            }
+            if (response.getKvs().size() != 1 || response.getCount() != 1
+                    || !response.getKvs().getFirst().getKey().equals(requested)) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
+            }
+            byte[] payload = response.getKvs().getFirst().getValue().getBytes();
+            if (payload.length > ApplicationManifest.MAX_CANONICAL_BYTES) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
+            }
+            ApplicationManifest manifest = ApplicationManifestCodec.decode(payload);
+            try {
+                return Optional.of(manifest.requireReference(application, revision));
+            } catch (IllegalArgumentException invalidReference) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
+            }
+        }));
     }
 
     private static ByteSequence bytes(String key) {

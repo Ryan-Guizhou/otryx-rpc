@@ -30,4 +30,4 @@ exec timeout --kill-after="${BOOTSTRAP_KILL_AFTER_SECONDS}s" "${BOOTSTRAP_TIMEOU
   -Dloader.main=com.peachsoft.otryx.registry.nacos.NacosV2MetadataBootstrap \
   -cp "$PROVIDER_JAR" \
   org.springframework.boot.loader.launch.PropertiesLauncher \
-  "$NACOS_ENDPOINT" "$NACOS_NAMESPACE" "$NACOS_GROUP"
+  "$NACOS_ENDPOINT" "$NACOS_NAMESPACE" "$NACOS_GROUP" TRUSTED_DEVELOPMENT

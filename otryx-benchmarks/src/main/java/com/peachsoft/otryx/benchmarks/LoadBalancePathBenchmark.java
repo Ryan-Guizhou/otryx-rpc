@@ -2,6 +2,7 @@ package com.peachsoft.otryx.benchmarks;
 
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.ServiceInstance;
+import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.loadbalance.LoadBalanceContext;
 import com.peachsoft.otryx.loadbalance.LoadBalanceMetrics;
@@ -50,6 +51,7 @@ public class LoadBalancePathBenchmark {
         for (int index = 0; index < instances.length; index++) {
             instances[index] = new ServiceInstance(
                     "node-" + index,
+                    new ApplicationKey("benchmark", "load-balancer"),
                     key,
                     new RpcEndpoint(
                             "127.0.0.1",

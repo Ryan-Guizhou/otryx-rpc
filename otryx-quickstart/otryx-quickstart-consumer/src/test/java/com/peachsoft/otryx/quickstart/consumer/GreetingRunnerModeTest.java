@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.peachsoft.otryx.api.RpcAuthenticationException;
 import com.peachsoft.otryx.api.RpcRemoteException;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcTimeoutException;
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -292,6 +294,82 @@ class GreetingRunnerModeTest {
         } finally {
             Thread.interrupted();
         }
+    }
+
+    @ParameterizedTest
+    @EnumSource(RpcAuthenticationException.Reason.class)
+    void identityNegativeRequiresTheExactLocalTypedReason(
+            RpcAuthenticationException.Reason reason, CapturedOutput output) {
+        GreetingRunner runner = runner(request -> {
+            throw new CompletionException(new RpcAuthenticationException(reason));
+        }, unusedDetails());
+        ReflectionTestUtils.setField(runner, "expectAuthenticationFailure", reason.name());
+
+        run(runner);
+
+        assertThat(output).contains("RPC authentication failure verified: reason=" + reason.name())
+                .doesNotContain(DENIAL_MARKER, GREETING_MARKER, DETAILS_MARKER);
+    }
+
+    @Test
+    void anotherLocalIdentityReasonCannotSatisfyTheExpectedOutcome(CapturedOutput output) {
+        RpcAuthenticationException failure =
+                new RpcAuthenticationException(RpcAuthenticationException.Reason.IDENTITY_UNBOUND);
+        GreetingRunner runner = runner(request -> {
+            throw failure;
+        }, unusedDetails());
+        ReflectionTestUtils.setField(runner, "expectAuthenticationFailure", "APPLICATION_MISMATCH");
+
+        assertSame(failure, assertThrows(RpcAuthenticationException.class, () -> run(runner)));
+
+        assertThat(output).doesNotContain("RPC authentication failure verified:", DENIAL_MARKER, GREETING_MARKER);
+    }
+
+    @Test
+    void remoteStatusOrGenericTlsFailureCannotSatisfyTheLocalIdentityOutcome(CapturedOutput output) {
+        for (RuntimeException failure : new RuntimeException[] {authorizationDenied(),
+                new CompletionException(new SSLHandshakeException("Certificate verification failed"))}) {
+            GreetingRunner runner = runner(request -> {
+                throw failure;
+            }, unusedDetails());
+            ReflectionTestUtils.setField(runner, "expectAuthenticationFailure", "CERTIFICATE_REJECTED");
+            assertSame(failure, assertThrows(RuntimeException.class, () -> run(runner)));
+        }
+        assertThat(output).doesNotContain("RPC authentication failure verified:", DENIAL_MARKER, GREETING_MARKER);
+    }
+
+    @Test
+    void successfulRpcCannotSatisfyAnIdentityNegative(CapturedOutput output) {
+        GreetingRunner runner = runner(request -> new GreetingReply("Hello"), unusedDetails());
+        ReflectionTestUtils.setField(runner, "expectAuthenticationFailure", "IDENTITY_EXPIRED");
+
+        assertThrows(IllegalStateException.class, () -> run(runner));
+
+        assertThat(output).doesNotContain("RPC authentication failure verified:", GREETING_MARKER);
+    }
+
+    @Test
+    void identityAndAuthorizationOutcomesAreMutuallyExclusiveBeforeAnyRpc() {
+        GreetingRunner runner = expectedDenialRunner(unusedGreeting(), unusedDetails(), false);
+        ReflectionTestUtils.setField(runner, "expectAuthenticationFailure", "IDENTITY_EXPIRED");
+        assertThrows(IllegalArgumentException.class, () -> run(runner));
+    }
+
+    @Test
+    void identityNegativeCannotEnableUnboundedRepeat() {
+        GreetingRunner runner = runner(unusedGreeting(), unusedDetails());
+        ReflectionTestUtils.setField(runner, "expectAuthenticationFailure", "IDENTITY_EXPIRED");
+        ReflectionTestUtils.setField(runner, "repeatIntervalMillis", 1L);
+        assertThrows(IllegalArgumentException.class, () -> run(runner));
+    }
+
+    @Test
+    void unknownIdentityReasonFailsWithoutEchoingItsValue() {
+        GreetingRunner runner = runner(unusedGreeting(), unusedDetails());
+        ReflectionTestUtils.setField(runner, "expectAuthenticationFailure", "DO_NOT_LOG_TEST_CREDENTIAL");
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class, () -> run(runner));
+        assertThat(failure).hasMessageContaining("expect-authentication-failure")
+                .hasMessageNotContaining("DO_NOT_LOG_TEST_CREDENTIAL").hasNoCause();
     }
 
     private static Stream<RuntimeException> localTimeoutFailures() {

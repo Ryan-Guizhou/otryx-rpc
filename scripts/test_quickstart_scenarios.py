@@ -292,10 +292,23 @@ class ShellScenarioTest(unittest.TestCase):
         scripts = self.root / "scripts"
         scripts.mkdir()
         for name in ("quickstart_e2e_common.sh", "bootstrap_quickstart_nacos.sh", "observe_quickstart_nacos.sh",
-                     "observe_quickstart_registry.sh", "assert_quickstart_snapshot.py", "run_quickstart_revision_e2e.sh", "run_quickstart_mtls_e2e.sh",
+                     "observe_quickstart_registry.sh", "assert_quickstart_snapshot.py",
+                     "run_quickstart_revision_e2e.sh", "run_quickstart_mtls_e2e.sh",
                      "run_quickstart_process_e2e.sh", "run_three_process_deadline_e2e.sh", "run_quickstart_e2e.sh",
                      "run_quickstart_memory.sh"):
             shutil.copy2(ROOT / "scripts" / name, scripts / name)
+        # This shell-only fixture records the real wrapper's environment and delegation.
+        # The Python security runner has separate failure-contract tests and real E2E gates.
+        (scripts / "run_quickstart_mtls_e2e.py").write_text(textwrap.dedent('''\
+            import json
+            import os
+            from pathlib import Path
+            event = {"kind": "security-scenario", "environment": {key: os.environ.get(key) for key in
+                ("OTRYX_RPC_E2E_RESTART_NACOS", "OTRYX_RPC_E2E_MAX_STALENESS", "OTRYX_RPC_CLIENT_TIMEOUT")}}
+            with Path(os.environ["FIXTURE_EVENTS"]).open("a", encoding="utf-8") as output:
+                output.write(json.dumps(event) + "\\n")
+            print("Security runner delegation fixture completed")
+            '''), encoding="utf-8")
         common = scripts / "quickstart_e2e_common.sh"
         common.write_text(common.read_text(encoding="utf-8").replace("QUICKSTART_SNAPSHOT_SECONDS=120",
                           "QUICKSTART_SNAPSHOT_SECONDS=2").replace("QUICKSTART_STOP_SECONDS=35",
@@ -495,7 +508,8 @@ class ShellScenarioTest(unittest.TestCase):
         self.assertEqual([item["state"]["instance"] for item in providers], ["baseline", "extended", "baseline"])
         self.assertEqual([set(item["state"]["exports"]) for item in providers],
                          [{GREETING}, {GREETING, DETAILS}, {GREETING}])
-        endpoint, namespace, group = events[0]["args"]
+        endpoint, namespace, group, profile = events[0]["args"]
+        self.assertEqual(profile, "TRUSTED_DEVELOPMENT")
         snapshots = [event for event in events if event["kind"] == "snapshot"]
         for event in snapshots:
             self.assertEqual(event["args"][:5], ["nacos", endpoint, namespace, group, "-"])
@@ -560,8 +574,7 @@ class ShellScenarioTest(unittest.TestCase):
                      if event["state"]["app"] == "otryx-quickstart-process-consumer"]
         self.assertEqual(len(consumers), 1)
         self.assertIn("--otryx.rpc.client.directory-max-staleness=7s", consumers[0]["args"])
-        self.assertTrue(any(event["kind"] == "snapshot" and "/mtls." in event["args"][5]
-                            and "/service-denied-" in event["args"][5] for event in events))
+        self.assertEqual(sum(event["kind"] == "security-scenario" for event in events), 1)
 
     def test_chain_observes_three_distinct_application_roles(self) -> None:
         result = self.run_script("run_three_process_deadline_e2e.sh")
@@ -569,30 +582,6 @@ class ShellScenarioTest(unittest.TestCase):
         applications = [event["state"] for event in self.events() if event["kind"] == "application"]
         self.assertEqual({app["role"] for app in applications}, {"CONSUMER", "PROVIDER", "BOTH"})
         self.assertEqual(len({app["app"] for app in applications}), 3)
-
-    def test_mtls_runner_checks_identity_recovery_and_service_denial_without_key_artifacts(self) -> None:
-        result = self.run_script("run_quickstart_mtls_e2e.sh")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        consumers = [event for event in self.events() if event["kind"] == "application"
-                     and event["state"]["role"] == "CONSUMER"]
-        self.assertEqual(len(consumers), 4)
-        self.assertEqual([Path(item["environment"]["OTRYX_QUICKSTART_TLS_KEY"]).name for item in consumers],
-                         ["allowed.key", "denied.key", "allowed.key", "allowed.key"])
-        for index, item in enumerate(consumers):
-            self.assertIn("--otryx.rpc.quickstart.expect-authorization-denied=" +
-                          ("true" if index in (1, 3) else "false"), item["args"])
-            self.assertFalse(Path(item["environment"]["OTRYX_QUICKSTART_TLS_KEY"]).exists())
-        self.assertIn("--otryx.rpc.quickstart.use-details=true", consumers[-1]["args"])
-        for path in (self.root / "target" / "quickstart-e2e").rglob("*"):
-            if path.is_file():
-                self.assertTrue(path.name == "summary.log" or path.suffix == ".json", path)
-                self.assertNotIn("PRIVATE KEY", path.read_text())
-
-    def test_tls_error_does_not_count_as_authorization_denial(self) -> None:
-        result = self.run_script("run_quickstart_mtls_e2e.sh", {"FIXTURE_TLS_FAILURE": "true"})
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("mTLS verified identity and service authorization: PASS", result.stdout)
-        self.assertNotIn("stage=identity-denied marker=", result.stdout)
 
     def test_observer_refuses_existing_evidence_before_launch(self) -> None:
         output = self.root / "existing.json"

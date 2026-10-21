@@ -16,7 +16,6 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -138,7 +137,8 @@ final class NacosV2MappingCodec {
                     throw new IllegalArgumentException("Duplicate or unordered Nacos mapped services");
                 }
                 if (NacosV2Names.shard(app, instanceId) != shard) {
-                    throw new IllegalArgumentException("Nacos mapping owner stored in the wrong shard");
+                    throw new com.peachsoft.otryx.registry.RegistrySecurityException(
+                            com.peachsoft.otryx.registry.RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
                 }
                 OwnerState record = new OwnerState(owner, token, unique);
                 if (decoded.putIfAbsent(identifier(owner), record) != null) {

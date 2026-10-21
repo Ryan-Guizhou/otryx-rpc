@@ -17,6 +17,19 @@ SERVICES = {GREETING, RELAY, DETAILS}
 REVISION = re.compile(r"sha256:[0-9a-f]{64}")
 FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 
+# SecurityScenario.client snapshots before stopping its live Consumer. Startup
+# rejections snapshot after exit, and the final observer runs after all clients stop.
+MTLS_CONSUMER_PRESENT = frozenset({
+    "E01-allowed-initial", "E02-rotated-consumer", "E03-unbound-provider",
+    "E05-remote-application-mismatch", "E06-remote-namespace-mismatch", "E07-wrong-rpc-ca",
+    "E10-expired-policy", "E11-details-denied", "E13-allowed-repeat",
+})
+MTLS_CONSUMER_ABSENT = frozenset({
+    "E04-local-application-mismatch", "E08-expired-local-binding", "E09-expired-certificate",
+    "E12-missing-authorizer-provider", "E12-missing-authorizer-both", "E14-wrong-registry-ca",
+    "E14-wrong-registry-credentials", "E15-observer-read-only",
+})
+
 
 def require(condition: bool, message: str) -> None:
     """Reject incomplete, contradictory or unexpected evidence with a stable message."""
@@ -230,10 +243,11 @@ def assert_snapshot(scenario: str, stage: str, data: dict, previous: dict | None
     elif scenario == "mtls":
         provider = ("otryx-quickstart-mtls-provider", "provider-main")
         consumer = ("otryx-quickstart-mtls-consumer", "consumer-main")
-        require(stage in {"allowed-initial", "identity-denied", "allowed-repeat", "service-denied"},
-                "Unknown mTLS stage")
-        expected = {provider: ("PROVIDER", 19143, {GREETING, DETAILS}),
-                    consumer: ("CONSUMER", None, set())}
+        require(stage in MTLS_CONSUMER_PRESENT | MTLS_CONSUMER_ABSENT, "Unknown mTLS stage")
+        # The original Provider stays alive while E12 rejects a second startup.
+        expected = {provider: ("PROVIDER", 19143, {GREETING, DETAILS})}
+        if stage in MTLS_CONSUMER_PRESENT:
+            expected[consumer] = ("CONSUMER", None, set())
         routes = {GREETING: {provider}, DETAILS: {provider}}
         names = {provider[0], consumer[0]}
     else:

@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.spring.autoconfigure;
 
+import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.core.ApplicationMembershipCoordinator;
 import com.peachsoft.otryx.registry.ApplicationMetadataBackend;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
@@ -12,11 +13,14 @@ import com.peachsoft.otryx.spring.runtime.OtryxRpcApplicationIdentity;
 import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.core.env.MapPropertySource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -89,6 +93,129 @@ public class OtryxRpcApplicationConfigurationTest {
                 });
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void defaultIdentityMustBeValidatedBeforeRegistrySupplier(boolean blank) {
+        AtomicInteger registryCreates = new AtomicInteger();
+        SecurityTestTransportFactory transport = new SecurityTestTransportFactory();
+        SecurityTestTransportFactory.networkRunner(defaultIdentityRunner(blank), "orders", transport)
+                .withBean(ApplicationRegistry.class, () -> {
+                    registryCreates.incrementAndGet();
+                    return new MemoryApplicationRegistry();
+                })
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasStackTraceContaining(
+                            "Configure spring.application.name or otryx.rpc.registry.application-name");
+                    assertThat(registryCreates).hasValue(0);
+                    assertThat(transport.clientCreates).hasValue(0);
+                    assertThat(transport.serverCreates).hasValue(0);
+                });
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void defaultIdentityMustBeValidatedBeforeRegistryFactory(boolean blank) {
+        defaultIdentityRunner(blank).withPropertyValues("otryx.rpc.registry.type=unavailable-before-identity")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    // Reaching SPI lookup would report the unavailable Registry instead of the missing identity.
+                    assertThat(context.getStartupFailure()).hasStackTraceContaining(
+                            "Configure spring.application.name or otryx.rpc.registry.application-name");
+                });
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "application-name, applicationName contains invalid characters",
+            "namespace, namespace contains invalid characters",
+            "instance-id, Invalid instanceId"
+    })
+    void invalidDefaultIdentityMustBeValidatedBeforeRegistrySupplier(String field, String failureMessage) {
+        AtomicInteger registryCreates = new AtomicInteger();
+        SecurityTestTransportFactory transport = new SecurityTestTransportFactory();
+        SecurityTestTransportFactory.networkRunner(invalidDefaultIdentityRunner(field), "orders", transport)
+                .withBean(ApplicationRegistry.class, () -> {
+                    registryCreates.incrementAndGet();
+                    return new MemoryApplicationRegistry();
+                })
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasStackTraceContaining(failureMessage);
+                    assertThat(registryCreates).hasValue(0);
+                    assertThat(transport.clientCreates).hasValue(0);
+                    assertThat(transport.serverCreates).hasValue(0);
+                });
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "application-name, applicationName contains invalid characters",
+            "namespace, namespace contains invalid characters",
+            "instance-id, Invalid instanceId"
+    })
+    void invalidDefaultIdentityMustBeValidatedBeforeRegistryFactory(String field, String failureMessage) {
+        invalidDefaultIdentityRunner(field).withPropertyValues("otryx.rpc.registry.type=unavailable-before-identity")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasStackTraceContaining(failureMessage);
+                });
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "   "})
+    void blankApplicationOverrideMustKeepSpringNameFallback(String blank) {
+        AtomicInteger registryCreates = new AtomicInteger();
+        namedRunner().withInitializer(context -> context.getEnvironment().getPropertySources().addFirst(
+                        new MapPropertySource("blank-application-override",
+                                Map.of("otryx.rpc.registry.application-name", blank))))
+                .withBean(ApplicationRegistry.class, () -> {
+                    registryCreates.incrementAndGet();
+                    return new MemoryApplicationRegistry();
+                })
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(registryCreates).hasValue(1);
+                    assertThat(context.getBean(OtryxRpcApplicationIdentity.class).application())
+                            .isEqualTo(new ApplicationKey("default", "orders"));
+                });
+    }
+
+    @Test
+    void customLazyIdentityMustRemainUsableWithoutPreflightInstantiation() {
+        AtomicInteger registryCreates = new AtomicInteger();
+        AtomicInteger identityCreates = new AtomicInteger();
+        AtomicInteger unrelatedCreates = new AtomicInteger();
+        OtryxRpcApplicationIdentity identity = new OtryxRpcApplicationIdentity(
+                new ApplicationKey("default", "custom-orders"), "custom-node");
+        SecurityTestTransportFactory transport = new SecurityTestTransportFactory();
+        SecurityTestTransportFactory.networkRunner(runner, "custom-orders", transport)
+                .withBean(ApplicationRegistry.class, () -> {
+                    // The first resource supplier observes whether preflight resolved a user-owned lazy Bean.
+                    assertThat(identityCreates).hasValue(0);
+                    assertThat(unrelatedCreates).hasValue(0);
+                    registryCreates.incrementAndGet();
+                    return new MemoryApplicationRegistry();
+                })
+                .withBean("peachRpcApplicationIdentity", OtryxRpcApplicationIdentity.class, () -> {
+                    identityCreates.incrementAndGet();
+                    return identity;
+                }, definition -> definition.setLazyInit(true))
+                .withBean("unrelatedLazyResource", Runnable.class, () -> {
+                    unrelatedCreates.incrementAndGet();
+                    return () -> { };
+                }, definition -> definition.setLazyInit(true))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(OtryxRpcApplicationIdentity.class)).isSameAs(identity);
+                    assertThat(registryCreates).hasValue(1);
+                    assertThat(identityCreates).hasValue(1);
+                    assertThat(unrelatedCreates).hasValue(0);
+                    assertThat(transport.starts).hasValue(0);
+                    assertThat(transport.requests).hasValue(0);
+                });
+    }
+
     @Test
     void unknownPropertiesMustNotBeSilentlyIgnored() {
         namedRunner().withPropertyValues("otryx.rpc.registry.namespce=misspelled")
@@ -112,13 +239,13 @@ public class OtryxRpcApplicationConfigurationTest {
         namedRunner().withPropertyValues(
                         "test.membership-timeout=2s",
                         "otryx.rpc.registry.control-plane-timeout=${test.membership-timeout}",
-                        "otryx.rpc.registry.eureka.metadata-options[consulToken]=test-credential")
+                        "otryx.rpc.registry.eureka.metadata-options[consulPollIntervalMillis]=3000")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     OtryxRpcProperties.Registry registry = context.getBean(OtryxRpcProperties.class).getRegistry();
                     assertThat(registry.getControlPlaneTimeout()).isEqualTo(Duration.ofSeconds(2));
                     assertThat(registry.getEureka().getMetadataOptions())
-                            .containsEntry("consulToken", "test-credential");
+                            .containsEntry("consulPollIntervalMillis", "3000");
                 });
     }
 
@@ -287,6 +414,21 @@ public class OtryxRpcApplicationConfigurationTest {
                             .hasStackTraceContaining("otryx.rpc.registry.type")
                             .hasStackTraceContaining("matching OTRYX RPC adapter");
                 });
+    }
+
+    private ApplicationContextRunner defaultIdentityRunner(boolean blank) {
+        if (!blank) {
+            return runner;
+        }
+        return runner.withInitializer(context -> context.getEnvironment().getPropertySources().addFirst(
+                new MapPropertySource("blank-default-identity", Map.of(
+                        "spring.application.name", "   ", "otryx.rpc.registry.application-name", "   "))));
+    }
+
+    private ApplicationContextRunner invalidDefaultIdentityRunner(String field) {
+        return namedRunner().withInitializer(context -> context.getEnvironment().getPropertySources().addFirst(
+                new MapPropertySource("invalid-default-identity", Map.of(
+                        "otryx.rpc.registry." + field, "invalid\nvalue"))));
     }
 
     private ApplicationContextRunner namedRunner() {

@@ -54,6 +54,7 @@ public class OtryxRpcServerStartTest {
                 RpcCodecRegistry.of(new NoopCodec());
 
         OtryxRpcServer safeDefault = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(codecs)
@@ -72,6 +73,7 @@ public class OtryxRpcServerStartTest {
         }
 
         OtryxRpcServer explicitlyEnabled = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(new TestTransportServer())
                 .codecRegistry(codecs)
@@ -98,6 +100,7 @@ public class OtryxRpcServerStartTest {
         HangingUnregisterRegistrar registry =
                 new HangingUnregisterRegistrar();
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership(registry, Duration.ofMillis(50)))
                 .transportServer(new TestTransportServer())
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -127,6 +130,7 @@ public class OtryxRpcServerStartTest {
         BlockingUnregisterRegistrar registry = new BlockingUnregisterRegistrar();
         TestTransportServer transport = new TestTransportServer();
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership(registry, CONTROL_TIMEOUT))
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -163,6 +167,7 @@ public class OtryxRpcServerStartTest {
         TestTransportServer transport = new TestTransportServer();
         HangingUnregisterRegistrar registry = new HangingUnregisterRegistrar();
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership(registry, CONTROL_TIMEOUT))
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -190,6 +195,7 @@ public class OtryxRpcServerStartTest {
     void closeFailureMustNotSkipOtherResources() throws Exception {
         FailingCloseTransport transport = new FailingCloseTransport();
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -212,6 +218,7 @@ public class OtryxRpcServerStartTest {
             throws Exception {
         DeferredStartTransport transport = new DeferredStartTransport();
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -235,6 +242,7 @@ public class OtryxRpcServerStartTest {
     @Test
     void wildcardBindShouldRequireAdvertisedHost() {
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(new TestTransportServer())
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -260,6 +268,7 @@ public class OtryxRpcServerStartTest {
     void dynamicPortShouldPublishActualTransportPort() {
         CapturingRegistrar registry = new CapturingRegistrar();
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership(registry, CONTROL_TIMEOUT))
                 .transportServer(new DynamicPortTransportServer(24567))
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -288,6 +297,7 @@ public class OtryxRpcServerStartTest {
         TestTransportServer transport = new TestTransportServer();
         RpcCodec codec = new NoopCodec();
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership(registry, CONTROL_TIMEOUT))
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(codec))
@@ -321,6 +331,7 @@ public class OtryxRpcServerStartTest {
         FailingRegistrar registry = new FailingRegistrar();
         FailingCloseTransport transport = new FailingCloseTransport();
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership(registry, CONTROL_TIMEOUT))
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))

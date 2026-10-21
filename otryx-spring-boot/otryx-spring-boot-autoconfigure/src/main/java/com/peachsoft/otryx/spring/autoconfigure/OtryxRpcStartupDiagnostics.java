@@ -1,6 +1,9 @@
 package com.peachsoft.otryx.spring.autoconfigure;
 
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
+import com.peachsoft.otryx.registry.CredentialKind;
+import com.peachsoft.otryx.registry.RegistrySecurityOptions;
 import com.peachsoft.otryx.observability.RpcSecurityMode;
 import java.time.Duration;
 import java.util.Set;
@@ -30,16 +33,35 @@ final class OtryxRpcStartupDiagnostics {
     private static final String EUREKA_METADATA_ENDPOINTS = "registry.eureka.metadata-endpoints";
     private static final Set<String> EUREKA_METADATA_BACKENDS = Set.of("etcd", "nacos", "consul");
     private static final Duration MAX_MEMBERSHIP_CONTROL_TIMEOUT = Duration.ofSeconds(30);
+    private static final Duration MAX_AUTHORIZATION_LIFETIME = Duration.ofDays(1);
+    private static final Set<String> REGISTRY_NAMES = Set.of("memory", "etcd", "nacos", "consul", "eureka");
+    private static final Set<String> TRANSPORT_NAMES = Set.of("vertx");
+    private static final Set<String> PROXY_NAMES = Set.of("jdk", "generated");
 
     private OtryxRpcStartupDiagnostics() {
     }
 
     /**
-     * 校验全部已启用的运行时配置，并输出不含凭据的有效配置摘要。
+     * 校验全部已启用的运行时配置，并输出不含凭据的默认组件配置摘要。
+     *
+     * <p>配置属性不证明替换组件的实际能力；最终能力由运行时 Builder 单独核验。
      *
      * @param properties 已完成 Spring 属性绑定的配置对象
      */
     static void validateAndReport(OtryxRpcProperties properties) {
+        validate(properties);
+        report(properties);
+    }
+
+    /**
+     * 只校验已绑定配置，不创建资源、不输出输入值。
+     *
+     * @param properties 当前配置
+     */
+    static void validate(OtryxRpcProperties properties) {
+        if (properties.isEnabled()) {
+            validateExplicitProfile(properties);
+        }
         OtryxRpcProperties.Registry registry = properties.getRegistry();
         requireText("registry.type", registry.getType());
         positive("registry.lease-ttl-seconds", registry.getLeaseTtlSeconds());
@@ -121,13 +143,22 @@ final class OtryxRpcStartupDiagnostics {
                     fory.getMaxGraphMemoryBytes(),
                     fory.getMaxPayloadBytes());
         } catch (IllegalArgumentException error) {
-            throw invalid("codec.fory", error.getMessage());
+            throw invalid("codec.fory", "type policy or limits rejected");
         }
 
         if (properties.isEnabled()) {
-            validateSecurityProfile(properties, fory, security);
+            validateSecurityProfile(properties, security);
         }
 
+        registry.getSecurity().toOptions();
+        if (registry.getMetadataSecurity() != null) {
+            if (!EUREKA_REGISTRY_TYPE.equals(registry.getType())) {
+                throw invalid("registry.metadata-security",
+                        "is only supported for Eureka's independent metadata chain");
+            }
+            registry.getMetadataSecurity().toOptions();
+        }
+        security.getIdentity().validatedBindings();
         OtryxRpcProperties.Client client = properties.getClient();
         if (client.isEnabled()) {
             positive("client.timeout", client.getTimeout());
@@ -170,6 +201,10 @@ final class OtryxRpcStartupDiagnostics {
             positive("server.authorization.max-pending", authorization.getMaxPending());
             positive("server.authorization.max-buffered-request-bytes",
                     authorization.getMaxBufferedRequestBytes());
+            positive("server.authorization.max-grant-lifetime", authorization.getMaxGrantLifetime());
+            if (authorization.getMaxGrantLifetime().compareTo(MAX_AUTHORIZATION_LIFETIME) > 0) {
+                throw invalid("server.authorization.max-grant-lifetime", "must not exceed one day");
+            }
             positive("server.authorization.timeout", authorization.getTimeout());
             if (authorization.getTimeout().compareTo(Duration.ofDays(1)) > 0) {
                 throw invalid("server.authorization.timeout", "must not exceed one day");
@@ -181,24 +216,42 @@ final class OtryxRpcStartupDiagnostics {
                     execution.getCpuQueueCapacity());
         }
 
+    }
+
+    private static void report(OtryxRpcProperties properties) {
+        OtryxRpcProperties.Registry registry = properties.getRegistry();
+        OtryxRpcProperties.Transport transport = properties.getTransport();
+        OtryxRpcProperties.Security security = transport.getSecurity();
+        OtryxRpcProperties.ForySecurity fory = properties.getCodec().getFory();
+        OtryxRpcProperties.Client client = properties.getClient();
+        OtryxRpcProperties.Server server = properties.getServer();
         LOGGER.info(
-                "OTRYX RPC configured: registry={}, transport={}, client={}, provider={}, "
-                        + "proxy={}, codecMode={}, securityMode={}, connectionsPerEndpoint={}, "
+                "OTRYX RPC default configuration: registry={}, transport={}, client={}, provider={}, "
+                        + "proxy={}, defaultForyMode={}, securityMode={}, connectionsPerEndpoint={}, "
                         + "providerMaxConcurrent={}",
-                registry.getType(),
-                transport.getType(),
+                knownName(REGISTRY_NAMES, registry.getType()),
+                knownName(TRANSPORT_NAMES, transport.getType()),
                 client.isEnabled(),
                 server.isEnabled(),
-                client.getProxy(),
+                knownName(PROXY_NAMES, client.getProxy()),
                 fory.getMode(),
                 security.getMode(),
                 transport.getConnectionsPerEndpoint(),
                 server.getMaxConcurrent());
         if (security.getMode() == RpcSecurityMode.PLAINTEXT) {
             LOGGER.warn(
-                    "OTRYX RPC uses PLAINTEXT transport; configure TLS/mTLS on untrusted networks");
+                    "OTRYX RPC default transport configuration is PLAINTEXT; "
+                            + "configure TLS/mTLS on untrusted networks");
         }
-        if (fory.getMode() == ForyRpcSecurityOptions.Mode.TRUSTED_COMPATIBILITY) {
+    }
+
+    /**
+     * 仅在默认 Fory 实例创建成功后报告其真实类型策略。
+     *
+     * @param mode 已创建 Fory 实例使用的安全模式
+     */
+    static void reportDefaultCodec(ForyRpcSecurityOptions.Mode mode) {
+        if (mode == ForyRpcSecurityOptions.Mode.TRUSTED_COMPATIBILITY) {
             LOGGER.warn(
                     "OTRYX RPC Fory uses TRUSTED_COMPATIBILITY; enable STRICT_ALLOWLIST "
                             + "when peers are not fully trusted");
@@ -212,8 +265,18 @@ final class OtryxRpcStartupDiagnostics {
      * Eureka/Consul 属性影响；其元数据和注册能力仍由自动装配验证。
      *
      * @param registry 当前由 Starter 创建的注册中心配置
+     * @param profile 共享安全意图
      */
-    static void validateRegistryBackend(OtryxRpcProperties.Registry registry) {
+    static void validateRegistryBackend(OtryxRpcProperties.Registry registry, RpcSecurityProfile profile) {
+        if (profile == RpcSecurityProfile.NETWORK_MTLS && !"memory".equals(registry.getType())) {
+            requireProtectedRegistry("registry.security", registry.getSecurity().toOptions());
+            if (EUREKA_REGISTRY_TYPE.equals(registry.getType())) {
+                if (registry.getMetadataSecurity() == null) {
+                    throw invalid("registry.metadata-security", "requires independent TLS and credentials");
+                }
+                requireProtectedRegistry("registry.metadata-security", registry.getMetadataSecurity().toOptions());
+            }
+        }
         if (CONSUL_REGISTRY_TYPE.equals(registry.getType())) {
             String datacenter = registry.getConsul().getDatacenter();
             if (datacenter != null && !datacenter.isBlank()) {
@@ -234,22 +297,56 @@ final class OtryxRpcStartupDiagnostics {
 
     private static void validateSecurityProfile(
             OtryxRpcProperties properties,
-            OtryxRpcProperties.ForySecurity fory,
             OtryxRpcProperties.Security security) {
-        OtryxRpcProperties.SecurityProfile profile = properties.getSecurityProfile();
-        if (profile == null || profile == OtryxRpcProperties.SecurityProfile.UNSPECIFIED) {
-            throw invalid("security-profile",
-                    "choose TRUSTED_DEVELOPMENT for isolated networks "
-                            + "or NETWORK_MTLS for verified peers");
-        }
-        if (profile == OtryxRpcProperties.SecurityProfile.NETWORK_MTLS) {
+        RpcSecurityProfile profile = properties.getSecurityProfile();
+        validateExplicitProfile(properties);
+        if (profile == RpcSecurityProfile.NETWORK_MTLS) {
             if (security.getMode() != RpcSecurityMode.MTLS) {
                 throw invalid("transport.security.mode", "NETWORK_MTLS requires mutual TLS");
             }
-            if (fory.getMode() != ForyRpcSecurityOptions.Mode.STRICT_ALLOWLIST) {
-                throw invalid("codec.fory.mode", "NETWORK_MTLS requires STRICT_ALLOWLIST");
+            requireText("transport.security.certificate-path", security.getCertificatePath());
+            requireText("transport.security.private-key-path", security.getPrivateKeyPath());
+            requireText("transport.security.trust-certificate-path", security.getTrustCertificatePath());
+            if (!security.isHostnameVerification()) {
+                throw invalid("transport.security.hostname-verification",
+                        "NETWORK_MTLS requires hostname verification");
+            }
+            if (security.getIdentity().validatedBindings().isEmpty()) {
+                throw invalid("transport.security.identity.certificate-bindings",
+                        "NETWORK_MTLS requires trusted bindings");
             }
         }
+    }
+
+    /** 只约束自动配置实际创建的默认 Fory；用户 Codec 注册表按最终能力单独校验。 */
+    static void validateDefaultCodecProfile(OtryxRpcProperties properties) {
+        if (properties.getSecurityProfile() == RpcSecurityProfile.NETWORK_MTLS
+                && properties.getCodec().getFory().getMode() != ForyRpcSecurityOptions.Mode.STRICT_ALLOWLIST) {
+            throw invalid("codec.fory.mode", "NETWORK_MTLS default Fory requires STRICT_ALLOWLIST");
+        }
+    }
+
+    /**
+     * 在解析授权器或创建任何资源之前要求显式安全意图。
+     *
+     * @param properties 已绑定配置
+     */
+    static void validateExplicitProfile(OtryxRpcProperties properties) {
+        RpcSecurityProfile profile = properties.getSecurityProfile();
+        if (profile == null || profile == RpcSecurityProfile.UNSPECIFIED) {
+            throw invalid("security-profile",
+                    "choose TRUSTED_DEVELOPMENT for isolated networks or NETWORK_MTLS for verified peers");
+        }
+    }
+
+    private static void requireProtectedRegistry(String key, RegistrySecurityOptions options) {
+        if (options.tls().isEmpty() || options.credentials().kind() == CredentialKind.NONE) {
+            throw invalid(key, "NETWORK_MTLS requires TLS and explicit credentials");
+        }
+    }
+
+    private static String knownName(Set<String> known, String value) {
+        return known.contains(value) ? value : "custom";
     }
 
     private static void validateResilience(

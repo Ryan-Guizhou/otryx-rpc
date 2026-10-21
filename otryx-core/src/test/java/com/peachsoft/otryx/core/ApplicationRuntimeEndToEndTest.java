@@ -8,6 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcTarget;
+import com.peachsoft.otryx.api.RpcPeerIdentity;
+import com.peachsoft.otryx.transport.RpcTransportResponse;
+import com.peachsoft.otryx.transport.RpcTransportSecurityDescriptor;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.api.RpcUnavailableException;
@@ -215,6 +219,7 @@ class ApplicationRuntimeEndToEndTest {
         private final ApplicationMembershipCoordinator consumer;
         private final RpcCodecRegistry codecs = RpcCodecRegistry.of(new TestCodec());
         private final OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(provider)
                 .codecRegistry(codecs)
                 .transportServer(transport)
@@ -232,6 +237,7 @@ class ApplicationRuntimeEndToEndTest {
                     consumerKey, "frontend-1", registry.registrar().orElseThrow(),
                     manifests, mapping, CONTROL_TIMEOUT);
             client = OtryxRpcClient.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                     .applicationControlPlane(resolver, consumer, NAMESPACE)
                     .codecRegistry(codecs)
                     .transportClient(transport)
@@ -283,14 +289,20 @@ class ApplicationRuntimeEndToEndTest {
         }
 
         @Override
-        public CompletionStage<byte[]> request(RpcEndpoint endpoint, byte[] frame, Duration timeout) {
+        public CompletionStage<RpcTransportResponse> request(RpcTarget target, byte[] frame, Duration timeout) {
             RpcRequestHandler current = handler.get();
             if (current == null) {
                 return CompletableFuture.failedFuture(new RpcUnavailableException("Listener not available"));
             }
             requests.incrementAndGet();
             RpcProtocolCodec.writeRequestId(frame, sequence.incrementAndGet());
-            return current.handle(new RpcEndpoint("127.0.0.1", CALLER_PORT), frame);
+            return current.handle(new RpcEndpoint("127.0.0.1", CALLER_PORT), frame)
+                    .thenApply(response -> new RpcTransportResponse(response, RpcPeerIdentity.anonymous()));
+        }
+
+        @Override
+        public RpcTransportSecurityDescriptor securityDescriptor() {
+            return RpcTransportSecurityDescriptor.unknown();
         }
 
         @Override

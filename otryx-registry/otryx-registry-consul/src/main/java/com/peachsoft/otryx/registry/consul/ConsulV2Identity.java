@@ -5,6 +5,8 @@ import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -142,36 +144,28 @@ final class ConsulV2Identity {
     }
 
     /**
-     * 解析 Passing Health 响应，并校验完整归属及角色；非法或异源成员直接排除。
+     * 解析 Passing Health 响应；真实不健康成员过滤，损坏或异源 V2 声明明确安全拒绝。
      *
      * @param application 请求的应用
      * @param entry Health API 中的一条原生记录
-     * @return 合规应用成员；非法值返回 null
+     * @return 合规应用成员；真实不健康或无可路由端点时返回 null
      */
     ApplicationInstance fromHealth(ApplicationKey application, JsonNode entry) {
         requireNamespace(application);
         JsonNode service = entry.path(ConsulProtocol.FIELD_SERVICE);
         Map<String, String> meta = readMeta(service.path(ConsulProtocol.FIELD_META));
-        if (!FORMAT_VERSION.equals(meta.get(META_VERSION))
-                || !application.namespace().equals(meta.get(META_NAMESPACE))
+        if (!FORMAT_VERSION.equals(meta.get(META_VERSION)) || meta.getOrDefault(META_TOKEN, "").isBlank()) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+        }
+        if (!application.namespace().equals(meta.get(META_NAMESPACE))
                 || !application.applicationName().equals(meta.get(META_APPLICATION))
-                || !serviceName(application).equals(service.path(ConsulProtocol.FIELD_SERVICE).asText())
-                || meta.getOrDefault(META_TOKEN, "").isBlank()) {
-            return null;
-        }
-        JsonNode checks = entry.path(ConsulProtocol.FIELD_CHECKS);
-        if (!checks.isArray() || checks.isEmpty()) {
-            return null;
-        }
-        for (JsonNode check : checks) {
-            if (!ConsulProtocol.STATUS_PASSING.equals(check.path(ConsulProtocol.FIELD_STATUS).asText())) {
-                return null;
-            }
+                || !serviceName(application).equals(service.path(ConsulProtocol.FIELD_SERVICE).asText())) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
         }
         try {
             String instanceId = meta.get(META_INSTANCE);
             if (!serviceId(application, instanceId).equals(service.path(ConsulProtocol.FIELD_ID).asText())) {
-                return null;
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
             }
             ApplicationRole role = ApplicationRole.valueOf(meta.get(META_ROLE));
             int weight = Integer.parseInt(meta.get(META_WEIGHT));
@@ -188,7 +182,7 @@ final class ConsulV2Identity {
                 }
                 endpoint = new RpcEndpoint(address, port);
             } else if (port != 0 || weight != 0 || !revision.isEmpty()) {
-                return null;
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
             }
             Map<String, String> attributes = new HashMap<>();
             for (Map.Entry<String, String> item : meta.entrySet()) {
@@ -196,10 +190,20 @@ final class ConsulV2Identity {
                     attributes.put(item.getKey().substring(ATTRIBUTE_PREFIX.length()), item.getValue());
                 }
             }
-            return new ApplicationInstance(instanceId, application, role, endpoint, weight,
+            ApplicationInstance decoded = new ApplicationInstance(instanceId, application, role, endpoint, weight,
                     role.providesRpc() ? revision : null, attributes);
+            JsonNode checks = entry.path(ConsulProtocol.FIELD_CHECKS);
+            if (!checks.isArray() || checks.isEmpty()) {
+                return null;
+            }
+            for (JsonNode check : checks) {
+                if (!ConsulProtocol.STATUS_PASSING.equals(check.path(ConsulProtocol.FIELD_STATUS).asText())) {
+                    return null;
+                }
+            }
+            return decoded;
         } catch (IllegalArgumentException | NullPointerException invalid) {
-            return null;
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
         }
     }
 
@@ -219,8 +223,11 @@ final class ConsulV2Identity {
     }
 
     private static Map<String, String> readMeta(JsonNode meta) {
-        if (!meta.isObject() || meta.size() > MAX_META_ITEMS) {
-            return Map.of();
+        if (!meta.isObject()) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+        }
+        if (meta.size() > MAX_META_ITEMS) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED);
         }
         Map<String, String> values = new HashMap<>();
         var fields = meta.fields();
@@ -230,7 +237,7 @@ final class ConsulV2Identity {
                     || !fitsUtf8(item.getKey(), MAX_META_KEY_LENGTH)
                     || !validMetaKey(item.getKey())
                     || !fitsUtf8(item.getValue().asText(), MAX_META_VALUE_LENGTH)) {
-                return Map.of();
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
             }
             values.put(item.getKey(), item.getValue().asText());
         }

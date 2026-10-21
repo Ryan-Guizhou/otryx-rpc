@@ -1,30 +1,28 @@
 package com.peachsoft.otryx.registry;
 
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 
 /**
  * 受限本地 ServiceMapping 缓存。数据面只读取已完成快照，控制面单飞刷新。
  *
- * <p>未获取首次快照与可信空快照相互区分；显式刷新失败只能在有限 LKG 窗口内
- * 使用旧数据。每个 Key 的刷新间隔受限，关闭时禁止新刷新和迟到快照发布。
- * 此组件由上层控制面驱动 refresh，不能在 RPC 调用热路径发起远程 IO。
+ * <p>接收点独立校验业务键与 revision 下限；安全失效撤销可读值但保留下限。
+ * 普通网络失败只允许有限 LKG。取消、超时和关闭先提交本地终态，再通知调用方。
  *
  * @Author OpenAI
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/15 18:30
  */
-public final class ServiceMappingCache implements AutoCloseable {
-
+public final class ServiceMappingCache implements AutoCloseable, RegistrySecuritySource {
     private static final int MAX_ENTRIES = 2048;
     private static final int MAX_CONCURRENT_REFRESH = 64;
     private static final long REFRESH_TIMEOUT_SECONDS = 20L;
@@ -32,10 +30,10 @@ public final class ServiceMappingCache implements AutoCloseable {
     private final long staleNanos;
     private final long retryNanos;
     private final LongSupplier clock;
-    private final ConcurrentHashMap<ServiceMappingKey, Entry> entries = new ConcurrentHashMap<>();
-    private final AtomicBoolean closed = new AtomicBoolean();
-    private final AtomicInteger running = new AtomicInteger();
-    private final AtomicInteger allocated = new AtomicInteger();
+    private final Map<ServiceMappingKey, Entry> entries = new HashMap<>();
+    private boolean closed;
+    private int running;
+    private long generation;
 
     /**
      * 使用单调时间源建立缓存，所有时间参数必须非负且可转换为纳秒。
@@ -58,131 +56,164 @@ public final class ServiceMappingCache implements AutoCloseable {
      * @param clock 单调时间来源
      */
     public ServiceMappingCache(
-            ServiceMappingRepository repository,
-            Duration maxStale,
-            Duration minRetry,
-            LongSupplier clock) {
+            ServiceMappingRepository repository, Duration maxStale, Duration minRetry, LongSupplier clock) {
         this.repository = Objects.requireNonNull(repository, "repository");
         this.clock = Objects.requireNonNull(clock, "clock");
         staleNanos = duration(maxStale);
         retryNanos = duration(minRetry);
     }
 
+    /** 返回实际被调用 Repository 的全部 Mapping 来源。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return RegistrySecurityDescriptor.from(repository, RegistryChannel.MAPPING);
+    }
+
     /**
-     * 返回当前可用的不可变快照；首次未就绪/失败超期返回空 Optional。
+     * 返回当前可用的不可变快照；首次未就绪、安全失效或普通失败超期返回空值。
      *
      * @param key 服务映射键
      * @return 本地快照；没有有效快照不等于合法空目录
      */
-    public java.util.Optional<ServiceMappingSnapshot> current(ServiceMappingKey key) {
+    public synchronized Optional<ServiceMappingSnapshot> current(ServiceMappingKey key) {
         Objects.requireNonNull(key, "key");
-        if (closed.get()) {
-            return java.util.Optional.empty();
-        }
         Entry entry = entries.get(key);
-        if (entry == null) {
-            return java.util.Optional.empty();
+        if (closed || entry == null || entry.snapshot == null || (entry.failureSince != null
+                && clock.getAsLong() - entry.failureSince >= staleNanos)) {
+            return Optional.empty();
         }
-        State state = entry.state.get();
-        if (state.snapshot() == null || (state.failureSince() != null
-                && elapsed(clock.getAsLong(), state.failureSince()) >= staleNanos)) {
-            return java.util.Optional.empty();
-        }
-        return java.util.Optional.of(state.snapshot());
+        return Optional.of(entry.snapshot);
     }
 
     /**
-     * 控制面请求刷新，同一 key 只允许一个未决刷新；后续调用共享同一 Future。
+     * 控制面单飞刷新；同一 key 的调用共享任务，取消会取消共享读取。
      *
      * @param key 待刷新映射
      * @return 完整新快照或异常
      */
     public CompletionStage<ServiceMappingSnapshot> refresh(ServiceMappingKey key) {
         Objects.requireNonNull(key, "key");
-        if (closed.get()) {
-            return CompletableFuture.failedFuture(new IllegalStateException("Mapping cache closed"));
-        }
-        Entry entry = entries.computeIfAbsent(key, ignored -> {
-            if (allocated.incrementAndGet() > MAX_ENTRIES) {
-                allocated.decrementAndGet();
-                throw new IllegalStateException("Mapping cache entry limit exceeded");
+        RefreshFuture target;
+        synchronized (this) {
+            if (closed) {
+                return CompletableFuture.failedFuture(new IllegalStateException("Mapping cache closed"));
             }
-            return new Entry();
-        });
-        CompletableFuture<ServiceMappingSnapshot> future;
-        synchronized (entry) {
-            if (entry.inflight != null) {
-                return entry.inflight;
+            Entry entry = entries.get(key);
+            if (entry == null) {
+                if (entries.size() >= MAX_ENTRIES) {
+                    return CompletableFuture.failedFuture(new IllegalStateException("Mapping entry limit exceeded"));
+                }
+                entry = new Entry();
+                entries.put(key, entry);
             }
-            long now = clock.getAsLong();
-            if (entry.lastFailure != null && elapsed(now, entry.lastFailure) < retryNanos) {
+            if (entry.pending != null) {
+                return entry.pending;
+            }
+            if (entry.lastFailure != null && clock.getAsLong() - entry.lastFailure < retryNanos) {
                 return CompletableFuture.failedFuture(new IllegalStateException("Mapping refresh rate limited"));
             }
-            if (running.incrementAndGet() > MAX_CONCURRENT_REFRESH) {
-                running.decrementAndGet();
+            if (running >= MAX_CONCURRENT_REFRESH) {
                 return CompletableFuture.failedFuture(new IllegalStateException("Mapping refresh capacity exceeded"));
             }
-            future = new CompletableFuture<>();
-            entry.inflight = future;
+            target = new RefreshFuture(key, entry, generation);
+            entry.pending = target;
+            running++;
         }
-        if (closed.get()) {
-            complete(entry, future, null, new IllegalStateException("Mapping cache closed"));
-            return future;
-        }
+        target.orTimeout(REFRESH_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         CompletionStage<ServiceMappingSnapshot> source;
         try {
-            source = Objects.requireNonNull(repository.lookupVerified(key), "lookup result");
+            source = repository.lookupVerified(key);
+            if (source == null) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+            }
         } catch (Throwable error) {
-            complete(entry, future, null, error);
-            return future;
+            target.completeExceptionally(error);
+            return target;
         }
-        source.whenComplete((snapshot, error) -> complete(entry, future, snapshot, error));
-        if (!future.isDone()) {
-            CompletableFuture.delayedExecutor(REFRESH_TIMEOUT_SECONDS, TimeUnit.SECONDS).execute(() ->
-                    complete(entry, future, null, new TimeoutException("Mapping refresh timed out")));
+        CompletableFuture<?> cancellable = source.toCompletableFuture();
+        boolean active;
+        synchronized (this) {
+            active = target.entry.pending == target;
+            if (active) {
+                target.source = cancellable;
+            }
         }
-        return future;
+        if (!active) {
+            RegistryFailures.cancel(cancellable);
+        }
+        source.whenComplete((snapshot, error) -> {
+            if (error == null) {
+                finish(target, snapshot, null);
+            } else {
+                target.completeExceptionally(error);
+            }
+        });
+        return target;
     }
 
-    private void complete(
-            Entry entry,
-            CompletableFuture<ServiceMappingSnapshot> future,
-            ServiceMappingSnapshot snapshot,
-            Throwable error) {
-        ServiceMappingSnapshot valid = snapshot;
-        Throwable failure = error;
-        synchronized (entry) {
-            if (entry.inflight != future) {
-                return;
+    private boolean finish(RefreshFuture target, ServiceMappingSnapshot snapshot, Throwable error) {
+        Throwable failure = RegistryFailures.unwrap(error);
+        synchronized (this) {
+            Entry entry = target.entry;
+            if (entry.pending != target || target.generation != generation) {
+                return false;
             }
-            if (closed.get()) {
+            if (closed) {
                 failure = new IllegalStateException("Mapping cache closed");
-            }
-            ServiceMappingSnapshot priorSnapshot = entry.state.get().snapshot();
-            if (failure == null && valid != null && priorSnapshot != null
-                    && valid.revision() < priorSnapshot.revision()) {
-                failure = new IllegalStateException("Mapping revision moved backwards");
-            }
-            if (failure != null || valid == null) {
-                if (failure == null) {
-                    failure = new IllegalStateException("Null mapping snapshot");
+            } else if (failure == null) {
+                if (snapshot == null) {
+                    failure = new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
+                } else if (!target.key.equals(snapshot.key())) {
+                    failure = new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
+                } else if (snapshot.revision() < entry.minimumVerifiedRevision) {
+                    failure = new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
                 }
+            }
+            if (failure == null) {
+                entry.minimumVerifiedRevision = Math.max(entry.minimumVerifiedRevision, snapshot.revision());
+                entry.snapshot = snapshot;
+                entry.failureSince = null;
+                entry.lastFailure = null;
+            } else {
                 long now = clock.getAsLong();
                 entry.lastFailure = now;
-                entry.state.updateAndGet(previous -> new State(previous.snapshot(),
-                        previous.failureSince() == null ? now : previous.failureSince()));
-            } else {
-                entry.lastFailure = null;
-                entry.state.set(new State(valid, null));
+                if (entry.failureSince == null) {
+                    entry.failureSince = now;
+                }
+                if (failure instanceof RegistrySecurityException) {
+                    entry.snapshot = null;
+                }
             }
-            entry.inflight = null;
-            running.decrementAndGet();
+            entry.pending = null;
+            running--;
         }
         if (failure != null) {
-            future.completeExceptionally(failure);
-        } else {
-            future.complete(valid);
+            target.cancelSource();
         }
+        return target.publish(snapshot, failure);
+    }
+
+    /** 安全失效保留每键最低已验证 revision，旧 generation 不能更新值或下限。 */
+    void invalidateForSecurity(RegistrySecurityFailure reason) {
+        List<RefreshFuture> pending;
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            generation++;
+            pending = entries.values().stream().map(entry -> entry.pending).filter(Objects::nonNull).toList();
+            entries.values().forEach(entry -> {
+                entry.pending = null;
+                entry.snapshot = null;
+                entry.failureSince = null;
+                entry.lastFailure = null;
+            });
+            running = 0;
+        }
+        pending.forEach(target -> {
+            target.cancelSource();
+            target.publish(null, new RegistrySecurityException(reason));
+        });
     }
 
     private static long duration(Duration duration) {
@@ -193,42 +224,71 @@ public final class ServiceMappingCache implements AutoCloseable {
         try {
             return duration.toNanos();
         } catch (ArithmeticException error) {
-            throw new IllegalArgumentException("Duration exceeds range", error);
+            throw new IllegalArgumentException("Duration exceeds range");
         }
     }
 
-    private static long elapsed(long now, long then) {
-        return now - then;
-    }
-
-    /** 禁止迟到刷新发布并释放本地快照。 */
+    /** 禁止迟到刷新发布并释放本地快照；不关闭调用方拥有的 Repository。 */
     @Override
     public void close() {
-        if (closed.compareAndSet(false, true)) {
-            for (Entry entry : entries.values()) {
-                CompletableFuture<ServiceMappingSnapshot> waiting;
-                synchronized (entry) {
-                    waiting = entry.inflight;
-                    if (waiting != null) {
-                        entry.inflight = null;
-                        running.decrementAndGet();
-                    }
-                }
-                if (waiting != null) {
-                    waiting.completeExceptionally(new IllegalStateException("Mapping cache closed"));
-                }
+        List<RefreshFuture> pending;
+        synchronized (this) {
+            if (closed) {
+                return;
             }
+            closed = true;
+            pending = entries.values().stream().map(entry -> entry.pending).filter(Objects::nonNull).toList();
+            entries.values().forEach(entry -> entry.pending = null);
             entries.clear();
-            allocated.set(0);
+            running = 0;
         }
+        pending.forEach(target -> {
+            target.cancelSource();
+            target.publish(null, new IllegalStateException("Mapping cache closed"));
+        });
     }
 
     private static final class Entry {
-        private final AtomicReference<State> state = new AtomicReference<>(new State(null, null));
-        private CompletableFuture<ServiceMappingSnapshot> inflight;
+        private ServiceMappingSnapshot snapshot;
+        private Long failureSince;
         private Long lastFailure;
+        private long minimumVerifiedRevision;
+        private RefreshFuture pending;
     }
 
-    private record State(ServiceMappingSnapshot snapshot, Long failureSince) {
+    private final class RefreshFuture extends CompletableFuture<ServiceMappingSnapshot> {
+        private final ServiceMappingKey key;
+        private final Entry entry;
+        private final long generation;
+        private volatile CompletableFuture<?> source;
+
+        private RefreshFuture(ServiceMappingKey key, Entry entry, long generation) {
+            this.key = key;
+            this.entry = entry;
+            this.generation = generation;
+        }
+
+        @Override
+        public boolean complete(ServiceMappingSnapshot ignored) {
+            return false;
+        }
+
+        @Override
+        public boolean completeExceptionally(Throwable failure) {
+            return finish(this, null, Objects.requireNonNull(failure, "failure"));
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            return finish(this, null, new CancellationException("Mapping refresh cancelled")) || isCancelled();
+        }
+
+        private boolean publish(ServiceMappingSnapshot snapshot, Throwable failure) {
+            return failure == null ? super.complete(snapshot) : super.completeExceptionally(failure);
+        }
+
+        private void cancelSource() {
+            RegistryFailures.cancel(source);
+        }
     }
 }

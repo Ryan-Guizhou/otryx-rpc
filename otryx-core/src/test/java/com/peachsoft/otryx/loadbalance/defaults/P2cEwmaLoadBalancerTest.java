@@ -92,6 +92,7 @@ class P2cEwmaLoadBalancerTest {
     private static ServiceInstance instance(String id, int port) {
         return new ServiceInstance(
                 id,
+                new com.peachsoft.otryx.api.ApplicationKey("test", "provider"),
                 new ServiceKey("demo.Service", "1.0.0", "default"),
                 new RpcEndpoint("127.0.0.1", port),
                 100,

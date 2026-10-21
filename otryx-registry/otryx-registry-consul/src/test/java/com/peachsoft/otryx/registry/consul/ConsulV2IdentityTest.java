@@ -11,6 +11,8 @@ import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -48,7 +50,9 @@ class ConsulV2IdentityTest {
         assertEquals(consumer, decoded);
         assertTrue(!decoded.routableProvider());
         assertNull(decoded.rpcEndpoint());
-        assertNull(identity.fromHealth(APPLICATION, health(identity, consumer, meta, "", 9090)));
+        assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                assertThrows(RegistrySecurityException.class,
+                        () -> identity.fromHealth(APPLICATION, health(identity, consumer, meta, "", 9090))).reason());
     }
 
     @Test
@@ -69,8 +73,10 @@ class ConsulV2IdentityTest {
         ConsulV2Identity identity = new ConsulV2Identity("production");
         ApplicationInstance consumer = new ApplicationInstance(
                 "consumer", APPLICATION, ApplicationRole.CONSUMER, null, 0, null, Map.of());
-        assertNull(identity.fromHealth(new ApplicationKey("production", "other"),
-                health(identity, consumer, identity.metadata(consumer, "token"), "", 0)));
+        assertEquals(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH,
+                assertThrows(RegistrySecurityException.class,
+                        () -> identity.fromHealth(new ApplicationKey("production", "other"),
+                                health(identity, consumer, identity.metadata(consumer, "token"), "", 0))).reason());
         ApplicationInstance oversized = new ApplicationInstance("consumer", APPLICATION,
                 ApplicationRole.CONSUMER, null, 0, null, Map.of("key", "a".repeat(513)));
         assertThrows(IllegalArgumentException.class, () -> identity.metadata(oversized, "token"));
@@ -78,6 +84,22 @@ class ConsulV2IdentityTest {
         ApplicationInstance utf8Oversized = new ApplicationInstance("consumer", APPLICATION,
                 ApplicationRole.CONSUMER, null, 0, null, Map.of("description", "汉".repeat(200)));
         assertThrows(IllegalArgumentException.class, () -> identity.metadata(utf8Oversized, "token"));
+    }
+
+
+    @Test
+    void nonpassingHealthCannotHideMalformedDeclaredRole() {
+        ConsulV2Identity identity = new ConsulV2Identity("production");
+        ApplicationInstance member = provider("provider-1");
+        Map<String, String> metadata = new java.util.HashMap<>(identity.metadata(member, "token"));
+        metadata.put("otryxV2Role", "FORGED");
+        com.fasterxml.jackson.databind.node.ObjectNode entry = health(
+                identity, member, metadata, "127.0.0.1", 19090).deepCopy();
+        entry.putArray(ConsulProtocol.FIELD_CHECKS).addObject()
+                .put(ConsulProtocol.FIELD_STATUS, "critical");
+        assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                assertThrows(RegistrySecurityException.class,
+                        () -> identity.fromHealth(APPLICATION, entry)).reason());
     }
 
     private static ApplicationInstance provider(String instanceId) {

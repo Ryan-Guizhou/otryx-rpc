@@ -30,7 +30,8 @@ public class ServiceBindingExecutionTest {
                 key,
                 ExecutionService.class,
                 new ExecutionServiceImpl(),
-                RpcCodecRegistry.of(new NoopCodec()));
+                RpcCodecRegistry.of(new NoopCodec()),
+                com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT);
 
         assertEquals(
                 RpcExecutionMode.BLOCKING_VIRTUAL,
@@ -52,7 +53,8 @@ public class ServiceBindingExecutionTest {
                 key,
                 SafeService.class,
                 new SafeServiceImpl(),
-                RpcCodecRegistry.of(new NoopCodec()));
+                RpcCodecRegistry.of(new NoopCodec()),
+                com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT);
 
         assertFalse(binding.usesDirectExecution());
     }

@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.quickstart.consumer;
 
+import com.peachsoft.otryx.api.RpcAuthenticationException;
 import com.peachsoft.otryx.api.RpcRemoteException;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcTimeoutException;
@@ -45,6 +46,8 @@ public class GreetingRunner implements ApplicationRunner {
     private static final String USE_DETAILS_PROPERTY = "otryx.rpc.quickstart.use-details";
     private static final String EXPECT_AUTHORIZATION_DENIED_PROPERTY =
             "otryx.rpc.quickstart.expect-authorization-denied";
+    private static final String EXPECT_AUTHENTICATION_FAILURE_PROPERTY =
+            "otryx.rpc.quickstart.expect-authentication-failure";
     private static final String REPEAT_INTERVAL_MILLIS_PROPERTY = "otryx.rpc.quickstart.repeat-interval-millis";
     private static final String REQUEST_NAME = "OTRYX RPC";
     private static final String RELAY_SUCCESS_PREFIX = "CHAIN_OK ";
@@ -69,6 +72,11 @@ public class GreetingRunner implements ApplicationRunner {
     @Value("${" + EXPECT_AUTHORIZATION_DENIED_PROPERTY + ":false}")
     private boolean expectAuthorizationDenied;
 
+    @Value("${" + EXPECT_AUTHENTICATION_FAILURE_PROPERTY + ":}")
+    private String expectAuthenticationFailure = "";
+
+    private RpcAuthenticationException.Reason authenticationFailureReason;
+
     @Value("${" + REPEAT_INTERVAL_MILLIS_PROPERTY + ":0}")
     private long repeatIntervalMillis;
 
@@ -81,10 +89,11 @@ public class GreetingRunner implements ApplicationRunner {
      *
      * <p>正例的显式重复模式持续等待注册中心恢复，直至外部停止或线程中断；
      * 仅普通幂等 Greeting 探测额外容忍本地请求超时，不延长每次 RPC 的 Deadline；
-     * 授权负例只接受框架的确定性远端拒绝，不把 TLS、业务或发现失败视为成功。
+     * 授权负例只接受框架的确定性远端拒绝；身份负例只接受明确指定的本地类型化原因。
+     * TLS 通用异常、业务错误和发现失败均不能产生负例成功标记。
      *
      * @param args Spring 启动参数，调用模式由配置属性注入
-     * @throws IllegalArgumentException 调用模式冲突或授权负例启用重复执行时抛出
+     * @throws IllegalArgumentException 调用模式冲突、身份原因非法或负例启用重复执行时抛出
      * @throws IllegalStateException 回复不符合所选场景、发现超时或等待被中断时抛出
      */
     @Override
@@ -100,12 +109,26 @@ public class GreetingRunner implements ApplicationRunner {
     }
 
     private void validateModes() {
+        authenticationFailureReason = null;
         if (useRelay && useDetails) {
             throw new IllegalArgumentException(USE_RELAY_PROPERTY + " and " + USE_DETAILS_PROPERTY
                     + " are mutually exclusive");
         }
-        if (expectAuthorizationDenied && repeatIntervalMillis > 0L) {
+        if (expectAuthenticationFailure != null && !expectAuthenticationFailure.isEmpty()) {
+            try {
+                authenticationFailureReason = RpcAuthenticationException.Reason.valueOf(expectAuthenticationFailure);
+            } catch (IllegalArgumentException error) {
+                throw new IllegalArgumentException(EXPECT_AUTHENTICATION_FAILURE_PROPERTY
+                        + " requires a supported authentication reason");
+            }
+        }
+        if (expectAuthorizationDenied && authenticationFailureReason != null) {
+            throw new IllegalArgumentException(EXPECT_AUTHORIZATION_DENIED_PROPERTY + " and "
+                    + EXPECT_AUTHENTICATION_FAILURE_PROPERTY + " are mutually exclusive");
+        }
+        if ((expectAuthorizationDenied || authenticationFailureReason != null) && repeatIntervalMillis > 0L) {
             throw new IllegalArgumentException(EXPECT_AUTHORIZATION_DENIED_PROPERTY
+                    + " or " + EXPECT_AUTHENTICATION_FAILURE_PROPERTY
                     + " requires " + REPEAT_INTERVAL_MILLIS_PROPERTY + " <= 0");
         }
     }
@@ -121,11 +144,20 @@ public class GreetingRunner implements ApplicationRunner {
                 if (expectAuthorizationDenied) {
                     throw new IllegalStateException("Expected RPC authorization denial but the call succeeded");
                 }
+                if (authenticationFailureReason != null) {
+                    throw new IllegalStateException("Expected RPC authentication failure but the call succeeded");
+                }
                 logSuccessfulReply(reply);
                 return;
             } catch (RuntimeException error) {
                 if (expectAuthorizationDenied && isAuthorizationDenied(error)) {
                     LOGGER.info("RPC authorization denial verified.");
+                    return;
+                }
+                if (authenticationFailureReason != null
+                        && unwrapCompletionFailure(error) instanceof RpcAuthenticationException authentication
+                        && authentication.reason() == authenticationFailureReason) {
+                    LOGGER.info("RPC authentication failure verified: reason={}", authenticationFailureReason);
                     return;
                 }
                 if (!isTransientUnavailable(error) && !isRepeatGreetingTimeout(error)) {
@@ -182,6 +214,7 @@ public class GreetingRunner implements ApplicationRunner {
                 && !useRelay
                 && !useDetails
                 && !expectAuthorizationDenied
+                && authenticationFailureReason == null
                 && unwrapCompletionFailure(error) instanceof RpcTimeoutException;
     }
 

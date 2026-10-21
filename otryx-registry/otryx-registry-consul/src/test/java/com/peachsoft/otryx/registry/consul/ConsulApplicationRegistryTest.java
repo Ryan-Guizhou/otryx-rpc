@@ -2,30 +2,35 @@ package com.peachsoft.otryx.registry.consul;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
-import com.peachsoft.otryx.registry.ApplicationRegistry;
+import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
+import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
+import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
-import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.RegistryCapability;
+import com.peachsoft.otryx.registry.RegistryCredentials;
 import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.RegistrySecurityOptions;
+import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
-import java.util.List;
 import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -98,7 +103,7 @@ class ConsulApplicationRegistryTest {
 
     @Test
     void refusesMultipleAgentEndpointsToProtectLocalTtlLeases() {
-        RegistryOptions options = new RegistryOptions(
+        RegistryOptions options = RegistryOptions.trustedDevelopment(
                 java.util.List.of("http://127.0.0.1:8500", "http://127.0.0.1:8501"),
                 "environment-a", Map.of());
         assertThrows(IllegalArgumentException.class,
@@ -115,7 +120,7 @@ class ConsulApplicationRegistryTest {
     @Test
     void fixedPollingIntervalRejectsBusyLoopsAndUnboundedDelay() {
         for (String interval : List.of("0", "199", "60001")) {
-            RegistryOptions options = new RegistryOptions(List.of("http://127.0.0.1:8500"),
+            RegistryOptions options = RegistryOptions.trustedDevelopment(List.of("http://127.0.0.1:8500"),
                     application().namespace(), Map.of("consulPollIntervalMillis", interval));
             assertThrows(IllegalArgumentException.class,
                     () -> new ConsulApplicationRegistryFactory().create(options));
@@ -165,12 +170,12 @@ class ConsulApplicationRegistryTest {
     }
 
     private static RegistryOptions options(FakeAgent agent) {
-        return new RegistryOptions(
-                java.util.List.of(agent.endpoint()), "environment-a",
-                Map.of("consulToken", "test-acl-token",
-                        "consulTtlSeconds", "10",
-                        "consulHeartbeatSeconds", "1",
-                        "consulPollIntervalMillis", "200"));
+        return new RegistryOptions(List.of(agent.endpoint()), "environment-a",
+                Map.of("consulTtlSeconds", "10", "consulHeartbeatSeconds", "1",
+                        "consulPollIntervalMillis", "200"),
+                RpcObserver.noop(), RpcSecurityProfile.TRUSTED_DEVELOPMENT,
+                new RegistrySecurityOptions(Optional.empty(),
+                        RegistryCredentials.aclToken("test-acl-token".toCharArray())), Optional.empty());
     }
 
     private static ApplicationKey application() {

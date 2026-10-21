@@ -2,6 +2,7 @@ package com.peachsoft.otryx.registry.nacos;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -74,16 +75,22 @@ class NacosControlExecutorTest {
                             "error-test",
                             "test",
                             () -> {
-                                throw new AssertionError(
+                                AssertionError error = new AssertionError(
                                         "Unrecoverable callback failure");
+                                error.initCause(new IllegalStateException("private upstream detail"));
+                                error.addSuppressed(new IllegalStateException("private suppressed detail"));
+                                throw error;
                             });
             ExecutionException failure =
                     assertThrows(
                             ExecutionException.class,
                             () -> failed.get(2, TimeUnit.SECONDS));
-            assertInstanceOf(
-                    AssertionError.class,
+            IllegalStateException sanitized = assertInstanceOf(
+                    IllegalStateException.class,
                     failure.getCause());
+            assertEquals("Nacos control-plane operation failed", sanitized.getMessage());
+            assertNull(sanitized.getCause());
+            assertEquals(0, sanitized.getSuppressed().length);
 
             assertEquals(
                     "recovered",

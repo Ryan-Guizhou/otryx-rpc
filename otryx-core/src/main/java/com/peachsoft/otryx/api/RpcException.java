@@ -27,4 +27,18 @@ public class RpcException extends RuntimeException {
     public RpcException(String message, Throwable cause) {
         super(message, cause);
     }
+
+    /**
+     * 为受控框架异常设置原因与诊断附加信息边界。
+     *
+     * @param message 固定错误描述
+     * @param cause 原因，安全异常固定为 null
+     * @param enableSuppression 是否允许附加异常
+     * @param writableStackTrace 是否保留调用位置
+     */
+    protected RpcException(
+            String message, Throwable cause, boolean enableSuppression, boolean writableStackTrace) {
+        super(message, cause, enableSuppression, writableStackTrace);
+    }
+
 }

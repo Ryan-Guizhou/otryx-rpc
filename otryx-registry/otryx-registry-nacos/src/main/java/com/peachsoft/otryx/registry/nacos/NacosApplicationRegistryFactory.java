@@ -2,17 +2,26 @@ package com.peachsoft.otryx.registry.nacos;
 
 import com.alibaba.nacos.api.NacosFactory;
 import com.alibaba.nacos.api.PropertyKeyConst;
-import com.alibaba.nacos.api.config.ConfigService;
 import com.alibaba.nacos.api.naming.NamingService;
+import com.peachsoft.otryx.api.ApplicationKey;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
+import com.peachsoft.otryx.registry.CredentialKind;
+import com.peachsoft.otryx.registry.RegistryChannel;
 import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
+import com.peachsoft.otryx.registry.RegistrySecuritySupport;
 import com.peachsoft.otryx.spi.Extension;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * Nacos V2 Naming + Config 的应用级 SPI 工厂。
@@ -33,8 +42,8 @@ public final class NacosApplicationRegistryFactory implements ApplicationRegistr
     private static final String OPTION_GROUP = "nacosGroup";
     private static final String OPTION_CLUSTER = "nacosCluster";
     private static final String OPTION_MEMBER_HOST = "nacosMemberHost";
-    private static final String OPTION_USERNAME = "nacosUsername";
-    private static final String OPTION_PASSWORD = "nacosPassword";
+    private static final Set<String> ALLOWED_OPTIONS = Set.of(
+            OPTION_GROUP, OPTION_CLUSTER, OPTION_MEMBER_HOST);
     private static final String VALID_GROUP = "[A-Za-z0-9._:-]{1,128}";
     private static final String VALID_CLUSTER = "[A-Za-z0-9.-]{1,64}";
     static final String DEFAULT_ENDPOINT = "127.0.0.1:8848";
@@ -55,15 +64,13 @@ public final class NacosApplicationRegistryFactory implements ApplicationRegistr
     @Override
     public ApplicationRegistry create(RegistryOptions options) {
         Objects.requireNonNull(options, "options");
+        requireSecurity(options);
         List<String> endpoints = options.endpoints().isEmpty()
                 ? List.of(DEFAULT_ENDPOINT) : options.endpoints();
-        for (String endpoint : endpoints) {
-            if (endpoint.contains("@")) {
-                throw new IllegalArgumentException("Nacos endpoint must not embed credentials");
-            }
-        }
+        validateEndpoints(endpoints);
         String namespace = options.namespace().isBlank()
                 ? DEFAULT_NAMESPACE : options.namespace();
+        namespace = new ApplicationKey(namespace, "registry").namespace();
         String group = options.providerOption(OPTION_GROUP, DEFAULT_GROUP);
         String cluster = options.providerOption(OPTION_CLUSTER, DEFAULT_CLUSTER);
         if (!group.matches(VALID_GROUP) || !cluster.matches(VALID_CLUSTER)) {
@@ -78,45 +85,86 @@ public final class NacosApplicationRegistryFactory implements ApplicationRegistr
         }
         Properties props = clientProperties(options, endpoints, namespace);
         NamingService naming = null;
-        ConfigService config = null;
+        NacosConfigOperations config = null;
         try {
             naming = NacosFactory.createNamingService(props);
-            config = NacosFactory.createConfigService(props);
+            config = new NacosConfigClient(props);
             return new NacosApplicationRegistry(naming, config, namespace, group, cluster,
-                    host, options.observer());
+                    host, options.observer(), RegistrySecuritySupport.installed(
+                            options.security(), namespace, Optional.of(group),
+                            RegistryChannel.MEMBERSHIP, RegistryChannel.MANIFEST, RegistryChannel.MAPPING));
         } catch (Exception error) {
             if (config != null) {
                 try {
                     config.shutDown();
                 } catch (Exception cleanupFailure) {
-                    error.addSuppressed(cleanupFailure);
+                    // 仅清理已创建资源，不把外部清理异常加入可观测 cause/suppressed。
                 }
             }
             if (naming != null) {
                 try {
                     naming.shutDown();
                 } catch (Exception cleanupFailure) {
-                    error.addSuppressed(cleanupFailure);
+                    // 仅清理已创建资源，不把外部清理异常加入可观测 cause/suppressed。
                 }
             }
-            throw new IllegalStateException("Unable to create Nacos V2 control plane", error);
+            Throwable safe = NacosFailures.normalize(error);
+            if (safe instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new IllegalStateException("Unable to create Nacos V2 control plane");
         }
     }
 
     /** SDK 凭据只写入独立属性，不拼入端点、目录元数据或错误文本。 */
     static Properties clientProperties(RegistryOptions options, List<String> endpoints, String namespace) {
+        requireSecurity(options);
+        validateEndpoints(endpoints);
         Properties properties = new Properties();
         properties.setProperty(PropertyKeyConst.SERVER_ADDR, String.join(",", endpoints));
         properties.setProperty(PropertyKeyConst.NAMESPACE, namespace);
-        String username = options.providerOption(OPTION_USERNAME, "");
-        String password = options.providerOption(OPTION_PASSWORD, "");
-        if (!username.isBlank()) {
-            properties.setProperty(PropertyKeyConst.USERNAME, username);
-        }
-        if (!password.isBlank()) {
-            properties.setProperty(PropertyKeyConst.PASSWORD, password);
+        if (options.security().credentials().kind() == CredentialKind.USER_PASSWORD) {
+            properties.setProperty(PropertyKeyConst.USERNAME, options.security().credentials().username());
+            char[] password = options.security().credentials().password();
+            try {
+                properties.setProperty(PropertyKeyConst.PASSWORD, new String(password));
+            } finally {
+                Arrays.fill(password, '\0');
+            }
         }
         return properties;
+    }
+
+    /** 当前 SDK 登录 HTTP 与 gRPC TLS 尚无完整隔离证明，所有 TLS/Network 意图在 SDK 前拒绝。 */
+    static void requireSecurity(RegistryOptions options) {
+        RegistrySecuritySupport.requireOptions(options, ALLOWED_OPTIONS, false);
+        if (options.securityProfile() == RpcSecurityProfile.NETWORK_MTLS
+                || options.security().tls().isPresent()
+                || !(options.security().credentials().kind() == CredentialKind.NONE
+                || options.security().credentials().kind() == CredentialKind.USER_PASSWORD)) {
+            throw new RegistrySecurityException(RegistrySecurityFailure.UNSUPPORTED_PROTECTION);
+        }
+    }
+
+    private static void validateEndpoints(List<String> endpoints) {
+        if (endpoints.isEmpty() || endpoints.size() > 16) {
+            throw new IllegalArgumentException("Invalid Nacos endpoint count");
+        }
+        for (String endpoint : endpoints) {
+            if (endpoint == null || endpoint.length() > 2048 || endpoint.contains("@")
+                    || endpoint.contains("?") || endpoint.contains("#")
+                    || endpoint.startsWith("https:") || endpoint.contains("/")) {
+                throw new IllegalArgumentException("Invalid Nacos development endpoint");
+            }
+            try {
+                java.net.URI uri = java.net.URI.create("http://" + endpoint);
+                if (uri.getHost() == null || uri.getPort() < 1 || uri.getPort() > 65535) {
+                    throw new IllegalArgumentException("Invalid Nacos development endpoint");
+                }
+            } catch (IllegalArgumentException invalid) {
+                throw new IllegalArgumentException("Invalid Nacos development endpoint");
+            }
+        }
     }
 
     private static String detectMemberHost() {
@@ -127,7 +175,7 @@ public final class NacosApplicationRegistryFactory implements ApplicationRegistr
             }
             return host;
         } catch (UnknownHostException error) {
-            throw new IllegalStateException("Configure nacosMemberHost to the real local IP", error);
+            throw new IllegalStateException("Configure nacosMemberHost to the real local IP");
         }
     }
 }

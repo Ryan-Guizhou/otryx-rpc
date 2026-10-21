@@ -1,6 +1,19 @@
+spring:
+  config:
+    import: "configtree:${OTRYX_QUICKSTART_REGISTRY_CREDENTIALS_DIR}/"
+
 otryx:
   rpc:
     security-profile: NETWORK_MTLS
+    registry:
+      type: etcd
+      endpoints: ${OTRYX_QUICKSTART_REGISTRY_ENDPOINT}
+      namespace: ${OTRYX_QUICKSTART_NAMESPACE}
+      security:
+        tls:
+          trust-certificate-collection: ${OTRYX_QUICKSTART_REGISTRY_CA}
+        credentials:
+          kind: USER_PASSWORD
     codec:
       fory:
         mode: STRICT_ALLOWLIST
@@ -15,3 +28,20 @@ otryx:
         hostname-verification: true
         reload-interval: 30s
         expiry-warning-threshold: 7d
+        identity:
+          certificate-bindings:
+            - certificate-sha256: ${OTRYX_QUICKSTART_PROVIDER_SHA256}
+              application:
+                namespace: ${OTRYX_QUICKSTART_PROVIDER_BINDING_NAMESPACE:${OTRYX_QUICKSTART_NAMESPACE}}
+                application-name: ${OTRYX_QUICKSTART_PROVIDER_APPLICATION:otryx-quickstart-mtls-provider}
+              valid-until: ${OTRYX_QUICKSTART_BINDING_VALID_UNTIL}
+            - certificate-sha256: ${OTRYX_QUICKSTART_CONSUMER_SHA256}
+              application:
+                namespace: ${OTRYX_QUICKSTART_NAMESPACE}
+                application-name: ${OTRYX_QUICKSTART_CONSUMER_APPLICATION:otryx-quickstart-mtls-consumer}
+              valid-until: ${OTRYX_QUICKSTART_BINDING_VALID_UNTIL}
+            - certificate-sha256: ${OTRYX_QUICKSTART_CONSUMER_ROTATED_SHA256:${OTRYX_QUICKSTART_CONSUMER_SHA256}}
+              application:
+                namespace: ${OTRYX_QUICKSTART_NAMESPACE}
+                application-name: ${OTRYX_QUICKSTART_CONSUMER_APPLICATION:otryx-quickstart-mtls-consumer}
+              valid-until: ${OTRYX_QUICKSTART_BINDING_VALID_UNTIL}

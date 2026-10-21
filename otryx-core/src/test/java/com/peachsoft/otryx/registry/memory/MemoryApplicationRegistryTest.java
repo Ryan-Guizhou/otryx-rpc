@@ -15,8 +15,8 @@ import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
-import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.registry.ManifestSnapshotCache;
+import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.ServiceMappingCache;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
@@ -28,9 +28,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.CompletionException;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
@@ -171,7 +171,7 @@ class MemoryApplicationRegistryTest {
     void applicationRegistryFactoryMustResolveMemoryWithoutLegacySpi() {
         ApplicationRegistryFactory factory =
                 ExtensionLoader.getLoader(ApplicationRegistryFactory.class).getDefaultExtension();
-        try (var registry = factory.create(new RegistryOptions(List.of(), "production", Map.of()))) {
+        try (var registry = factory.create(RegistryOptions.trustedDevelopment(List.of(), "production", Map.of()))) {
             registry.registrar().orElseThrow().register(consumer(APP, "factory-consumer"))
                     .toCompletableFuture().join();
             assertEquals(1, registry.lookup(APP).toCompletableFuture().join().instances().size());

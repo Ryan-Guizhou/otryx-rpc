@@ -14,6 +14,8 @@ import com.peachsoft.otryx.api.ApplicationManifest;
 import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -64,8 +66,8 @@ class NacosApplicationManifestRepositoryTest {
         try (NacosControlExecutor executor = new NacosControlExecutor()) {
             CompletionException failure = assertThrows(CompletionException.class,
                     () -> repository(config, executor).publish(expected).toCompletableFuture().join());
-            assertInstanceOf(IllegalStateException.class, failure.getCause());
-            assertEquals("Nacos immutable Manifest revision collision", failure.getCause().getMessage());
+            assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                    assertInstanceOf(RegistrySecurityException.class, failure.getCause()).reason());
             assertEquals(1, config.publishes.get());
             assertEquals(3, config.reads.get());
         }
@@ -78,7 +80,9 @@ class NacosApplicationManifestRepositoryTest {
         try (NacosControlExecutor executor = new NacosControlExecutor()) {
             CompletionException failure = assertThrows(CompletionException.class,
                     () -> repository(config, executor).publish(manifest("demo.Catalog")).toCompletableFuture().join());
-            assertEquals(denied, failure.getCause());
+            assertEquals(RegistrySecurityFailure.AUTHORIZATION_REJECTED,
+                    assertInstanceOf(RegistrySecurityException.class, failure.getCause()).reason());
+            assertEquals(null, failure.getCause().getCause());
             assertEquals(1, config.publishes.get());
             assertEquals(2, config.reads.get());
         }
@@ -93,7 +97,8 @@ class NacosApplicationManifestRepositoryTest {
         try (NacosControlExecutor executor = new NacosControlExecutor()) {
             CompletionException failure = assertThrows(CompletionException.class,
                     () -> repository(config, executor).publish(expected).toCompletableFuture().join());
-            assertEquals("Nacos Config did not return an authoritative CAS MD5", failure.getCause().getMessage());
+            assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                    assertInstanceOf(RegistrySecurityException.class, failure.getCause()).reason());
             assertEquals(1, config.publishes.get());
             assertEquals(3, config.reads.get());
         }

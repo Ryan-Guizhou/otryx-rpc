@@ -271,7 +271,9 @@ class RegistryGenerationBoundaryTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         events = self.events()
         self.assertEqual(events[0]["kind"], "bootstrap")
-        endpoint, namespace, group = events[0]["args"]
+        self.assertEqual(len(events[0]["args"]), 4)
+        endpoint, namespace, group, security_profile = events[0]["args"]
+        self.assertEqual(security_profile, "TRUSTED_DEVELOPMENT")
         self.assertTrue(group.startswith("OTRYX_RPC_E2E_"), group)
         self.assertNotEqual(group, "OTRYX_RPC")
         self.assertEqual(namespace, "public")

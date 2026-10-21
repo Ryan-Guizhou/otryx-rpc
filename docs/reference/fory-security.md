@@ -1,22 +1,27 @@
-# Fory Native 安全模式与迁移（PR-B）
+# Fory Native 安全模式、能力与迁移
 
-> 状态：**1.0.0-SNAPSHOT：Spring 显式安全 Profile 与 Provider 身份授权已接入；程序化默认行为仍在迁移中。**
-> Wire v1 的 Payload 仍使用原有 Fory Native 编码、Codec ID 1、Object[] 参数形式；没有引入新的 Type ID 或变更固定协议头。
+> 适用版本：**1.0.0-SNAPSHOT**。Wire v1 Payload 保持 Fory Native 编码、Codec ID 1 与 `Object[]` 参数形式。
+> 本指南说明类型约束与资源门限；网络应用身份、有限授权和 Registry 安全链见 [安全指南](../security.md)。
 
-## 安全边界
+## 1. 选择模式与显式运行 Profile
 
-| 模式 | 用途 | 类过滤 |
+| Fory 模式 | 实际类型策略 | 使用边界 |
 |---|---|---|
-| TRUSTED_COMPATIBILITY | 既有可信应用平滑升级，默认值 | 保持既有可动态识别类型的语义，仅加资源限制 |
-| STRICT_ALLOWLIST | 生产配置，尤其是不完全可信的对端 | Fory 原生 AllowListChecker 严格拒绝未批准的类 |
+| `TRUSTED_COMPATIBILITY` | 保留可信场景的动态类型识别，并设置载荷、深度与估算内存门限 | 无参 `ForyRpcCodec` 的行为；不能满足 `NETWORK_MTLS` |
+| `STRICT_ALLOWLIST` | 安装 Fory 原生 `AllowListChecker` 的 STRICT 检查器，并校验本地契约 DTO | 网络接入使用的 Fory 配置；必须提供真实应用类型规则 |
 
-**注意：** TRUSTED_COMPATIBILITY 不是不可信数据的安全模式。TLS/mTLS 也不能替代反序列化类型约束。
+无参 Fory 构造器仍提供兼容 Codec，这不意味着 Core 会隐式以可信配置启动。
+Spring 和程序化 Core Builder 都必须显式选择 `RpcSecurityProfile`；省略或 `UNSPECIFIED` 会失败。
+`TRUSTED_DEVELOPMENT` 只适用于明确隔离并信任参与者的环境，TLS/mTLS 不能替代类型约束。
 
-## Spring Boot 接入
+## 2. 配置真实应用白名单
+
+以下是 **Codec 配置片段**，需与完整的 `NETWORK_MTLS` 身份、Registry 和 Provider 授权配置一起使用：
 
 ~~~yaml
 otryx:
   rpc:
+    security-profile: NETWORK_MTLS
     codec:
       fory:
         mode: STRICT_ALLOWLIST
@@ -28,76 +33,129 @@ otryx:
         max-payload-bytes: 16777216
 ~~~
 
-白名单要列出实际 RPC DTO 所在的应用包；不要使用 `*`、`java.*` 或 `jdk.*` 一类过宽规则。上例中的包名仅为占位，部署时必须改成真实契约包名。若缺少白名单或配置无效，启动失败。
+白名单应覆盖实际 RPC DTO，而非整个应用 classpath。
+上例包名是占位，必须替换为真实契约包。规则支持准确类名和应用包前缀，例如 `com.example.dto.*`。
+`*`、`java.*`、`javax.*`、`jdk.*`、`sun.*` 这些宽泛规则被拒绝；严格模式的空白名单也被拒绝。
+这不等于任意较窄规则都适合业务，应用仍须审核被允许类型的构造、字段和序列化行为。
 
-程序化配置示例：
+程序化创建同一 Codec：
 
 ~~~java
 ForyRpcCodec codec = new ForyRpcCodec(
-    ForyRpcSecurityOptions.strictAllowlist(
-        Set.of("com.example.contract.*", "com.example.dto.*")));
-RpcCodecRegistry registry = RpcCodecRegistry.of(codec);
+        ForyRpcSecurityOptions.strictAllowlist(
+                Set.of("com.example.contract.*", "com.example.dto.*")));
+RpcCodecRegistry codecs = RpcCodecRegistry.of(codec);
 ~~~
 
-## 资源限制
+该片段仅创建 Codec。Core Client/Server Builder 还必须设置明确 Profile、实际 Transport 和应用级控制面；
+网络 Provider 还须显式提供 `RpcAuthorizer`。
+`strictAllowlist(...)` 工厂给出的深度为 32、估算图内存为 64 MiB、Payload 为 16 MiB。
+Spring 的 `max-depth` 属性缺省值是 50，上例显式设为 32；以最终实际配置为准。
 
-- max-payload-bytes：在 Fory 反序列化前检查输入区间，编码后也检查输出。
-- max-depth：使用 Fory 内置 `withMaxDepth` 限制反序列化嵌套层数。
-- max-graph-memory-bytes：使用 Fory 的对象图内存**估算**门限，不是 JVM 堆硬上限，不涵盖所有叶子对象及序列化临时分配。
-- Transport `max-frame-bytes` 仍然是独立限制；必须同步规划解码和帧的上限，建议 Payload 不高于 Frame 能容纳的范围。
+实现依据：[Fory 配置值对象][fory-options]、[实际 Codec 构造][fory-codec]。
 
-## 兼容迁移顺序
+## 3. 检查所有实际 Codec 与方法绑定
 
-1. 保持当前可信内网实例为 TRUSTED_COMPATIBILITY；先升级并校验滚动兼容。
-2. 统计真实 RPC 方法涉及的 DTO 类型，显式维护允许的应用类和包。
-3. 在隔离环境开启 STRICT_ALLOWLIST，运行字段结构、数组、集合、参数、返回值和滚动兼容性测试。
-4. 双方完成验证后，分批启用 STRICT_ALLOWLIST，保留单独的回退开关。不要将兼容模式当作永久生产安全保障。
+安全准入使用 Core 的 `RpcCodecSecurityDescriptor`，不按 Fory 类名或 Codec ID 硬编码放行。
+`NETWORK_MTLS` 对运行注册表中的**每个** Codec，以及方法绑定后实际使用的 `RpcMethodCodec`，要求：
 
-## U07 可达 DTO 类型模型（当前实施）
+| 能力 | 接受条件 |
+|---|---|
+| 类型策略 | `EXPLICIT_ALLOWLIST` 或 `REGISTERED_CONTRACT_TYPES` |
+| 声明契约检查 | `validatesDeclaredContractTypes=true`，在绑定阶段校验实际方法类型 |
+| 解码前载荷检查 | `validatesPayloadBeforeDecode=true`，在对象反序列化之前检查输入 |
+| 资源门限 | 正的 `maxPayloadBytes`、`maxDepth`、`maxEstimatedGraphMemoryBytes` |
+| Codec ID | 绑定后的 ID 与注册 ID 一致；Transport 实际启用的 ID 集合与注册表一致 |
 
-`RpcContractTypeModel.reachableTypes(RpcMethodDescriptor)` 从 RPC 方法参数和返回类型出发，发现自定义 DTO 的 record component、普通非静态/非 transient 字段、数组、泛型容器参数与继承父类类型，并为 `RpcTypeRegistry.register(descriptor)` 补充可达类的稳定身份与碰撞检测。
+默认未知 descriptor、兼容 Codec、额外注册但未满足要求的 Codec、
+根 Codec 安全但方法绑定返回未知或较弱能力，都会使网络准入失败。
+自定义 Codec 可以实现同一能力契约；它必须真实执行声明的限制，并提供相应回归证据。
+只构造一份安全 descriptor 不会自动安装类型检查器。
 
-Fory 的严格模式在 `bind(descriptor)` 阶段校验这些**静态声明**的应用 DTO 是否全部被 `allowed-class-patterns` 覆盖，不满足则 fail-fast；实际报文中的未知多态子类仍由 Fory `AllowListChecker` 在解码时验证，不能从字段类型 `Object` 自动推断可接受的运行时子类。
+Fory 的 descriptor 在创建时根据**实际安装**的严格检查器和资源设置冻结。
+根 Codec 与它返回的方法 Codec 使用同一份不可变描述；读取描述不会重建 Fory 或执行 IO。
+兼容模式实际报告 `TRUSTED_COMPATIBILITY`，不能通过包装配置把它提升为严格模式。
 
-**区别：** `RpcTypeIds` 与本类型图依旧只负责框架侧稳定 ID 与方法绑定校验，**不会调用 Fory 类注册接口，更不会修改 Wire v1/Codec ID 1/Object[] 的原生 Fory Payload**。
+实现依据：[Codec 能力结构][codec-descriptor]、[Core 准入检查][core-checks]。
 
-注解处理器增加真实 `JavaCompiler` 验证：继承/重载方法能够生成 Stub，而泛型方法、嵌套契约会给出诊断；Generated/JDK fallback 的 null 返回与异常终态有成对测试。当前自动处理器没有无限制支持通配符/自由类型变量或任意多态 Object，它们仍需设计明确的允许类型范围。
+## 4. 静态契约与运行时类型分别验证
 
-## 测试准入
+`RpcContractTypeModel.reachableTypes(RpcMethodDescriptor)` 从方法参数和返回值开始，
+分析 record component、普通非静态/非 transient 字段、数组、泛型容器参数和继承类型。
+`RpcTypeRegistry.register(descriptor)` 使用可达类型进行框架侧稳定身份与冲突检查。
 
-- [ ] 兼容模式对旧 Fory Payload 读写正常
-- [ ] 严格模式允许预期 DTO、阻止未知类
-- [ ] 拒绝超限 Payload、异常深对象图、过大集合/对象图
-- [ ] 旧新 Consumer/Provider 独立 JVM 滚动兼容
-- [ ] CI 完整通过，安全模式高负载下的吞吐与尾延迟有单独证据
+Fory 严格模式在 `bind(descriptor)` 时验证可达的应用 DTO 是否被白名单覆盖，缺失则立即失败。
+对于 `Object` 字段或多态基类，静态类型图不能推导全部运行时子类；
+实际 Payload 中的应用类型仍由 Fory `AllowListChecker` 检查。
+请求参数和响应返回值均经过这一实际 Codec，因此双方都要维护自己的可信类型范围。
 
-没有测到的性能与安全性质不得当作已验证事实。
+这些框架侧 Type ID 与方法绑定校验不会把 Wire 改成 Fory 类注册编码，
+也不会把原来的 `Object[]` 参数表示改成逐参数的新 Payload。
+当前 API 可达类型、继承或泛型设计应以 [契约类型模型][contract-types] 为准，
+不要从一次静态绑定成功推断任意多态图都可安全解码。
 
-## U05 Spring 安全意图与解码前授权
+## 5. 资源限制的实际时点
 
-Spring Boot 现在要求显式指定 `otryx.rpc.security-profile`；未指定或值为
-`UNSPECIFIED` 时启动失败。`TRUSTED_DEVELOPMENT` 为隔离开发的显式许可；
-`NETWORK_MTLS` 强制 `otryx.rpc.transport.security.mode=MTLS` 和
-`otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST`，并要求实际应用 DTO 白名单。
+| 设置 | 执行时点 | 不能据此宣称的保证 |
+|---|---|---|
+| `max-payload-bytes` | 解码前检查长度与 slice 区间；序列化完成后检查输出长度 | 编码前分配不会超过该值 |
+| `max-depth` | Fory `withMaxDepth` 约束反序列化嵌套深度 | 对所有对象分配给出统一内存上限 |
+| `max-graph-memory-bytes` | Fory `withMaxGraphMemoryBytes` 使用对象图内存估算门限 | JVM heap、DirectMemory、全部叶子对象和临时分配的硬上限 |
+| Transport `max-frame-bytes` | 独立检查 Wire Frame 大小 | 一个合法小 Frame 的解码图必然很小 |
 
-Provider 由 Vert.x TLS 握手后的 `peerCertificates()` 获取已验证客户端证书主体与
-SHA-256 指纹。TLS 单向模式与明文连接一律为匿名；Metadata（包括伪造身份字段）
-不会提升连接身份。解码请求对象之前调用非阻塞 `RpcAuthorizer.authorize`，
-其上下文提供 `RpcPeerIdentity`、`ServiceKey`、MethodId 和 Remote Address；
-业务可注入 Spring `RpcAuthorizer` Bean 进行服务及方法级授权。
-`NETWORK_MTLS` 的已验证身份前置检查不能被自定义 Bean 绕过。
+Payload 上限应与完整 Frame 的 header、Metadata 和 Transport 限制一起规划。
+Frame 字节数、授权等待字节数、已准入业务字节数和 Fory 图内存估算是不同的预算，不能互相替代。
+尤其是编码后拒绝超长结果时，Fory 已经执行了序列化分配。
 
-`otryx.rpc.server.authorization.max-pending`（默认 1024）限制真实未完成授权；
-`otryx.rpc.server.authorization.timeout`（默认 3s）控制逻辑超时。
-拒绝返回 Wire v1 现有的非重试状态 `BAD_REQUEST`，容量耗尽返回 `OVERLOADED`，
-不添加新 Wire 状态。超时不意味着第三方策略停止，因此槽位在实际 Stage
-完成时才归还。授权代码不得在 EventLoop 上阻塞，若访问数据库/外部服务
-必须使用自带容量治理的异步客户端或有界执行器。
+**#141** 才负责后续覆盖实际分配的硬预算与握手前资源准入。
+本次 `maxEstimatedGraphMemoryBytes` 的名字和能力描述明确保留“估算”边界，
+不能用它声明已经解决所有恶意对象图、序列化暂存或握手前内存耗尽问题。
 
-**程序化边界**：无参 `ForyRpcCodec` 和部分既有 Core Builder 仍以可信开发
-兼容行为启动；非可信网络接入须显式 `new ForyRpcCodec(strictAllowlist(...))`
-和 Provider `authorizer(...)`，不能单独依赖此 Spring 安全 Profile。
+## 6. 身份与授权先于业务 DTO 解码
 
-授权队列还受 `server.authorization.max-buffered-request-bytes`（默认 64MiB）
-约束，以防多连接大 Frame 在应用层授权等待阶段绕过 Provider 的已准入
-请求字节预算；逻辑授权完成后额外检查剩余 Deadline，再进入业务解码。
+Provider 使用实际 mTLS 连接叶证书的完整 DER SHA-256，在受控绑定表中匹配
+`ApplicationKey(namespace, applicationName)` 和有限期限。
+Subject、仅公钥指纹、远端地址和请求 Metadata 不授予应用身份。
+绑定、证书和原始单调时间共同约束身份，重用或恢复 TLS session 不重置有效期。
+
+`NETWORK_MTLS` Provider 缺少显式授权器时启动失败。
+授权器返回 `CompletionStage<RpcAuthorizationDecision>`，使用 `deny()` 或 `allowUntil(Instant)`；
+许可由原请求接收时刻、请求 deadline、对端身份期限及配置的最大许可期共同限制。
+Core 在受控的有界 worker 调用第三方策略方法体，不在 EventLoop 上直接执行该回调。
+
+授权拒绝、异常、null 或许可在排队中到期，都不进入 Fory DTO 解码。
+跨请求队列后和实际解码前重新检查；解码完成后、业务方法调用前也再次检查许可。
+Consumer 对响应则在解码前及解码完成后交付前验证同一响应连接的 peer，
+避免有效响应排队到过期后仍交付成功。
+
+逻辑超时或取消不能证明第三方策略停止。
+已运行授权工作必须等到方法体退出且原始 Stage 实际终止才释放并发槽位，
+未运行的自有任务可以明确放弃；Frame 字节预算按逻辑授权终态回收。
+这类工作所有权与 Fory 解码预算是独立控制，详细默认值和关闭行为见 [安全指南](../security.md)。
+
+认证异常是固定、无原始 cause 的 `RpcAuthenticationException`，Core 不重试且中性结算端点统计。
+方法授权拒绝使用 Wire v1 的 `BAD_REQUEST`，容量不足为 `OVERLOADED`，原请求超时为 `DEADLINE_EXCEEDED`。
+这些结果不要求先解码不可信业务 DTO。
+
+## 7. 迁移与验证
+
+1. 为双方声明明确的安全 Profile。隔离开发可显式选择 `TRUSTED_DEVELOPMENT`；网络接入选择 `NETWORK_MTLS`。
+2. 清点请求、响应和动态子类的实际 DTO，配置有限范围的白名单；先解决绑定阶段缺失类型。
+3. 为本机和对端准备完整叶证书应用绑定、正常 CA/hostname 验证、有限授权策略和独立 Registry 安全链。
+4. 核对实际注册的所有 Codec 与方法 Codec 能力，避免额外 SPI 扩展留下未知解码路径。
+5. 在隔离环境验证严格模式、超限拒绝、业务权限、身份过期、队列边界和 Consumer/Provider 互操作。
+
+迁移失败应修正 DTO 规则、实际能力或信任配置；`NETWORK_MTLS` 不提供回退到兼容 Codec 的开关。
+既有可信开发模式可以单独验证，但不能用它替代网络安全验收。
+
+[Fory 单元回归][fory-tests] 覆盖严格类型允许/拒绝、载荷/深度限制、方法绑定和根/方法 descriptor 一致性。
+它不能单独证明真实 mTLS、跨 JVM 滚动互操作、Registry 权限、高负载吞吐或尾延迟。
+这些门禁必须有对应准确提交的独立报告；整体状态见 [工程检查点](../engineering/agent-governance-checkpoint.md)，
+本指南不把局部回归写成完整端到端验收 GREEN。
+
+[fory-options]: ../../otryx-serialization/otryx-serialization-fory/src/main/java/com/peachsoft/otryx/codec/fory/ForyRpcSecurityOptions.java
+[fory-codec]: ../../otryx-serialization/otryx-serialization-fory/src/main/java/com/peachsoft/otryx/codec/fory/ForyRpcCodec.java
+[codec-descriptor]: ../../otryx-core/src/main/java/com/peachsoft/otryx/codec/RpcCodecSecurityDescriptor.java
+[core-checks]: ../../otryx-core/src/main/java/com/peachsoft/otryx/core/RpcSecurityChecks.java
+[contract-types]: ../../otryx-core/src/main/java/com/peachsoft/otryx/api/RpcContractTypeModel.java
+[fory-tests]: ../../otryx-serialization/otryx-serialization-fory/src/test/java/com/peachsoft/otryx/codec/fory/ForyRpcCodecTest.java

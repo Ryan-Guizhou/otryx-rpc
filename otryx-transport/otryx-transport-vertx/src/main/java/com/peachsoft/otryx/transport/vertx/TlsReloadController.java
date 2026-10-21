@@ -2,7 +2,6 @@ package com.peachsoft.otryx.transport.vertx;
 
 import io.vertx.core.Context;
 import io.vertx.core.Future;
-import io.vertx.core.net.SSLOptions;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -25,16 +24,17 @@ import java.util.function.Supplier;
  * 终止可能忽略中断的文件系统调用。
  *
  * @param <S> 不可变 TLS 材料状态快照类型
+ * @param <M> 与状态一起验证的不可变材料及能力描述类型
  * @Author OpenAI
  * @Version 1.0.0-SNAPSHOT
  * @CreateTime 2026/10/12 14:33
  */
-final class TlsReloadController<S> implements AutoCloseable {
+final class TlsReloadController<S, M> implements AutoCloseable {
 
     private final Context publicationContext;
     private final Supplier<S> stateReader;
-    private final Function<S, SSLOptions> materialPreparer;
-    private final Function<SSLOptions, Future<?>> publisher;
+    private final Function<S, M> materialPreparer;
+    private final Function<M, Future<?>> publisher;
     private final BiConsumer<Long, Throwable> completionObserver;
     private final ThreadPoolExecutor worker;
     private final AtomicBoolean inFlight = new AtomicBoolean();
@@ -54,8 +54,8 @@ final class TlsReloadController<S> implements AutoCloseable {
     TlsReloadController(
             Context publicationContext,
             Supplier<S> stateReader,
-            Function<S, SSLOptions> materialPreparer,
-            Function<SSLOptions, Future<?>> publisher,
+            Function<S, M> materialPreparer,
+            Function<M, Future<?>> publisher,
             BiConsumer<Long, Throwable> completionObserver) {
         this(
                 publicationContext,
@@ -80,8 +80,8 @@ final class TlsReloadController<S> implements AutoCloseable {
             Context publicationContext,
             S initialSuccessfulState,
             Supplier<S> stateReader,
-            Function<S, SSLOptions> materialPreparer,
-            Function<SSLOptions, Future<?>> publisher,
+            Function<S, M> materialPreparer,
+            Function<M, Future<?>> publisher,
             BiConsumer<Long, Throwable> completionObserver) {
         this.lastSuccessfulState = initialSuccessfulState;
         this.publicationContext = Objects.requireNonNull(
@@ -136,7 +136,7 @@ final class TlsReloadController<S> implements AutoCloseable {
                 return;
             }
 
-            SSLOptions prepared = Objects.requireNonNull(
+            M prepared = Objects.requireNonNull(
                     materialPreparer.apply(current), "TLS reload options");
             // 材料可能在读出状态与构建 SSL 配置之间被覆盖，必须重新核实。
             if (!Objects.equals(current, stateReader.get())) {
@@ -158,7 +158,7 @@ final class TlsReloadController<S> implements AutoCloseable {
             long revision,
             long startedAtNanos,
             S current,
-            SSLOptions prepared) {
+            M prepared) {
         if (isStale(revision)) {
             inFlight.set(false);
             return;

@@ -63,7 +63,12 @@ jobs:
         run: python3 scripts/test_quickstart_layout.py
 
       - name: Verify Quickstart snapshot and process orchestration failure contracts
-        run: python3 scripts/test_quickstart_scenarios.py
+        run: |
+          python3 scripts/test_quickstart_scenarios.py
+          python3 scripts/test_quickstart_security_runner.py
+          python3 scripts/test_quickstart_security_snapshots.py
+          python3 scripts/test_etcd_security_fixture.py
+          python3 scripts/test_owned_process_group.py
 
       - name: Verify squash-safe merged branch cleanup
         run: python3 scripts/test_cleanup_merged_branches.py
@@ -191,8 +196,63 @@ jobs:
       - name: Verify two application Manifest revisions and rollback
         run: bash scripts/run_quickstart_revision_e2e.sh
 
+      - name: Prepare pinned Etcd for isolated TLS and permission scenarios
+        shell: bash
+        run: |
+          fixture_container="$(docker create --entrypoint /usr/local/bin/etcd gcr.io/etcd-development/etcd:v3.5.21 --version)"
+          trap 'docker rm "$fixture_container" >/dev/null' EXIT
+          docker cp "$fixture_container:/usr/local/bin/etcd" "$RUNNER_TEMP/otryx-etcd-3.5.21"
+          chmod 700 "$RUNNER_TEMP/otryx-etcd-3.5.21"
+          printf 'ETCD_BINARY=%s\n' "$RUNNER_TEMP/otryx-etcd-3.5.21" >> "$GITHUB_ENV"
+
+      - name: Verify actual Registry TLS, scoped roles and security invalidation
+        run: |
+          mkdir -p target/quickstart-e2e/registry-security
+          python3 scripts/etcd_security_fixture.py --self-test \
+            --evidence target/quickstart-e2e/registry-security/tls-rbac-fixture.json -- \
+            mvn -B -ntp -pl otryx-registry/otryx-registry-etcd -am \
+              -Dtest=EtcdRegistrySecurityIT -Dsurefire.failIfNoSpecifiedTests=false package
+
+      - name: Verify Registry client certificate and backend credential boundaries
+        run: |
+          python3 scripts/etcd_security_fixture.py --require-client-cert --self-test \
+            --evidence target/quickstart-e2e/registry-security/client-certificate-fixture.json -- \
+            mvn -B -ntp -pl otryx-registry/otryx-registry-etcd -am \
+              -Dtest=EtcdRegistryClientCertificateIT -Dsurefire.failIfNoSpecifiedTests=false package
+
       - name: Verify mTLS identities and service authorization
         run: bash scripts/run_quickstart_mtls_e2e.sh
+
+      - name: Verify actual Registry security test counters
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          reports = Path('otryx-registry/otryx-registry-etcd/target/surefire-reports')
+          expected = {'EtcdRegistrySecurityIT': 9, 'EtcdRegistryClientCertificateIT': 2}
+          counters = {}
+          for name, count in expected.items():
+              suite = ET.parse(reports / f'TEST-com.peachsoft.otryx.registry.etcd.{name}.xml').getroot()
+              actual = {key: int(suite.attrib[key]) for key in ('tests', 'failures', 'errors', 'skipped')}
+              assert actual == {'tests': count, 'failures': 0, 'errors': 0, 'skipped': 0}, (name, actual)
+              counters[name] = actual
+          Path('target/quickstart-e2e/registry-security/java-test-counters.json').write_text(
+              json.dumps(counters, indent=2) + '\n', encoding='utf-8')
+          PY
+
+      - name: Upload original protected Registry integration test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-security-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            otryx-registry/otryx-registry-etcd/target/surefire-reports/*EtcdRegistrySecurityIT.*
+            otryx-registry/otryx-registry-etcd/target/surefire-reports/*EtcdRegistryClientCertificateIT.*
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Upload Quickstart application snapshots and scenario outcomes
         if: always()

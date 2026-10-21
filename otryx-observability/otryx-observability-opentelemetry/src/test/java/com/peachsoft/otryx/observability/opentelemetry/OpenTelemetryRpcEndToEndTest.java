@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.observability.opentelemetry;
 
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -75,6 +76,7 @@ class OpenTelemetryRpcEndToEndTest {
                     .getDefaultExtension();
             OpenTelemetryRpcTracingBridge bridge = new OpenTelemetryRpcTracingBridge(openTelemetry);
             try (OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                     .applicationMembership(provider)
                     .transportServer(transportFactory.createServer(RpcTransportOptions.DEFAULT))
                     .codecRegistry(codecs)
@@ -85,6 +87,7 @@ class OpenTelemetryRpcEndToEndTest {
                     .registerService(GreetingService.class, new GreetingServiceImpl(), "1.0.0", "default")) {
                 server.start().toCompletableFuture().get(3, TimeUnit.SECONDS);
                 try (OtryxRpcClient client = OtryxRpcClient.builder()
+                .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                         .applicationControlPlane(resolver, consumer, NAMESPACE)
                         .transportClient(transportFactory.createClient(RpcTransportOptions.DEFAULT))
                         .codecRegistry(codecs)

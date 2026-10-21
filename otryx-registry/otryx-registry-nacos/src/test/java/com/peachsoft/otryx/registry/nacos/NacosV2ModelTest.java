@@ -13,7 +13,10 @@ import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -91,9 +94,10 @@ class NacosV2ModelTest {
         String key = NacosV2MappingCodec.identifier(owner);
         String bytes = NacosV2MappingCodec.encode(Map.of(key, original));
         assertEquals(original, NacosV2MappingCodec.decode(bytes, APP.namespace(), shard).get(key));
-        assertThrows(IllegalArgumentException.class,
-                () -> NacosV2MappingCodec.decode(bytes, APP.namespace(),
-                        (shard + 1) % NacosV2Names.MAPPING_SHARDS));
+        assertEquals(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH,
+                assertThrows(RegistrySecurityException.class,
+                        () -> NacosV2MappingCodec.decode(bytes, APP.namespace(),
+                                (shard + 1) % NacosV2Names.MAPPING_SHARDS)).reason());
         assertThrows(IllegalArgumentException.class,
                 () -> NacosV2MappingCodec.decode(bytes + "x", APP.namespace(), shard));
     }
@@ -147,13 +151,58 @@ class NacosV2ModelTest {
         wildcard.setIp("0.0.0.0");
         assertThrows(IllegalArgumentException.class,
                 () -> NacosV2InstanceMapper.decode(APP, CLUSTER, wildcard));
-        assertThrows(IllegalArgumentException.class,
-                () -> NacosV2InstanceMapper.decode(new ApplicationKey("foreign", APP.applicationName()),
-                        CLUSTER, encodedProvider()));
+        assertEquals(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH,
+                assertThrows(RegistrySecurityException.class,
+                        () -> NacosV2InstanceMapper.decode(new ApplicationKey("foreign", APP.applicationName()),
+                                CLUSTER, encodedProvider())).reason());
         assertThrows(IllegalArgumentException.class,
                 () -> NacosV2InstanceMapper.encode(new ApplicationInstance("wildcard", APP,
                         ApplicationRole.PROVIDER, new RpcEndpoint("0.0.0.0", 19101), 100,
                         "sha256:" + "a".repeat(64), Map.of()), CLUSTER, "127.0.0.1", "token"));
+    }
+
+
+    @Test
+    void declaredV2MetadataCannotBecomeHealthyEmptyByRemovingOwnershipFields() {
+        for (String field : List.of("token", "cluster")) {
+            Instance source = encodedProvider();
+            Map<String, String> fields = new java.util.HashMap<>(source.getMetadata());
+            fields.remove(NacosV2Names.METADATA_PREFIX + field);
+            source.setMetadata(fields);
+            assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                    assertThrows(RegistrySecurityException.class,
+                            () -> NacosV2InstanceMapper.decode(APP, CLUSTER, source)).reason());
+        }
+    }
+
+    @Test
+    void unhealthyStatusCannotHideForeignOwnership() {
+        Instance source = encodedProvider();
+        source.setHealthy(false);
+        assertEquals(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH,
+                assertThrows(RegistrySecurityException.class,
+                        () -> NacosV2InstanceMapper.decode(new ApplicationKey("foreign", APP.applicationName()),
+                                CLUSTER, source)).reason());
+    }
+
+    @Test
+    void oversizedAndMalformedUtf8MemberMetadataMustFailClosed() {
+        Instance source = encodedProvider();
+        Map<String, String> fields = new java.util.HashMap<>(source.getMetadata());
+        fields.put("extra", "x".repeat(8193));
+        source.setMetadata(fields);
+        assertEquals(RegistrySecurityFailure.RESPONSE_LIMIT_EXCEEDED,
+                assertThrows(RegistrySecurityException.class,
+                        () -> NacosV2InstanceMapper.decode(APP, CLUSTER, source)).reason());
+        Instance malformed = encodedProvider();
+        fields = new java.util.HashMap<>(malformed.getMetadata());
+        String invalidKey = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(new byte[] {(byte) 0xc3, 0x28});
+        fields.put(NacosV2Names.METADATA_PREFIX + "attribute." + invalidKey, "value");
+        malformed.setMetadata(fields);
+        assertEquals(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED,
+                assertThrows(RegistrySecurityException.class,
+                        () -> NacosV2InstanceMapper.decode(APP, CLUSTER, malformed)).reason());
     }
 
     @Test

@@ -5,6 +5,7 @@ import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.RpcTypeRegistry;
 import com.peachsoft.otryx.codec.RpcCodec;
 import com.peachsoft.otryx.codec.RpcCodecIds;
+import com.peachsoft.otryx.codec.RpcCodecSecurityDescriptor;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
 import com.peachsoft.otryx.spi.Extension;
 import java.nio.ByteBuffer;
@@ -40,6 +41,7 @@ public final class ForyRpcCodec implements RpcCodec {
             new RpcTypeRegistry();
     private final ThreadSafeFory fory;
     private final ForyRpcSecurityOptions securityOptions;
+    private final RpcCodecSecurityDescriptor securityDescriptor;
 
     /** 创建与原有 Wire v1 报文格式兼容的 Fory 编解码器。 */
     public ForyRpcCodec() {
@@ -68,6 +70,26 @@ public final class ForyRpcCodec implements RpcCodec {
             builder.withTypeChecker(checker);
         }
         fory = builder.buildThreadSafeFory();
+        boolean strict = securityOptions.mode() == ForyRpcSecurityOptions.Mode.STRICT_ALLOWLIST;
+        securityDescriptor = new RpcCodecSecurityDescriptor(
+                strict
+                        ? RpcCodecSecurityDescriptor.TypePolicy.EXPLICIT_ALLOWLIST
+                        : RpcCodecSecurityDescriptor.TypePolicy.TRUSTED_COMPATIBILITY,
+                strict,
+                true,
+                securityOptions.maxPayloadBytes(),
+                securityOptions.maxDepth(),
+                securityOptions.maxGraphMemoryBytes());
+    }
+
+    /**
+     * 返回已安装的类型检查器和解码预算，不执行 IO 或重新构建 Fory。
+     *
+     * @return 本 Codec 及其方法绑定共同使用的不可变能力；对象图额度是估算预算
+     */
+    @Override
+    public RpcCodecSecurityDescriptor securityDescriptor() {
+        return securityDescriptor;
     }
 
     /**
@@ -172,6 +194,11 @@ public final class ForyRpcCodec implements RpcCodec {
 
     private final class ForyMethodCodec
             implements RpcMethodCodec {
+
+        @Override
+        public RpcCodecSecurityDescriptor securityDescriptor() {
+            return securityDescriptor;
+        }
 
         @Override
         public byte codecId() {

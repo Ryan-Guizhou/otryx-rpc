@@ -8,18 +8,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationRole;
+import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
+import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
 import com.peachsoft.otryx.registry.ApplicationRegistryListener;
+import com.peachsoft.otryx.registry.RegistryCapability;
+import com.peachsoft.otryx.registry.RegistryCredentials;
+import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.RegistrySecurityOptions;
 import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.ServiceMappingOwnerSnapshot;
 import com.peachsoft.otryx.registry.http.HttpRegistryClient;
 import com.peachsoft.otryx.registry.memory.MemoryApplicationRegistry;
-import com.peachsoft.otryx.registry.RegistryCapability;
-import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.spi.ExtensionLoader;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -28,8 +32,9 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
-import java.util.Map;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -149,13 +154,13 @@ class EurekaApplicationRegistryTest {
     }
 
     private static RegistryOptions options(FakeEureka backend) {
-        return new RegistryOptions(
-                java.util.List.of(backend.endpoint()), "environment-a",
-                Map.of("eurekaUsername", "test-user",
-                        "eurekaPassword", "test-password",
-                        "eurekaLeaseSeconds", "9",
-                        "eurekaHeartbeatSeconds", "1",
-                        "eurekaPollIntervalMillis", "200"));
+        return new RegistryOptions(java.util.List.of(backend.endpoint()), "environment-a",
+                Map.of("eurekaLeaseSeconds", "9", "eurekaHeartbeatSeconds", "1",
+                        "eurekaPollIntervalMillis", "200"),
+                RpcObserver.noop(), RpcSecurityProfile.TRUSTED_DEVELOPMENT,
+                new RegistrySecurityOptions(Optional.empty(),
+                        RegistryCredentials.userPassword("test-user", "test-password".toCharArray())),
+                Optional.empty());
     }
 
     private static ApplicationKey application() {

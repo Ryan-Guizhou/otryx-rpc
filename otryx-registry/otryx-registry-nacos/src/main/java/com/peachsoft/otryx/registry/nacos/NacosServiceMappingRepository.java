@@ -2,11 +2,12 @@ package com.peachsoft.otryx.registry.nacos;
 
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
-import com.peachsoft.otryx.registry.ServiceMappingRepository;
-import com.peachsoft.otryx.registry.ServiceMappingCandidateSource;
 import com.peachsoft.otryx.registry.ServiceMappingOwnerSnapshot;
+import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import com.peachsoft.otryx.registry.ServiceMappingSnapshot;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -50,6 +51,12 @@ public final class NacosServiceMappingRepository implements ServiceMappingReposi
         this.store = Objects.requireNonNull(store, "store");
         this.executor = Objects.requireNonNull(executor, "executor");
         this.namespace = Objects.requireNonNull(namespace, "namespace");
+    }
+
+    /** 返回同一实际 Config 客户端的保护来源。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return store.securityDescriptor();
     }
 
     /** 通过持久化 Config CAS 颁发同实例单调 fencing generation。 */

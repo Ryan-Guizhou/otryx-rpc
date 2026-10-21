@@ -9,6 +9,8 @@ import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.registry.ApplicationManifestRepository;
 import com.peachsoft.otryx.registry.ApplicationRegistrar;
+import com.peachsoft.otryx.registry.RegistryChannel;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
 import com.peachsoft.otryx.registry.ServiceMappingOwner;
 import com.peachsoft.otryx.registry.ServiceMappingRepository;
 import java.time.Duration;
@@ -96,6 +98,27 @@ public final class ApplicationMembershipCoordinator implements AutoCloseable {
         this.timeoutMillis = Math.max(1L, timeout.toMillis());
         this.instanceId = new ApplicationInstance(
                 instanceId, application, ApplicationRole.CONSUMER, null, 0, null, Map.of()).instanceId();
+    }
+
+    /**
+     * 返回本协调器实际注册的完整应用身份，不从其他配置重新合成。
+     *
+     * @return 不可变本机应用身份
+     */
+    public ApplicationKey application() {
+        return application;
+    }
+
+    /**
+     * 聚合实际成员、Manifest 和 Mapping 组件的所有来源；不执行 IO 或调度。
+     *
+     * @return 保留复合来源的不可变描述
+     */
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return RegistrySecurityDescriptor.combine(
+                RegistrySecurityDescriptor.from(registrar, RegistryChannel.MEMBERSHIP),
+                RegistrySecurityDescriptor.from(manifests, RegistryChannel.MANIFEST),
+                RegistrySecurityDescriptor.from(mappings, RegistryChannel.MAPPING));
     }
 
     /**

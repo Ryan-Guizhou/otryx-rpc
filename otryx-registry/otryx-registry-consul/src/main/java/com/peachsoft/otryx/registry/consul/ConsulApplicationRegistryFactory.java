@@ -2,11 +2,14 @@ package com.peachsoft.otryx.registry.consul;
 
 import com.peachsoft.otryx.registry.ApplicationRegistry;
 import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
+import com.peachsoft.otryx.registry.CredentialKind;
 import com.peachsoft.otryx.registry.RegistryOptions;
+import com.peachsoft.otryx.registry.RegistrySecuritySupport;
 import com.peachsoft.otryx.spi.Extension;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Consul 应用级 Registry SPI 工厂，同时提供成员目录与可信元数据。
@@ -25,12 +28,15 @@ public final class ConsulApplicationRegistryFactory implements ApplicationRegist
     public static final String EXTENSION_NAME = "consul";
     private static final String DEFAULT_ENDPOINT = "http://127.0.0.1:8500";
     private static final String DEFAULT_NAMESPACE = "default";
-    private static final String OPTION_TOKEN = "consulToken";
     private static final String OPTION_TTL_SECONDS = "consulTtlSeconds";
     private static final String OPTION_HEARTBEAT_SECONDS = "consulHeartbeatSeconds";
     private static final String OPTION_POLL_MILLIS = "consulPollIntervalMillis";
     private static final String OPTION_TIMEOUT_MILLIS = "consulRequestTimeoutMillis";
     private static final String OPTION_ENTERPRISE_NAMESPACE = "consulEnterpriseNamespace";
+    private static final Set<String> ALLOWED_OPTIONS = Set.of(
+            OPTION_TTL_SECONDS, OPTION_HEARTBEAT_SECONDS, OPTION_POLL_MILLIS,
+            OPTION_TIMEOUT_MILLIS, OPTION_ENTERPRISE_NAMESPACE);
+    private static final Set<CredentialKind> CREDENTIALS = Set.of(CredentialKind.NONE, CredentialKind.ACL_TOKEN);
     private static final int DEFAULT_TTL_SECONDS = 30;
     private static final int MIN_TTL_SECONDS = 10;
     private static final int MAX_TTL_SECONDS = 3600;
@@ -51,8 +57,10 @@ public final class ConsulApplicationRegistryFactory implements ApplicationRegist
     @Override
     public ApplicationRegistry create(RegistryOptions options) {
         Objects.requireNonNull(options, "options");
+        RegistrySecuritySupport.requireOptions(options, ALLOWED_OPTIONS, false);
         List<String> endpoints = options.endpoints().isEmpty()
                 ? List.of(DEFAULT_ENDPOINT) : options.endpoints();
+        RegistrySecuritySupport.requireTransport(options, endpoints, CREDENTIALS);
         if (endpoints.size() != 1) {
             throw new IllegalArgumentException("Consul V2 requires exactly one local Agent endpoint");
         }
@@ -68,7 +76,7 @@ public final class ConsulApplicationRegistryFactory implements ApplicationRegist
         ConsulV2Identity identity = new ConsulV2Identity(namespace);
         ConsulV2Client client = new ConsulV2Client(
                 endpoints.getFirst(),
-                options.providerOption(OPTION_TOKEN, ""),
+                options.security(), namespace,
                 options.providerOption(OPTION_ENTERPRISE_NAMESPACE, ""),
                 Duration.ofMillis(timeout));
         ConsulV2Executor executor = new ConsulV2Executor();
@@ -88,7 +96,7 @@ public final class ConsulApplicationRegistryFactory implements ApplicationRegist
         try {
             value = Integer.parseInt(options.providerOption(key, Integer.toString(fallback)));
         } catch (NumberFormatException invalid) {
-            throw new IllegalArgumentException("Invalid Consul numeric setting: " + key, invalid);
+            throw new IllegalArgumentException("Invalid Consul numeric setting: " + key);
         }
         if (value < minimum || value > maximum) {
             throw new IllegalArgumentException("Consul numeric setting out of range: " + key);

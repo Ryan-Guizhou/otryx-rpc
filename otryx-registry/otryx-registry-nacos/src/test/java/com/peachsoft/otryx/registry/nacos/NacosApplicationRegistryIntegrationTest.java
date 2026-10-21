@@ -15,8 +15,8 @@ import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.ServiceKey;
-import com.peachsoft.otryx.registry.ApplicationRegistryContractTestKit;
 import com.peachsoft.otryx.registry.ApplicationDirectorySnapshot;
+import com.peachsoft.otryx.registry.ApplicationRegistryContractTestKit;
 import com.peachsoft.otryx.registry.ApplicationRegistryFactory;
 import com.peachsoft.otryx.registry.RegistryOptions;
 import com.peachsoft.otryx.registry.RegistrySubscription;
@@ -54,7 +54,7 @@ class NacosApplicationRegistryIntegrationTest {
         ApplicationRegistryFactory factory = ExtensionLoader.getLoader(
                 ApplicationRegistryFactory.class).getExtension("nacos");
         assertEquals(NacosApplicationRegistryFactory.class, factory.getClass());
-        assertThrows(IllegalArgumentException.class, () -> factory.create(new RegistryOptions(
+        assertThrows(IllegalArgumentException.class, () -> factory.create(RegistryOptions.trustedDevelopment(
                 List.of("admin:secret@127.0.0.1:8848"), "public", Map.of())));
     }
 
@@ -88,7 +88,7 @@ class NacosApplicationRegistryIntegrationTest {
         String endpoint = System.getenv("NACOS_TEST_ENDPOINT");
         NamingService raw = com.alibaba.nacos.api.NacosFactory.createNamingService(
                 NacosApplicationRegistryFactory.clientProperties(
-                        new RegistryOptions(List.of(endpoint), "public", Map.of()),
+                        RegistryOptions.trustedDevelopment(List.of(endpoint), "public", Map.of()),
                         List.of(endpoint), "public"));
         try {
             ApplicationRegistryContractTestKit.verify("nacos", "public", 10, () -> registry(group),
@@ -275,7 +275,7 @@ class NacosApplicationRegistryIntegrationTest {
     private static void bootstrap(String group) {
         String endpoint = System.getenv("NACOS_TEST_ENDPOINT");
         assumeTrue(endpoint != null && !endpoint.isBlank(), "NACOS_TEST_ENDPOINT is required");
-        NacosV2MetadataBootstrap.initialize(new RegistryOptions(
+        NacosV2MetadataBootstrap.initialize(RegistryOptions.trustedDevelopment(
                 List.of(endpoint), "public", Map.of("nacosGroup", group)));
     }
 
@@ -287,7 +287,7 @@ class NacosApplicationRegistryIntegrationTest {
         String endpoint = System.getenv("NACOS_TEST_ENDPOINT");
         assumeTrue(endpoint != null && !endpoint.isBlank(), "NACOS_TEST_ENDPOINT is required");
         return (NacosApplicationRegistry) new NacosApplicationRegistryFactory().create(
-                new RegistryOptions(List.of(endpoint), "public", Map.of(
+                RegistryOptions.trustedDevelopment(List.of(endpoint), "public", Map.of(
                         "nacosGroup", group, "nacosCluster", cluster,
                         "nacosMemberHost", "127.0.0.1")));
     }

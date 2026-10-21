@@ -130,6 +130,17 @@ public final class RpcCodecRegistry {
         return defaultCodec;
     }
 
+    /**
+     * 读取每个实际 Codec 的有效安全描述，保留全部可协商路径。
+     *
+     * @return 不可变 Codec ID 到实际描述的映射
+     */
+    public Map<Byte, RpcCodecSecurityDescriptor> securityDescriptors() {
+        Map<Byte, RpcCodecSecurityDescriptor> descriptors = new HashMap<>();
+        byCode.forEach((id, codec) -> descriptors.put(id, codec.securityDescriptor()));
+        return Map.copyOf(descriptors);
+    }
+
     private static void register(Map<Byte, RpcCodec> codecs, RpcCodec codec) {
         RpcCodecIds.validateApplicationCodec(codec.code());
         RpcCodec previous = codecs.putIfAbsent(codec.code(), codec);

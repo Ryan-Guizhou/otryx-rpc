@@ -102,7 +102,7 @@ final class NacosControlExecutor implements AutoCloseable {
                     if (error instanceof InterruptedException) {
                         Thread.currentThread().interrupt();
                     }
-                    result.completeExceptionally(error);
+                    result.completeExceptionally(NacosFailures.normalize(error));
                 }
             });
         } catch (RuntimeException error) {
@@ -112,7 +112,7 @@ final class NacosControlExecutor implements AutoCloseable {
                                     + operation
                                     + ", subject="
                                     + subject,
-                            error));
+                            null));
         }
         return result;
     }

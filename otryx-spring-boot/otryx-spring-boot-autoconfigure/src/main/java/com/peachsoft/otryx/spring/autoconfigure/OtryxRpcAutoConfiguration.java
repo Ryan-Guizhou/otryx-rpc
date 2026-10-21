@@ -1,6 +1,7 @@
 package com.peachsoft.otryx.spring.autoconfigure;
 
 import com.peachsoft.otryx.api.ApplicationKey;
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.fory.ForyRpcCodec;
 import com.peachsoft.otryx.codec.fory.ForyRpcSecurityOptions;
@@ -33,12 +34,14 @@ import com.peachsoft.otryx.transport.RpcTransportFactory;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
 import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import com.peachsoft.otryx.transport.RpcTransportSecurityOptions;
+import com.peachsoft.otryx.transport.RpcTransportIdentityOptions;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.core.env.Environment;
@@ -88,6 +91,12 @@ public class OtryxRpcAutoConfiguration {
     private static final String CONFIG_APPLICATION_NAME = "otryx.rpc.registry.application-name";
     private static final String SPRING_APPLICATION_NAME = "spring.application.name";
     private static final String DEFAULT_APPLICATION_NAMESPACE = "default";
+    private static final String DEFAULT_APPLICATION_IDENTITY_BEAN = "peachRpcApplicationIdentity";
+    private static final String DEFAULT_CODEC_REGISTRY_BEAN = "peachRpcCodecRegistry";
+    private static final String ETCD_REGISTRY_TYPE = "etcd";
+    private static final String NACOS_REGISTRY_TYPE = "nacos";
+    private static final String CONSUL_REGISTRY_TYPE = "consul";
+    private static final String EUREKA_REGISTRY_TYPE = "eureka";
     private static final Duration MAPPING_REFRESH_RETRY = Duration.ofMillis(200);
     private static final List<ConfigurationPropertyName> DELEGATED_PROPERTY_PREFIXES = List.of(
             ConfigurationPropertyName.of("otryx.rpc.observability"),
@@ -95,17 +104,12 @@ public class OtryxRpcAutoConfiguration {
     private static final String PROVIDER_OPTION_LEASE_TTL_SECONDS = "leaseTtlSeconds";
     private static final String PROVIDER_OPTION_NACOS_GROUP = "nacosGroup";
     private static final String PROVIDER_OPTION_NACOS_CLUSTER = "nacosCluster";
-    private static final String PROVIDER_OPTION_NACOS_USERNAME = "nacosUsername";
-    private static final String PROVIDER_OPTION_NACOS_PASSWORD = "nacosPassword";
     private static final String PROVIDER_OPTION_NACOS_MEMBER_HOST = "nacosMemberHost";
-    private static final String PROVIDER_OPTION_CONSUL_TOKEN = "consulToken";
     private static final String PROVIDER_OPTION_CONSUL_ENTERPRISE_NAMESPACE = "consulEnterpriseNamespace";
     private static final String PROVIDER_OPTION_CONSUL_TTL_SECONDS = "consulTtlSeconds";
     private static final String PROVIDER_OPTION_CONSUL_HEARTBEAT_SECONDS = "consulHeartbeatSeconds";
     private static final String PROVIDER_OPTION_CONSUL_POLL_INTERVAL_MILLIS = "consulPollIntervalMillis";
     private static final String PROVIDER_OPTION_CONSUL_REQUEST_TIMEOUT_MILLIS = "consulRequestTimeoutMillis";
-    private static final String PROVIDER_OPTION_EUREKA_USERNAME = "eurekaUsername";
-    private static final String PROVIDER_OPTION_EUREKA_PASSWORD = "eurekaPassword";
     private static final String PROVIDER_OPTION_EUREKA_LEASE_SECONDS = "eurekaLeaseSeconds";
     private static final String PROVIDER_OPTION_EUREKA_HEARTBEAT_SECONDS = "eurekaHeartbeatSeconds";
     private static final String PROVIDER_OPTION_EUREKA_POLL_INTERVAL_MILLIS = "eurekaPollIntervalMillis";
@@ -127,6 +131,7 @@ public class OtryxRpcAutoConfiguration {
      * <p>不提前实例化用户的 lazy Bean。观测 Adapter 与
      * Quickstart 独立拥有的配置子树交由对应模块校验；其余配置用实际属性模型
      * 严格试绑定。试绑定不调用初始化钩子，也不创建 Registry 或 Transport。
+     * 默认应用身份复用实际 Bean 的名称和实例 ID 校验，预检不生成进程实例 ID。
      *
      * @param environment 当前应用的属性源及占位符解析器
      * @return 无网络副作用的启动校验器
@@ -134,19 +139,46 @@ public class OtryxRpcAutoConfiguration {
     @Bean
     public static BeanFactoryPostProcessor peachRpcApplicationConfigurationValidator(Environment environment) {
         return beanFactory -> {
-            validateConfigurationKeys(environment);
+            OtryxRpcProperties properties = validateConfigurationKeys(environment);
+            if (!properties.isEnabled()) {
+                return;
+            }
+            OtryxRpcStartupDiagnostics.validateExplicitProfile(properties);
+            if (properties.getSecurityProfile() == RpcSecurityProfile.NETWORK_MTLS
+                    && properties.getServer().isEnabled()
+                    && beanFactory.getBeanNamesForType(RpcAuthorizer.class, true, false).length == 0) {
+                throw new IllegalStateException("NETWORK_MTLS requires an explicit RpcAuthorizer bean");
+            }
+            OtryxRpcStartupDiagnostics.validate(properties);
+            if (beanFactory.containsBeanDefinition(DEFAULT_CODEC_REGISTRY_BEAN)) {
+                var definition = beanFactory.getBeanDefinition(DEFAULT_CODEC_REGISTRY_BEAN);
+                String factory = definition.getFactoryBeanName();
+                if (DEFAULT_CODEC_REGISTRY_BEAN.equals(definition.getFactoryMethodName())
+                        && factory != null && beanFactory.getType(factory, false) == OtryxRpcAutoConfiguration.class) {
+                    OtryxRpcStartupDiagnostics.validateDefaultCodecProfile(properties);
+                }
+            }
+            if (beanFactory.containsBeanDefinition(DEFAULT_APPLICATION_IDENTITY_BEAN)) {
+                var definition = beanFactory.getBeanDefinition(DEFAULT_APPLICATION_IDENTITY_BEAN);
+                String factory = definition.getFactoryBeanName();
+                if (DEFAULT_APPLICATION_IDENTITY_BEAN.equals(definition.getFactoryMethodName())
+                        && factory != null && beanFactory.getType(factory, false) == OtryxRpcAutoConfiguration.class) {
+                    validateDefaultIdentity(properties.getRegistry(), environment);
+                }
+            }
         };
     }
 
-    private static void validateConfigurationKeys(Environment environment) {
+    private static OtryxRpcProperties validateConfigurationKeys(Environment environment) {
         List<ConfigurationPropertySource> sources = new ArrayList<>();
         ConfigurationPropertySources.get(environment).forEach(source -> sources.add(source.filter(name ->
                 DELEGATED_PROPERTY_PREFIXES.stream().noneMatch(prefix ->
                         prefix.equals(name) || prefix.isAncestorOf(name)))));
         Binder binder = new Binder(sources, new PropertySourcesPlaceholdersResolver(environment));
         try {
-            binder.bind(PROPERTY_PREFIX, Bindable.of(OtryxRpcProperties.class),
-                    new NoUnboundElementsBindHandler(BindHandler.DEFAULT));
+            return binder.bind(PROPERTY_PREFIX, Bindable.of(OtryxRpcProperties.class),
+                    new NoUnboundElementsBindHandler(BindHandler.DEFAULT))
+                    .orElseGet(OtryxRpcProperties::new);
         } catch (BindException failure) {
             Throwable cause = failure;
             while (cause.getCause() != null && !(cause instanceof UnboundConfigurationPropertiesException)) {
@@ -159,7 +191,8 @@ public class OtryxRpcAutoConfiguration {
                         + ". Check spelling and remove interface-level registration settings; "
                         + "application-level registration uses " + CONFIG_APPLICATION_NAME);
             }
-            throw failure;
+            throw new IllegalStateException("Invalid OTRYX RPC configuration at "
+                    + failure.getName() + ": binding rejected");
         }
     }
 
@@ -168,51 +201,74 @@ public class OtryxRpcAutoConfiguration {
      *
      * @param properties 应用级 Registry Adapter 配置
      * @param observerProvider 控制面 Observer 提供器
+     * @param authorizerProvider 实际授权器，在默认 Registry 工厂之前检查缺失策略
      * @return Provider、Consumer、BOTH 共享的单一 Application Registry
      */
     @Bean(destroyMethod = DESTROY_METHOD_CLOSE)
     @ConditionalOnMissingBean
     public ApplicationRegistry peachRpcRegistry(
             OtryxRpcProperties properties,
-            ObjectProvider<RpcObserver> observerProvider) {
+            ObjectProvider<RpcObserver> observerProvider,
+            ObjectProvider<RpcAuthorizer> authorizerProvider) {
         OtryxRpcProperties.Registry registry = properties.getRegistry();
-        OtryxRpcStartupDiagnostics.validateRegistryBackend(registry);
+        if (properties.getSecurityProfile() == RpcSecurityProfile.NETWORK_MTLS
+                && properties.getServer().isEnabled() && authorizerProvider.getIfAvailable() == null) {
+            throw new IllegalStateException("NETWORK_MTLS requires an explicit RpcAuthorizer bean");
+        }
+        OtryxRpcStartupDiagnostics.validateRegistryBackend(registry, properties.getSecurityProfile());
         ApplicationRegistryFactory factory = requireExtension(
                 ApplicationRegistryFactory.class, CONFIG_REGISTRY_TYPE, registry.getType());
-        Map<String, String> opts = new HashMap<>();
-        opts.put(PROVIDER_OPTION_LEASE_TTL_SECONDS, Long.toString(registry.getLeaseTtlSeconds()));
-        opts.put(PROVIDER_OPTION_NACOS_GROUP, registry.getNacos().getGroup());
-        opts.put(PROVIDER_OPTION_NACOS_CLUSTER, registry.getNacos().getCluster());
-        opts.put(PROVIDER_OPTION_NACOS_USERNAME, registry.getNacos().getUsername());
-        opts.put(PROVIDER_OPTION_NACOS_PASSWORD, registry.getNacos().getPassword());
-        opts.put(PROVIDER_OPTION_NACOS_MEMBER_HOST, registry.getNacos().getMemberHost());
-        opts.put(PROVIDER_OPTION_CONSUL_TOKEN, registry.getConsul().getToken());
-        opts.put(PROVIDER_OPTION_CONSUL_ENTERPRISE_NAMESPACE,
-                registry.getConsul().getEnterpriseNamespace());
-        opts.put(PROVIDER_OPTION_CONSUL_TTL_SECONDS, Long.toString(registry.getConsul().getTtlSeconds()));
-        opts.put(PROVIDER_OPTION_CONSUL_HEARTBEAT_SECONDS,
-                Long.toString(registry.getConsul().getHeartbeatSeconds()));
-        opts.put(PROVIDER_OPTION_CONSUL_POLL_INTERVAL_MILLIS,
-                Long.toString(registry.getConsul().getPollIntervalMillis()));
-        opts.put(PROVIDER_OPTION_CONSUL_REQUEST_TIMEOUT_MILLIS,
-                Long.toString(registry.getConsul().getRequestTimeoutMillis()));
-        opts.put(PROVIDER_OPTION_EUREKA_USERNAME, registry.getEureka().getUsername());
-        opts.put(PROVIDER_OPTION_EUREKA_PASSWORD, registry.getEureka().getPassword());
-        opts.put(PROVIDER_OPTION_EUREKA_LEASE_SECONDS, Long.toString(registry.getEureka().getLeaseSeconds()));
-        opts.put(PROVIDER_OPTION_EUREKA_HEARTBEAT_SECONDS,
-                Long.toString(registry.getEureka().getHeartbeatSeconds()));
-        opts.put(PROVIDER_OPTION_EUREKA_POLL_INTERVAL_MILLIS,
-                Long.toString(registry.getEureka().getPollIntervalMillis()));
-        opts.put(PROVIDER_OPTION_EUREKA_REQUEST_TIMEOUT_MILLIS,
-                Long.toString(registry.getEureka().getRequestTimeoutMillis()));
-        opts.put(PROVIDER_OPTION_EUREKA_METADATA_BACKEND, registry.getEureka().getMetadataBackend());
-        opts.put(PROVIDER_OPTION_EUREKA_METADATA_ENDPOINTS, registry.getEureka().getMetadataEndpoints());
-        opts.put(PROVIDER_OPTION_EUREKA_MEMBER_HOST, registry.getEureka().getMemberHost());
-        registry.getEureka().getMetadataOptions().forEach((key, value) ->
-                opts.put(PROVIDER_OPTION_EUREKA_METADATA_PREFIX + key, value));
-        return factory.create(RegistryOptions.fromCsv(
-                registry.getEndpoints(), namespace(registry), opts,
-                RpcObserver.composite(observerProvider.orderedStream().toList())));
+        List<String> endpoints = RegistryOptions.fromCsv(
+                registry.getEndpoints(), namespace(registry), Map.of()).endpoints();
+        return factory.create(new RegistryOptions(endpoints, namespace(registry), registryProviderOptions(registry),
+                RpcObserver.composite(observerProvider.orderedStream().toList()),
+                properties.getSecurityProfile(), registry.getSecurity().toOptions(),
+                Optional.ofNullable(registry.getMetadataSecurity())
+                        .map(OtryxRpcRegistrySecurityProperties::toOptions)));
+    }
+
+    /** 只向实际选中的 Adapter 传递其非安全选项；Factory 仍独立校验所有键。 */
+    static Map<String, String> registryProviderOptions(OtryxRpcProperties.Registry registry) {
+        Map<String, String> options = new HashMap<>();
+        switch (registry.getType()) {
+            case ETCD_REGISTRY_TYPE -> options.put(
+                    PROVIDER_OPTION_LEASE_TTL_SECONDS, Long.toString(registry.getLeaseTtlSeconds()));
+            case NACOS_REGISTRY_TYPE -> {
+                options.put(PROVIDER_OPTION_NACOS_GROUP, registry.getNacos().getGroup());
+                options.put(PROVIDER_OPTION_NACOS_CLUSTER, registry.getNacos().getCluster());
+                options.put(PROVIDER_OPTION_NACOS_MEMBER_HOST, registry.getNacos().getMemberHost());
+            }
+            case CONSUL_REGISTRY_TYPE -> {
+                options.put(PROVIDER_OPTION_CONSUL_ENTERPRISE_NAMESPACE,
+                        registry.getConsul().getEnterpriseNamespace());
+                options.put(PROVIDER_OPTION_CONSUL_TTL_SECONDS, Long.toString(registry.getConsul().getTtlSeconds()));
+                options.put(PROVIDER_OPTION_CONSUL_HEARTBEAT_SECONDS,
+                        Long.toString(registry.getConsul().getHeartbeatSeconds()));
+                options.put(PROVIDER_OPTION_CONSUL_POLL_INTERVAL_MILLIS,
+                        Long.toString(registry.getConsul().getPollIntervalMillis()));
+                options.put(PROVIDER_OPTION_CONSUL_REQUEST_TIMEOUT_MILLIS,
+                        Long.toString(registry.getConsul().getRequestTimeoutMillis()));
+            }
+            case EUREKA_REGISTRY_TYPE -> {
+                options.put(PROVIDER_OPTION_EUREKA_LEASE_SECONDS,
+                        Long.toString(registry.getEureka().getLeaseSeconds()));
+                options.put(PROVIDER_OPTION_EUREKA_HEARTBEAT_SECONDS,
+                        Long.toString(registry.getEureka().getHeartbeatSeconds()));
+                options.put(PROVIDER_OPTION_EUREKA_POLL_INTERVAL_MILLIS,
+                        Long.toString(registry.getEureka().getPollIntervalMillis()));
+                options.put(PROVIDER_OPTION_EUREKA_REQUEST_TIMEOUT_MILLIS,
+                        Long.toString(registry.getEureka().getRequestTimeoutMillis()));
+                options.put(PROVIDER_OPTION_EUREKA_METADATA_BACKEND, registry.getEureka().getMetadataBackend());
+                options.put(PROVIDER_OPTION_EUREKA_METADATA_ENDPOINTS, registry.getEureka().getMetadataEndpoints());
+                options.put(PROVIDER_OPTION_EUREKA_MEMBER_HOST, registry.getEureka().getMemberHost());
+                registry.getEureka().getMetadataOptions().forEach((key, value) ->
+                        options.put(PROVIDER_OPTION_EUREKA_METADATA_PREFIX + key, value));
+            }
+            default -> {
+                // Memory and user adapters receive no unrelated built-in backend settings.
+            }
+        }
+        return Map.copyOf(options);
     }
 
     /**
@@ -227,6 +283,26 @@ public class OtryxRpcAutoConfiguration {
     public OtryxRpcApplicationIdentity peachRpcApplicationIdentity(
             OtryxRpcProperties properties, Environment environment) {
         OtryxRpcProperties.Registry registry = properties.getRegistry();
+        ApplicationKey application = defaultApplicationKey(registry, environment);
+        String id = registry.getInstanceId();
+        if (id == null || id.isBlank()) {
+            id = UUID.randomUUID().toString();
+        }
+        return new OtryxRpcApplicationIdentity(application, id);
+    }
+
+    /** 只校验明确配置的身份；缺省实例 ID 仍仅由正式 Bean 创建时生成。 */
+    private static void validateDefaultIdentity(OtryxRpcProperties.Registry registry, Environment environment) {
+        ApplicationKey application = defaultApplicationKey(registry, environment);
+        String id = registry.getInstanceId();
+        if (id != null && !id.isBlank()) {
+            new OtryxRpcApplicationIdentity(application, id);
+        }
+    }
+
+    /** 预检与正式 Bean 共用名称优先级、规范化和 Core 的 ApplicationKey 校验。 */
+    private static ApplicationKey defaultApplicationKey(
+            OtryxRpcProperties.Registry registry, Environment environment) {
         String name = registry.getApplicationName();
         if (name == null || name.isBlank()) {
             name = environment.getProperty(SPRING_APPLICATION_NAME, "");
@@ -235,11 +311,7 @@ public class OtryxRpcAutoConfiguration {
             throw new IllegalStateException(
                     "Configure " + SPRING_APPLICATION_NAME + " or " + CONFIG_APPLICATION_NAME);
         }
-        String id = registry.getInstanceId();
-        if (id == null || id.isBlank()) {
-            id = UUID.randomUUID().toString();
-        }
-        return new OtryxRpcApplicationIdentity(new ApplicationKey(namespace(registry), name), id);
+        return new ApplicationKey(namespace(registry), name);
     }
 
     private static String namespace(OtryxRpcProperties.Registry registry) {
@@ -336,6 +408,7 @@ public class OtryxRpcAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public RpcCodecRegistry peachRpcCodecRegistry(OtryxRpcProperties properties) {
+        OtryxRpcStartupDiagnostics.validateDefaultCodecProfile(properties);
         OtryxRpcProperties.ForySecurity security = properties.getCodec().getFory();
         ForyRpcSecurityOptions options = new ForyRpcSecurityOptions(
                 security.getMode(),
@@ -343,8 +416,10 @@ public class OtryxRpcAutoConfiguration {
                 security.getMaxDepth(),
                 security.getMaxGraphMemoryBytes(),
                 security.getMaxPayloadBytes());
-        return RpcCodecRegistry.fromSpi()
+        RpcCodecRegistry registry = RpcCodecRegistry.fromSpi()
                 .withReplacement(new ForyRpcCodec(options));
+        OtryxRpcStartupDiagnostics.reportDefaultCodec(security.getMode());
+        return registry;
     }
 
     /**
@@ -367,13 +442,15 @@ public class OtryxRpcAutoConfiguration {
      *
      * @param properties OTRYX RPC 配置
      * @param codecRegistry Codec 注册表
+     * @param identity 实际成员应用身份，禁止另设可漂移的 TLS 本地应用
      * @return Transport 运行参数
      */
     @Bean
     @ConditionalOnMissingBean
     public RpcTransportOptions peachRpcTransportOptions(
             OtryxRpcProperties properties,
-            RpcCodecRegistry codecRegistry) {
+            RpcCodecRegistry codecRegistry,
+            OtryxRpcApplicationIdentity identity) {
         OtryxRpcProperties.Transport transport = properties.getTransport();
         OtryxRpcProperties.Security security =
                 transport.getSecurity();
@@ -386,7 +463,10 @@ public class OtryxRpcAutoConfiguration {
                         security.isHostnameVerification(),
                         security.getHandshakeTimeout(),
                         security.getReloadInterval(),
-                        security.getExpiryWarningThreshold());
+                        security.getExpiryWarningThreshold(),
+                        security.getIdentity().getCertificateBindings().isEmpty() ? Optional.empty()
+                                : Optional.of(new RpcTransportIdentityOptions(identity.application(),
+                                        security.getIdentity().validatedBindings())));
         return new RpcTransportOptions(
                 transport.getMaxInflightPerConnection(),
                 transport.getMaxFrameBytes(),

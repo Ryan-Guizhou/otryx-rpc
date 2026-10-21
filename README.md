@@ -19,15 +19,15 @@
 **GitHub 仓库：** [Ryan-Guizhou/otryx-rpc](https://github.com/Ryan-Guizhou/otryx-rpc)。品牌商标、图片来源及 Maven Central Namespace 尚有外部验收条件，参见 [发布前核查](docs/publication-readiness.md)。
 · **Java：21** · **Spring Boot：3.5.4** · **Wire：v1** · **License：MIT**
 
-项目目前尚未正式发布，不对历史开发版提供 Java API、SPI、Wire、Schema 或配置兼容承诺；当前版本必须通过协议正确性、Consumer/Provider 互操作和安全验证。Spring Starter 必须显式选择安全部署意图：隔离开发选择 `TRUSTED_DEVELOPMENT`，网络环境选择 `NETWORK_MTLS`（mTLS、严格 Fory 白名单与方法授权）。Core 程序化入口仍须由使用者显式建立相应安全边界。工程规范参见[Java 编码规范](docs/engineering/java-coding-standard.md)。
+项目目前尚未正式发布，不对历史开发版提供 Java API、SPI、Wire、Schema 或配置兼容承诺；当前版本必须通过协议正确性、Consumer/Provider 互操作和安全验证。Spring Starter、Core Client/Server Builder 与 RegistryOptions 都必须显式选择安全 Profile：可信隔离开发使用 `TRUSTED_DEVELOPMENT`，网络部署使用 `NETWORK_MTLS`；默认 `UNSPECIFIED` 拒绝启动。网络 Profile 要求实际 mTLS 与应用绑定、安全 Codec、受保护的 Registry 通道和有限方法授权。工程规范参见[Java 编码规范](docs/engineering/java-coding-standard.md)。
 
 <!-- doc-section:capabilities -->
 ## 核心能力
 
 - **Unary RPC**：Generated Stub / Dispatcher 优先，JDK Proxy / MethodHandle fallback。
 - **Transport**：Vert.x TCP 长连接、连接分片、Heartbeat、Reconnect、CANCEL、GO_AWAY、Graceful Drain。
-- **Security**：PLAINTEXT / TLS / mTLS、证书校验、Hostname Verification 与证书 Reload。
-- **Registry**：Memory、Etcd、Nacos、Consul、Eureka；Consumer 热路径读取本地服务目录。
+- **Security**：显式部署 Profile、证书与完整应用身份绑定、Hostname Verification、证书 Reload、有限方法许可与实际 SPI 能力预检。
+- **Registry**：Memory、Etcd、Nacos、Consul、Eureka；Consumer 热路径读取本地验证目录。后端的网络安全支持范围按实际 Adapter 区分。
 - **Load Balancing**：P2C + EWMA、inflight 与静态权重。
 - **Resilience**：方法级/单次超时、父级单调 Deadline 预算传播、显式幂等 Retry、Retry Budget、Circuit Breaker、Outlier Ejection、Provider Admission。
 - **Execution**：Virtual Thread、CPU 有界资源；Fory Codec 与 Stable Type ID。
@@ -43,7 +43,9 @@
 
 **设计原则：** 控制面与数据面分离；可替换实现位于 Adapter/SPI；单次调用热路径不做注册中心 IO、SPI 扫描和动态解析。
 
-**应用级注册（#139 验收中）：** Core、唯一 Starter 和四模块 Quickstart 使用统一 Application 身份、Provider/Consumer/BOTH 共享成员生命周期、Manifest、实例 Owner CAS Mapping、Resolver 与有界缓存。纯 Consumer 真实入册但无 RPC Endpoint；ServiceKey 只表示业务契约，ServiceInstance 仅保留为本地 LB DTO。当前清理门禁拒绝过渡 SPI/路径/配置；四真实后端共享契约和 process/chain/revision 矩阵、完整五组 rolling 均须以准确 Head 实测验收，不能仅凭源码或脚本夹具宣布通过。[设计](docs/design/application-registry-v2.md) · [验收与计数口径](docs/reference/application-registry-acceptance.md)。
+**应用级注册（#139 已完成）：** [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 已合入 main `783bf8115c9523e5667023678dafe659315b2b66`，并完成该合并提交的 main 门禁核验。Core、唯一 Starter 和四模块 Quickstart 使用统一 Application 身份、Provider/Consumer/BOTH 共享成员生命周期、Manifest、实例 Owner CAS Mapping、Resolver 与有界缓存。纯 Consumer 真实入册但无 RPC Endpoint；ServiceKey 表示业务契约，ServiceInstance 是携带目标应用的本地负载均衡候选。过渡 SPI、注册路径和配置已清理。[设计](docs/design/application-registry-v2.md) · [验收与计数口径](docs/reference/application-registry-acceptance.md)。
+
+**安全契约与验收（#140）：** 本文描述显式安全模式、真实应用身份和受保护控制面的契约与使用入口。完整验证范围以 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) 及工程断点中记录的准确 PR Head、合并后 main 和原始证据为准。
 
 <!-- doc-section:compatibility -->
 ## 兼容性与迁移
@@ -69,15 +71,16 @@ Java 包名参与类型规范名、Method ID 和 Schema Fingerprint 计算，故
 
 Windows CMD/PowerShell 使用 `mvnw.cmd` 替代 `./mvnw`，无需预装全局 Maven。
 
-推荐从**无 Docker 的单 JVM Memory Quickstart**开始，继续学习 Nacos 应用成员与已验证路由、A→B→C 的 BOTH 角色和 Deadline、同一应用两个真实导出 revision 的升级/回滚，以及 mTLS 客户端指纹与方法授权。完整命令、JSON 字段和预期结果见 [Quickstart 教程](otryx-quickstart/README.md)；简版路线见 [快速入门](docs/getting-started.md)。
+推荐从**无 Docker 的单 JVM Memory Quickstart**开始，再学习共享 Registry 下的应用成员、已验证路由、A→B→C 的 BOTH 角色与 Deadline，以及同一应用两个真实导出 revision 的升级/回滚。独立 mTLS 路线使用受保护的 Etcd，演示证书到完整 ApplicationKey 的绑定、证书轮换和有限方法授权。完整命令、JSON 字段和预期结果见 [Quickstart 教程](otryx-quickstart/README.md)；简版路线见 [快速入门](docs/getting-started.md)。
 
-构建完成并准备好本地 Nacos、Bash、Python 3、GNU `timeout` 和 OpenSSL 后，可顺序运行全部场景：
+构建完成后，在 **Linux** 上为默认 process/chain/revision 场景准备本地 Nacos，并准备 Bash、Python 3、GNU `timeout`、OpenSSL 和 Etcd **3.5.21** 可执行文件，再顺序运行全部场景。Linux 是 mTLS 安全自动验收及此聚合入口的前置条件：
 
 ~~~bash
-NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
+ETCD_BINARY=/absolute/path/to/etcd \
+  NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
 ~~~
 
-Nacos 跨进程场景自动初始化各自独立 group。process、chain、revision 也支持真实 Etcd、Consul、Eureka；通过 `QUICKSTART_REGISTRY` 与 `QUICKSTART_REGISTRY_ENDPOINT` 选择，Eureka 另需 `QUICKSTART_EUREKA_METADATA_ENDPOINT` 指向真实 Consul。受限 JSON 和 `summary.log` 保存在 `target/quickstart-e2e/`，不包含临时私钥。命令结果只证明其实际覆盖范围；#139 的完整验收还须核对共享契约、Chaos、准确 Head CI 与合并后 main。参数见[应用级验收](docs/reference/application-registry-acceptance.md)，遥测示例和装配见 [Starter](docs/reference/starter.md)。
+默认的 process、chain、revision 各自初始化独立 Nacos group；它们也支持通过 `QUICKSTART_REGISTRY` 与 `QUICKSTART_REGISTRY_ENDPOINT` 选择真实 Etcd、Consul、Eureka，Eureka 另需 `QUICKSTART_EUREKA_METADATA_ENDPOINT` 指向真实 Consul。mTLS 脚本自行启动并清理 loopback Etcd TLS/RBAC 实例，使用独立的 RPC/Registry CA 与分角色凭据，无需 Nacos。受限 JSON 和 `summary.log` 保存在 `target/quickstart-e2e/`，不包含临时私钥或凭据。执行记录只证明对应提交的实际覆盖范围；完整结果需逐一核对真实场景和准确提交的 CI。参数见[应用级验收](docs/reference/application-registry-acceptance.md)，装配见 [Starter](docs/reference/starter.md)。
 
 <!-- doc-section:dependency -->
 ## Maven 坐标
@@ -114,11 +117,15 @@ otryx:
 
 `spring.application.name` 是默认应用身份；可用 `otryx.rpc.registry.application-name` 覆盖，均未配置时启动失败。`registry.control-plane-timeout` 独立于 `server.control-plane-timeout`，默认 `3s`，必须大于零且不超过 `30s`，约束共享成员操作和 Consumer 入册等待。未创建实际 Consumer/Provider 时不会产生虚构成员。
 
-实际网络部署必须显式选择 `NETWORK_MTLS`，同时配置双向 TLS、Fory 严格 DTO 白名单，并通过 `RpcAuthorizer` 对已验证证书身份按 ServiceKey/MethodId 授权；未提供授权器时 Provider 默认拒绝调用。未指定安全意图会在 Spring 启动阶段失败；开发示例的 `TRUSTED_DEVELOPMENT` 不适用于不可信网络，详见[安全指南](docs/security.md)。
+`NETWORK_MTLS` 把真实 TLS 叶证书的 SHA-256 绑定到完整 `ApplicationKey(namespace, applicationName)` 与有限期限，业务授权器再按来源应用、ServiceKey 和 MethodId 返回 `RpcAuthorizationDecision.allowUntil(Instant)` 或 `deny()`。有效许可不能超过证书、部署绑定、请求预算和服务端最大许可期限；CN/SAN、请求 Metadata 与 Registry attributes 不能代替应用绑定。
 
-已实现的应用级后端见 [Etcd](docs/reference/registry-etcd.md)、[Nacos V2](docs/reference/registry-nacos-v2.md)、[Consul V2](docs/reference/registry-consul-v2.md) 和 [Eureka V2](docs/reference/registry-eureka-v2.md)。Consul 使用单个本地 Agent；Eureka 负责应用成员，必须另外配置 Etcd/Nacos/Consul 元数据后端与地址。Starter 不回退到旧接口级 Adapter，也不提供双读双写模式。
+网络 Profile 且 `server.enabled=true` 时，缺少显式 `RpcAuthorizer` Bean 会在创建 Registry 工厂和 RPC 运行时前拒绝启动；纯 Consumer 应设置 `server.enabled=false`。Core Server Builder 执行相同的缺策略拒绝。Starter 还会在任一角色启动前验证已启用 Client/Server 的最终实际能力；默认 Fory 使用 `STRICT_ALLOWLIST`，自定义 Codec 则按契约类型检查、解码前校验及有限容量能力验收。详见 [Starter 安全配置](docs/reference/starter.md) 与[安全指南](docs/security.md)。
+
+已实现的应用级后端见 [Etcd](docs/reference/registry-etcd.md)、[Nacos V2](docs/reference/registry-nacos-v2.md)、[Consul V2](docs/reference/registry-consul-v2.md) 和 [Eureka V2](docs/reference/registry-eureka-v2.md)。网络 Profile 的 Etcd 使用明确 CA 与用户名密码，Consul 使用单个本地 Agent 的 HTTPS 与 ACL Token；Eureka 的成员链和外置元数据链分别配置。Spring 以 `registry.security` 和独立 `registry.metadata-security` 承载有类型 TLS/凭据，不能让已保护来源覆盖同通道中的弱来源。当前 Nacos Adapter 在创建 SDK 前拒绝 NETWORK/TLS 意图，可信开发仍可使用；Eureka 在网络 Profile 下也不能选择 Nacos 元数据链。Starter 保持唯一应用级路径。
 
 Nacos V2 的 Mapping 分片必须在所有应用启动前、同一 namespace/group 的独占维护窗口内初始化。Quickstart 提供独立初始化命令，跨进程验证脚本会为本轮独立 group 完成该步骤；参见 [Nacos 启动步骤](otryx-quickstart/README.md#2-第二条调用nacos-双独立-jvm)。
+
+Nacos 的 Manifest/Mapping 读取只接受远端查询结果及其权威 MD5，SDK 本地 Snapshot/Failover 不能成为新的成功快照或 CAS 基础。普通远端故障保留为不可用，Core 仅按既有有限 LKG 预算处理；真实认证、权限或完整性拒绝仍立即使旧安全快照失效。详见 [Nacos 元数据边界](docs/reference/registry-nacos-v2.md)。
 
 完整配置约束和 TLS/Nacos/Etcd 示例见 [Starter 文档](docs/reference/starter.md)、[生产配置](docs/configuration.md)。调用超时覆盖、作用域传播及 A→B→C 预算规则参见 [Deadline 与调用上下文](docs/reference/deadline-context.md)。
 
@@ -148,4 +155,4 @@ Nacos V2 的 Mapping 分片必须在所有应用启动前、同一 namespace/gro
 
 ## Registry Freshness / 服务发现可靠性
 
-Core 与 Spring Starter 的 `otryx.rpc.client.directory-max-staleness` 默认均为 `30s`，只接受严格正的有限预算；Registry **显式同步失败**且 LKG 超时后拒绝过期路由，安静的 Watch 不代表失联。Etcd、Nacos、Consul/Eureka 提供健康通知和有界恢复。状态语义、真实 Nacos 重启及四后端独立进程的验证边界见[目录新鲜度](docs/reference/registry-freshness.md)。
+Core 与 Spring Starter 的 `otryx.rpc.client.directory-max-staleness` 默认均为 `30s`，只接受严格正的有限预算。普通 Registry 同步失败可在预算内使用最后有效目录，安静的 Watch 不代表失联；认证、授权、TLS 或元数据完整性拒绝则立即使旧验证代次失效。每次发送前本地复核选中端点所属的同一候选，安全失败不重试、不累计 Endpoint 故障或更新延迟 EWMA。状态语义见[目录新鲜度](docs/reference/registry-freshness.md)与[当前安全边界](docs/reference/starter.md)。

@@ -9,7 +9,8 @@ import static org.mockito.Mockito.when;
 
 import com.peachsoft.otryx.api.ApplicationInstance;
 import com.peachsoft.otryx.api.ApplicationKey;
-import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcTarget;
+import com.peachsoft.otryx.transport.RpcTransportResponse;
 import com.peachsoft.otryx.core.ApplicationMembershipCoordinator;
 import com.peachsoft.otryx.core.OtryxRpcClient;
 import com.peachsoft.otryx.core.RpcShutdownOptions;
@@ -235,7 +236,7 @@ class OtryxRpcRuntimeMembershipTest {
             AtomicBoolean closed, CountDownLatch entered, CountDownLatch release) {
         return new RpcTransportClient() {
             @Override
-            public CompletionStage<byte[]> request(RpcEndpoint endpoint, byte[] frame, Duration timeout) {
+            public CompletionStage<RpcTransportResponse> request(RpcTarget target, byte[] frame, Duration timeout) {
                 return CompletableFuture.failedFuture(new AssertionError("No business RPC expected"));
             }
 

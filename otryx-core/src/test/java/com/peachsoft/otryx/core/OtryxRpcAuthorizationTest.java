@@ -6,6 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.peachsoft.otryx.api.OtryxRpcExecution;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.ApplicationKey;
+import com.peachsoft.otryx.api.RpcAuthorizationDecision;
+import com.peachsoft.otryx.api.RpcCertificateBinding;
 import com.peachsoft.otryx.api.RpcExecutionMode;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
@@ -18,6 +21,7 @@ import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportServer;
 import java.lang.reflect.Method;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -54,7 +58,9 @@ class OtryxRpcAuthorizationTest {
         TestCodec codec = new TestCodec();
         CountingService service = new CountingService();
         OtryxRpcServer server = server(transport, codec, service)
-                .authorizer(RpcAuthorizer.requireMutualTls())
+                .authorizer(context -> CompletableFuture.completedFuture(context.peer().authenticated()
+                        ? RpcAuthorizationDecision.allowUntil(context.maximumValidUntil())
+                        : RpcAuthorizationDecision.deny()))
                 .build();
         try {
             server.registerService(Api.class, service, "1.0.0", "default");
@@ -81,14 +87,15 @@ class OtryxRpcAuthorizationTest {
         CountingService service = new CountingService();
         ServiceKey key = serviceKey();
         int methodId = RpcIds.methodId(Api.class.getMethod("call"));
-        RpcPeerIdentity peer = RpcPeerIdentity.verifiedClientCertificate(
-                "CN=rpc-client", "cert-sha256-test");
+        RpcPeerIdentity peer = peer();
         OtryxRpcServer server = server(transport, codec, service)
                 .authorizer(context -> CompletableFuture.completedFuture(
                         context.serviceKey().equals(key)
                                 && context.methodId() == methodId
                                 && context.peer().equals(peer)
-                                && context.remote().equals(REMOTE)))
+                                && context.remote().equals(REMOTE)
+                                ? RpcAuthorizationDecision.allowUntil(context.maximumValidUntil())
+                                : RpcAuthorizationDecision.deny()))
                 .build();
         try {
             server.registerService(Api.class, service, "1.0.0", "default");
@@ -116,7 +123,7 @@ class OtryxRpcAuthorizationTest {
         TestTransport transport = new TestTransport();
         TestCodec codec = new TestCodec();
         CountingService service = new CountingService();
-        CompletableFuture<Boolean> unfinished = new CompletableFuture<>();
+        CompletableFuture<RpcAuthorizationDecision> unfinished = new CompletableFuture<>();
         OtryxRpcServer server = server(transport, codec, service)
                 .authorizer(context -> unfinished)
                 .maxPendingAuthorizations(1)
@@ -137,14 +144,14 @@ class OtryxRpcAuthorizationTest {
             assertEquals(0, codec.decodes.get());
             assertEquals(0, service.invocations.get());
 
-            unfinished.complete(true);
+            unfinished.complete(allow());
             byte[] accepted = transport.call(RpcPeerIdentity.anonymous(), request(Map.of()))
                     .toCompletableFuture().get(3, TimeUnit.SECONDS);
             assertEquals(RpcStatus.OK, RpcProtocolCodec.view(accepted).status());
             assertEquals(1, service.invocations.get());
             assertFalse(first.toCompletableFuture().isCancelled());
         } finally {
-            unfinished.complete(false);
+            unfinished.complete(RpcAuthorizationDecision.deny());
             server.close();
         }
     }
@@ -155,13 +162,13 @@ class OtryxRpcAuthorizationTest {
         TestTransport transport = new TestTransport();
         TestCodec codec = new TestCodec();
         CountingService service = new CountingService();
-        CompletableFuture<Boolean> firstPolicy = new CompletableFuture<>();
+        CompletableFuture<RpcAuthorizationDecision> firstPolicy = new CompletableFuture<>();
         AtomicInteger decisions = new AtomicInteger();
         byte[] fullRequest = request(Map.of());
         OtryxRpcServer server = server(transport, codec, service)
                 .authorizer(context -> decisions.incrementAndGet() == 1
                         ? firstPolicy
-                        : CompletableFuture.completedFuture(true))
+                        : CompletableFuture.completedFuture(allow()))
                 .maxPendingAuthorizations(2)
                 .maxPendingAuthorizationBytes(fullRequest.length)
                 .build();
@@ -171,6 +178,8 @@ class OtryxRpcAuthorizationTest {
 
             CompletionStage<byte[]> first =
                     transport.call(RpcPeerIdentity.anonymous(), fullRequest);
+            ApplicationTestControlPlane.await(() -> decisions.get() == 1,
+                    "The first policy body did not start");
             byte[] overBudget = transport.call(
                             RpcPeerIdentity.anonymous(), fullRequest)
                     .toCompletableFuture().get(3, TimeUnit.SECONDS);
@@ -180,7 +189,7 @@ class OtryxRpcAuthorizationTest {
             assertEquals(1, decisions.get());
             assertEquals(0, codec.decodes.get());
 
-            firstPolicy.complete(true);
+            firstPolicy.complete(allow());
             assertEquals(RpcStatus.OK, RpcProtocolCodec.view(
                     first.toCompletableFuture().get(3, TimeUnit.SECONDS)).status());
 
@@ -190,7 +199,7 @@ class OtryxRpcAuthorizationTest {
             assertEquals(RpcStatus.OK, RpcProtocolCodec.view(recovered).status());
             assertEquals(2, service.invocations.get());
         } finally {
-            firstPolicy.complete(false);
+            firstPolicy.complete(RpcAuthorizationDecision.deny());
             server.close();
         }
     }
@@ -201,13 +210,13 @@ class OtryxRpcAuthorizationTest {
         TestTransport transport = new TestTransport();
         TestCodec codec = new TestCodec();
         CountingService service = new CountingService();
-        CompletableFuture<Boolean> firstPolicy = new CompletableFuture<>();
+        CompletableFuture<RpcAuthorizationDecision> firstPolicy = new CompletableFuture<>();
         AtomicInteger decisions = new AtomicInteger();
         byte[] frame = request(Map.of());
         OtryxRpcServer server = server(transport, codec, service)
                 .authorizer(context -> decisions.incrementAndGet() == 1
                         ? firstPolicy
-                        : CompletableFuture.completedFuture(true))
+                        : CompletableFuture.completedFuture(allow()))
                 .maxPendingAuthorizations(2)
                 .maxPendingAuthorizationBytes(frame.length)
                 .authorizationTimeout(Duration.ofMillis(80))
@@ -232,7 +241,7 @@ class OtryxRpcAuthorizationTest {
             assertEquals(RpcStatus.OK, RpcProtocolCodec.view(recovered).status());
             assertEquals(1, service.invocations.get());
         } finally {
-            firstPolicy.complete(false);
+            firstPolicy.complete(RpcAuthorizationDecision.deny());
             server.close();
         }
     }
@@ -256,7 +265,7 @@ class OtryxRpcAuthorizationTest {
         TestTransport transport = new TestTransport();
         TestCodec codec = new TestCodec();
         CountingService service = new CountingService();
-        CompletableFuture<Boolean> authorization = new CompletableFuture<>();
+        CompletableFuture<RpcAuthorizationDecision> authorization = new CompletableFuture<>();
         OtryxRpcServer server = server(transport, codec, service)
                 .authorizer(context -> authorization)
                 .authorizationTimeout(Duration.ofSeconds(2))
@@ -275,14 +284,14 @@ class OtryxRpcAuthorizationTest {
             CompletionStage<byte[]> waiting = transport.call(
                     RpcPeerIdentity.anonymous(), request);
             Thread.sleep(100L);
-            authorization.complete(true);
+            authorization.complete(allow());
             byte[] denied = waiting.toCompletableFuture().get(3, TimeUnit.SECONDS);
             assertEquals(RpcStatus.DEADLINE_EXCEEDED,
                     RpcProtocolCodec.view(denied).status());
             assertEquals(0, codec.decodes.get());
             assertEquals(0, service.invocations.get());
         } finally {
-            authorization.complete(false);
+            authorization.complete(RpcAuthorizationDecision.deny());
             server.close();
         }
     }
@@ -293,7 +302,7 @@ class OtryxRpcAuthorizationTest {
         TestTransport transport = new TestTransport();
         TestCodec codec = new TestCodec();
         CountingService service = new CountingService();
-        CompletableFuture<Boolean> unfinished = new CompletableFuture<>();
+        CompletableFuture<RpcAuthorizationDecision> unfinished = new CompletableFuture<>();
         OtryxRpcServer server = server(transport, codec, service)
                 .authorizer(context -> unfinished)
                 .authorizationTimeout(Duration.ofSeconds(2))
@@ -322,7 +331,7 @@ class OtryxRpcAuthorizationTest {
             assertEquals(0, codec.decodes.get());
             assertEquals(0, service.invocations.get());
         } finally {
-            unfinished.complete(false);
+            unfinished.complete(RpcAuthorizationDecision.deny());
             server.close();
         }
     }
@@ -333,9 +342,10 @@ class OtryxRpcAuthorizationTest {
         TestTransport transport = new TestTransport();
         TestCodec codec = new TestCodec();
         AtomicReference<String> executedThread = new AtomicReference<>();
-        CompletableFuture<Boolean> authorization = new CompletableFuture<>();
+        CompletableFuture<RpcAuthorizationDecision> authorization = new CompletableFuture<>();
         DirectService implementation = new DirectServiceImpl(executedThread);
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(codec))
@@ -360,26 +370,27 @@ class OtryxRpcAuthorizationTest {
                     .get(2, TimeUnit.SECONDS);
             Thread completionThread = Thread.ofPlatform()
                     .name("foreign-auth-worker")
-                    .start(() -> authorization.complete(true));
+                    .start(() -> authorization.complete(allow()));
             completionThread.join(1000L);
             byte[] accepted = response.toCompletableFuture()
                     .get(2, TimeUnit.SECONDS);
             assertEquals(RpcStatus.OK, RpcProtocolCodec.view(accepted).status());
             assertEquals("otryx-test-eventloop", executedThread.get());
         } finally {
-            authorization.complete(false);
+            authorization.complete(RpcAuthorizationDecision.deny());
             server.close();
             eventLoop.shutdownNow();
         }
     }
 
     @Test
-    void subjectlessCertificateMustRemainAuthenticatedByFingerprint() {
-        RpcPeerIdentity sanOnly = RpcPeerIdentity
-                .verifiedClientCertificate("", "ab12cd34");
-        assertTrue(sanOnly.authenticated());
-        assertEquals("", sanOnly.principal());
-        assertEquals("ab12cd34", sanOnly.certificateSha256());
+    void certificateIdentityMustNotRequireOrExposeSubject() {
+        RpcPeerIdentity identity = peer();
+        assertTrue(identity.authenticated());
+        assertEquals(new ApplicationKey(ApplicationTestControlPlane.NAMESPACE, "consumer"),
+                identity.application().orElseThrow());
+        assertEquals("a".repeat(64), identity.certificateBinding().orElseThrow().certificateSha256());
+        assertFalse(identity.toString().contains("a".repeat(64)));
     }
 
     @Test
@@ -408,10 +419,22 @@ class OtryxRpcAuthorizationTest {
     private OtryxRpcServer.Builder server(
             TestTransport transport, TestCodec codec, CountingService service) {
         return OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(codec))
                 .bindEndpoint(new RpcEndpoint("127.0.0.1", 19091));
+    }
+
+    private static RpcPeerIdentity peer() {
+        Instant now = Instant.now();
+        return RpcPeerIdentity.verifiedMutualTls(new RpcCertificateBinding("a".repeat(64),
+                new ApplicationKey(ApplicationTestControlPlane.NAMESPACE, "consumer"), now.plusSeconds(60)),
+                now.minusSeconds(60), now.plusSeconds(120), now, System.nanoTime());
+    }
+
+    private static RpcAuthorizationDecision allow() {
+        return RpcAuthorizationDecision.allowUntil(Instant.now().plusSeconds(30));
     }
 
     private static ServiceKey serviceKey() {

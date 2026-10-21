@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.benchmarks;
 
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
@@ -103,6 +104,7 @@ public class EndToEndPayloadBenchmark {
                         clientSecurity());
 
         server = OtryxRpcServer.builder()
+                .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.provider())
                 .transportServer(
                         transportFactory.createServer(
@@ -178,7 +180,7 @@ public class EndToEndPayloadBenchmark {
                 true,
                 Duration.ofSeconds(3),
                 Duration.ofHours(1),
-                Duration.ofDays(1));
+                Duration.ofDays(1), java.util.Optional.empty());
     }
 
     private RpcTransportSecurityOptions clientSecurity() {
@@ -197,7 +199,7 @@ public class EndToEndPayloadBenchmark {
                 true,
                 Duration.ofSeconds(3),
                 Duration.ofHours(1),
-                Duration.ofDays(1));
+                Duration.ofDays(1), java.util.Optional.empty());
     }
 
     private static String requiredEnvironment(String name) {

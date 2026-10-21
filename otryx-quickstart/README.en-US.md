@@ -16,7 +16,7 @@ This is a **runnable learning project**, not a set of disconnected snippets. Sta
 | 3 | `otryx-quickstart-provider` + `otryx-quickstart-consumer` | Two JVMs | Nacos | Application members, Manifest, Mapping and verified routes |
 | 4 | Consumer + Relay + Leaf | Three JVMs | Nacos | Consumer / BOTH / Provider and A → B → C deadlines |
 | 5 | Two export sets from the same Provider JAR | Separate JVMs | Nacos | Two real Manifest revisions, promotion and rollback |
-| 6 | Existing Provider / Consumer with the `mtls` profile | Separate JVMs | Nacos, OpenSSL | Certificate authentication, client fingerprints and method authorization |
+| 6 | Existing Provider / Consumer with the `mtls` profile | Separate JVMs | Etcd 3.5.21 executable, OpenSSL | Application identity bindings, finite method grants and Registry permissions |
 
 ```mermaid
 flowchart LR
@@ -36,7 +36,7 @@ flowchart LR
 
 Run all commands from the **repository root**. You need JDK 21, the Maven Wrapper (Maven 3.9.11), and access to Maven Central for the first dependency download.
 
-Scripts require Bash, Python 3 and GNU coreutils `timeout`; mTLS also requires OpenSSL. Configure GNU `timeout` on `PATH` on macOS. Independent JVMs need a running shared Nacos, either the Docker Compose service below or your own local deployment. Memory needs no Docker.
+Scripts require Bash, Python 3 and GNU coreutils `timeout`. Automated mTLS acceptance additionally requires Linux, OpenSSL and an Etcd 3.5.21 executable to manage isolated process groups and its temporary TLS/RBAC backend. Development scenarios also run on macOS with GNU `timeout` on `PATH`. Two-process recovery, the deadline chain and revision scenarios use a running shared Nacos by default, either the Docker Compose service below or your own local deployment. The mTLS script starts its own temporary Etcd. Memory needs no Docker.
 
 ```bash
 git clone https://github.com/Ryan-Guizhou/otryx-rpc.git
@@ -50,15 +50,16 @@ On Windows use `mvnw.cmd` instead of `./mvnw`. The shell snippets below target L
 
 ### Run every scenario with one command after building the JARs
 
-Prepare Nacos as described in section 2.1, then run:
+Prepare Nacos as described in section 2.1 and a local Etcd 3.5.21 executable, then run:
 
 ```bash
-NACOS_TEST_ENDPOINT=127.0.0.1:8848 bash scripts/run_quickstart_e2e.sh
+NACOS_TEST_ENDPOINT=127.0.0.1:8848 ETCD_BINARY=/absolute/path/to/etcd \
+  bash scripts/run_quickstart_e2e.sh
 ```
 
-The entrypoint runs Memory, two-process recovery, the three-process deadline chain, two revisions and mTLS authorization in order, stopping at the first failure. It uses the existing four modules' built JARs; it does not build them or start Nacos. Each independent-process scenario creates its own Nacos group, bootstraps the shards, and passes the same scope to every participating JVM.
+The entrypoint runs Memory, two-process recovery, the three-process deadline chain, two revisions and mTLS authorization in order, stopping at the first failure. It uses the existing four modules' built JARs; it does not build them or start Nacos. The three development scenarios each create a separate Nacos group, bootstrap the shards, and pass the same scope to every participating JVM. The mTLS scenario uses its own managed Etcd TLS/RBAC instance.
 
-Evidence for the four Nacos scenarios is saved under `target/quickstart-e2e/<scenario>.<random-suffix>/`, with allowlisted JSON snapshots and `summary.log`; the Memory success marker remains in console output. Set `OTRYX_QUICKSTART_EVIDENCE_DIR` to choose another evidence root. Intermediate JSON attempts may not have converged: use the file identified by `Registry snapshot verified` in `summary.log` as the accepted evidence for that stage. Temporary mTLS PKI is created and cleaned outside the evidence directory; private keys are not evidence artifacts. The expected behavior of each stage is described below. A documented command is not a claim that the current working tree has passed that execution.
+Evidence for the three development scenarios and mTLS is saved under `target/quickstart-e2e/<scenario>.<random-suffix>/`, with allowlisted JSON snapshots and `summary.log`; the Memory success marker remains in console output. Set `OTRYX_QUICKSTART_EVIDENCE_DIR` to choose another evidence root. Intermediate JSON attempts may not have converged: use the file identified by `Registry snapshot verified` in `summary.log` as the accepted evidence for that stage. Temporary mTLS PKI, backend data and credentials are created and cleaned outside the evidence directory; private keys are not evidence artifacts. The expected behavior of each stage is described below. A documented command is not a claim that the current working tree has passed that execution.
 
 <!-- doc-section:memory -->
 ## 1. Zero-infrastructure Memory Quickstart
@@ -257,22 +258,47 @@ The Details probe application is `otryx-quickstart-revision-details-probe`; it e
 This scenario checks changing exports, membership coexistence and convergence within the current application control plane. It does not establish interoperability between historical interface-level and application-level registries. Cross-generation rules remain in the [migration guide](../docs/migration.md).
 
 <!-- doc-section:security -->
-## 5. mTLS: authenticated certificates still need method authorization
+## 5. mTLS: application identity, finite authorization and a protected registry
+
+Prepare an Etcd **3.5.21** executable, then run the existing Provider and Consumer JARs:
 
 ```bash
-bash scripts/run_quickstart_mtls_e2e.sh
+ETCD_BINARY=/absolute/path/to/etcd bash scripts/run_quickstart_mtls_e2e.sh
 ```
 
-The script generates a temporary CA, a server certificate with the correct identity, and **two different client certificates signed by the same CA**. Applications are `otryx-quickstart-mtls-provider` (19143) and `otryx-quickstart-mtls-consumer`. The Provider authorizes only one client's leaf-certificate SHA-256 fingerprint to call Greeting's `hello`, with these stages in order:
+The script owns an Etcd TLS/RBAC instance listening on loopback; this scenario does not need Nacos. RPC and Registry use separate temporary CAs. Four backend identities serve fixture administration, Provider, Consumer and read-only observation. Administrative credentials are used only for test setup and permission changes. Applications and the observer receive only their own scoped credential files. The temporary database, certificates, keys and credentials are removed after all owned processes stop.
 
-| Stage | Client and target | Expected outcome |
-|---|---|---|
-| `allowed-initial` | Allowed certificate calls Greeting hello | Real RPC succeeds |
-| `identity-denied` | Another certificate from the same CA calls Greeting hello | Exact remote authorization denial |
-| `allowed-repeat` | Return to the allowed certificate and call Greeting hello | Success again; Provider remains the same JVM |
-| `service-denied` | Allowed certificate calls the exported Details service | Exact remote authorization denial: trust does not grant every method |
+RPC applications are `otryx-quickstart-mtls-provider` (`127.0.0.1:19143`) and `otryx-quickstart-mtls-consumer`, in namespace `otryx-quickstart-security`. Transport binds the full DER SHA-256 of each trusted leaf certificate to an explicit `ApplicationKey(namespace, applicationName)` and finite expiry. The Consumer's original and rotated certificates bind to the same application. The sample authorizer permits that application to call `hello` on `GreetingService / 1.0.0 / default` and returns a finite `validUntil`. CN/SAN participate in certificate and hostname validation; application binding and method authorization are separate checks.
 
-Each stage starts and stops its own Consumer while the Provider remains running. After all stages pass, the script prints `mTLS verified identity and service authorization: PASS`.
+### Fifteen scenario categories and precise outcomes
+
+E12 and E14 each have two branches, producing **17 named stage snapshots**. An independent observer reads the real backend at every stage. The Provider must retain its actual Greeting and Details exports. A pure Consumer cannot have an RPC endpoint or enter the Provider pool.
+
+| Stage | Action | Required outcome | Consumer member |
+|---|---|---|---|
+| `E01-allowed-initial` | Original certificate calls Greeting | Real RPC succeeds | Present |
+| `E02-rotated-consumer` | Rotated certificate for the same application calls Greeting | Real RPC succeeds | Present |
+| `E03-unbound-provider` | Consumer does not bind the actual Provider certificate | `IDENTITY_UNBOUND` | Present |
+| `E04-local-application-mismatch` | Local certificate binds another application | `APPLICATION_MISMATCH` before startup | Absent |
+| `E05-remote-application-mismatch` | Remote certificate binds another application | `APPLICATION_MISMATCH` | Present |
+| `E06-remote-namespace-mismatch` | Remote certificate binds another namespace | `NAMESPACE_MISMATCH` | Present |
+| `E07-wrong-rpc-ca` | Wrong RPC trust CA | `CERTIFICATE_REJECTED` | Present |
+| `E08-expired-local-binding` | Local application binding expired | `IDENTITY_EXPIRED` before startup | Absent |
+| `E09-expired-certificate` | Local leaf certificate expired | TLS material rejected before startup | Absent |
+| `E10-expired-policy` | Provider's finite policy expired | Exact remote method authorization denial | Present |
+| `E11-details-denied` | Valid application calls unauthorized Details | Exact remote method authorization denial | Present |
+| `E12-missing-authorizer-provider` / `E12-missing-authorizer-both` | New Provider / BOTH lacks an authorizer | Rejected before startup; no extra member or listener | Absent |
+| `E13-allowed-repeat` | Normal call after negative cases | Real RPC succeeds again | Present |
+| `E14-wrong-registry-ca` / `E14-wrong-registry-credentials` | Wrong Registry CA or password | Exact `TLS_REJECTED` / `AUTHENTICATION_REJECTED` | Absent |
+| `E15-observer-read-only` | Observer attempts to overwrite Provider membership | Permission denied; original membership and routes remain intact | Absent |
+
+Each Consumer stage owns a separate process. The Provider restarts before E10 to load an expired policy and before E11 to restore a valid policy. Other negative cases must preserve the healthy running Provider. Only complete success prints:
+
+```text
+Quickstart NETWORK_MTLS security scenarios: PASS
+```
+
+Authentication cases require the exact local `RpcAuthenticationException.Reason` and print `RPC authentication failure verified: reason=<REASON>`. Method authorization cases accept only `RpcRemoteException` with `BAD_REQUEST` and fixed message `RPC authorization denied`, printing `RPC authorization denial verified.`. Connection failures, generic TLS errors, wrong reasons and unexpected successes fail the scenario.
 
 ```mermaid
 sequenceDiagram
@@ -281,48 +307,70 @@ sequenceDiagram
     participant P as Core Provider
     participant A as RpcAuthorizer
     participant S as Greeting Service
-    C->>T: mTLS handshake and certificate verification
-    T-->>C: Verified connection
-    C->>T: RPC serviceId / methodId
-    T->>P: Verified peer and request header
-    P->>A: Leaf fingerprint, prebound ServiceKey / MethodId
-    alt Fingerprint and method are allowed
-        A-->>P: Allow
-        P->>S: Decode and invoke hello
-        S-->>C: GreetingReply
-    else Identity or method is not authorized
-        A-->>P: Deny
-        P-->>C: BAD_REQUEST / RPC authorization denied
+    C->>T: Verify chain, hostname and application binding
+    T->>P: Request with session identity and original time anchors
+    P->>A: Application, ServiceKey, MethodId, maximum expiry
+    alt Application and method allowed and unexpired
+        A-->>P: allowUntil(finite instant)
+        P->>S: Revalidate before decoding and invoking
+        S-->>P: Business result
+        P-->>T: Encode response
+        T-->>C: Response with connection identity
+        C->>C: Revalidate target before decoding and delivery
+    else Denied or expired grant
+        A-->>P: deny or invalid grant
+        P-->>T: BAD_REQUEST / RPC authorization denied
+        T-->>C: Denial with connection identity
     end
 ```
 
-Denial must be exactly `BAD_REQUEST` / `RPC authorization denied`. CA, hostname or handshake errors are **authentication failures** and cannot pass this authorization-denial scenario. Consumer property `otryx.rpc.quickstart.expect-authorization-denied=true` accepts only that exact outcome and prints:
+### Configure the existing profiles manually
 
-```text
-RPC authorization denial verified.
-```
+The `tls` profile demonstrates server TLS under explicit `TRUSTED_DEVELOPMENT`. Provider uses `OTRYX_QUICKSTART_TLS_CERT` / `OTRYX_QUICKSTART_TLS_KEY`; Consumer uses `OTRYX_QUICKSTART_TLS_CA`. The `mtls` profile requires a protected Etcd and these settings:
 
-### Use the TLS / mTLS profiles manually
+| Setting | Meaning |
+|---|---|
+| `OTRYX_QUICKSTART_TLS_CERT`, `OTRYX_QUICKSTART_TLS_KEY`, `OTRYX_QUICKSTART_TLS_CA` | This process's RPC certificate, key and trust CA |
+| `OTRYX_QUICKSTART_REGISTRY_ENDPOINT`, `OTRYX_QUICKSTART_REGISTRY_CA` | Etcd HTTPS endpoint and independent Registry trust CA; endpoint must match certificate SAN |
+| `OTRYX_QUICKSTART_REGISTRY_CREDENTIALS_DIR` | This role's Spring configtree directory containing its username and password files |
+| `OTRYX_QUICKSTART_NAMESPACE` | Shared namespace for actual membership and certificate bindings |
+| `OTRYX_QUICKSTART_PROVIDER_BINDING_NAMESPACE` | Defaults to that namespace; allows a negative scenario to change only the Provider certificate binding namespace |
+| `OTRYX_QUICKSTART_PROVIDER_APPLICATION`, `OTRYX_QUICKSTART_CONSUMER_APPLICATION` | Default to the two names above; must match actual process membership |
+| `OTRYX_QUICKSTART_PROVIDER_SHA256`, `OTRYX_QUICKSTART_CONSUMER_SHA256` | SHA-256 of each application's complete leaf certificate DER |
+| `OTRYX_QUICKSTART_CONSUMER_ROTATED_SHA256` | Rotated certificate fingerprint for the same Consumer; defaults to its current fingerprint |
+| `OTRYX_QUICKSTART_BINDING_VALID_UNTIL` | Finite ISO-8601 expiry for the example certificate bindings |
+| `OTRYX_QUICKSTART_POLICY_VALID_UNTIL` | Finite expiry of the Provider's sample business policy |
 
-Each profile reads the certificate variables required by its role. All paths point to local PEM files:
+The configtree filenames are `otryx.rpc.registry.security.credentials.username` and `otryx.rpc.registry.security.credentials.password`. Populate private files from your credential-management channel; keep secrets out of command arguments, source, public logs and evidence. The profile explicitly selects `USER_PASSWORD`; generic `providerOptions` do not supply credentials.
 
-| Profile / process | Required environment variables | Purpose |
-|---|---|---|
-| `tls` / Provider | `OTRYX_QUICKSTART_TLS_CERT`, `OTRYX_QUICKSTART_TLS_KEY` | Server certificate and private key |
-| `tls` / Consumer | `OTRYX_QUICKSTART_TLS_CA` | Trusted CA for server verification |
-| `mtls` / Provider and Consumer | `OTRYX_QUICKSTART_TLS_CERT`, `OTRYX_QUICKSTART_TLS_KEY`, `OTRYX_QUICKSTART_TLS_CA` | Each process's own certificate and private key, plus the CA used to verify its peer |
-
-Rename and remove old `OTRYX_RPC_TLS_CERT`, `OTRYX_RPC_TLS_KEY` and `OTRYX_RPC_TLS_CA` variables; otherwise Starter strict validation rejects the unknown properties. Enable with `--spring.profiles.active=tls` or `--spring.profiles.active=mtls`. The Consumer verifies the target hostname by default.
-
-The `mtls` profile enables `NETWORK_MTLS`, a strict Fory DTO allowlist and the Quickstart-specific `RpcAuthorizer`. **Provider must explicitly configure** `otryx.rpc.quickstart.mtls.allowed-client-sha256` as exactly 64 lowercase hexadecimal characters, without colons or surrounding whitespace. Compute it from the allowed client's leaf certificate DER:
+Calculate a certificate fingerprint with:
 
 ```bash
-openssl x509 -in client.crt -outform DER | openssl dgst -sha256
+openssl x509 -in consumer.crt -outform DER | openssl dgst -sha256
 ```
 
-Pass the final 64-character digest as Provider argument `--otryx.rpc.quickstart.mtls.allowed-client-sha256=<digest>`. Consumer does not need this property. Missing or malformed values fail Provider startup. Authorization uses the Transport-verified leaf-certificate DER SHA-256, **not CN/SAN text**. The target must also match `GreetingService` / `1.0.0` / `default` and the `hello` MethodId. Details remains unauthorized even for a trusted certificate with an allowed fingerprint.
+The sample authorizer reads `otryx.rpc.quickstart.mtls.allowed-consumer.namespace`, `allowed-consumer.application-name` and `policy-valid-until`, bound by the profile from the environment above. Certificate rotation does not change the policy's application name. A grant is additionally bounded by the certificate, binding, request budget and `server.authorization.max-grant-lifetime` (`30s` in this profile). A `NETWORK_MTLS` Provider / BOTH without an explicit `RpcAuthorizer` fails before Registry or Transport activation.
 
-`otryx.rpc.quickstart.use-details=true` selects Details and is mutually exclusive with `use-relay=true`. Expected-denial mode cannot run with repeat mode. The [sample authorizer](otryx-quickstart-provider/src/main/java/com/peachsoft/otryx/quickstart/provider/QuickstartMtlsAuthorizationConfiguration.java) belongs to the Quickstart Provider; the general Starter does not generate business authorization policies. A `NETWORK_MTLS` Provider without an authorizer still denies calls by default. See [Security and authorization](../docs/security.md) for certificate deployment, reload and authorization boundaries.
+`otryx.rpc.quickstart.use-details=true` and `use-relay=true` are mutually exclusive. `expect-authentication-failure=<REASON>` cannot be combined with `expect-authorization-denied=true`, and neither negative mode supports repeat calls. The old `allowed-client-sha256` business setting was removed; fingerprints now belong to Transport application bindings. Remove old `OTRYX_RPC_TLS_*` variables and use the Quickstart path variables listed above.
+
+### Independent read-only security observer
+
+Prefix the existing `observe_quickstart_registry.sh` invocation with `QUICKSTART_REGISTRY_SECURITY_FILE=/absolute/path/observer.json`. Configuration and credential files must be regular files with mode `0600`. JSON accepts only known fields and is limited to 64 KiB and eight levels; secrets are single-line UTF-8 limited to 4096 bytes. Relative references resolve against the JSON directory. An Etcd observer configuration is:
+
+```json
+{
+  "security": {
+    "trustCertificateCollection": "registry-ca.crt",
+    "credentialKind": "USER_PASSWORD",
+    "usernameFile": "observer.username",
+    "passwordFile": "observer.password"
+  }
+}
+```
+
+Eureka requires an independent `metadataSecurity` object; other backends reject that extra object. Before reading, the observer validates TLS, credentials and namespace for every actual Membership, Manifest and Mapping source. Without a security file it explicitly selects development mode; an invalid supplied file never falls back. Observation creates no member, Manifest or Mapping Owner.
+
+See the [security guide](../docs/security.md), [runner](../scripts/run_quickstart_mtls_e2e.py) and [observer security configuration](otryx-quickstart-provider/src/main/java/com/peachsoft/otryx/quickstart/provider/QuickstartRegistrySecurity.java) for implementation boundaries.
 
 <!-- doc-section:integration -->
 ## 6. Use the single Starter in your application
@@ -404,7 +452,7 @@ java -jar otryx-quickstart/otryx-quickstart-consumer/target/otryx-quickstart-con
   --otryx.rpc.registry.eureka.metadata-endpoints=http://127.0.0.1:8500
 ```
 
-The Consul profile reads `CONSUL_HTTP_TOKEN`; Eureka membership reads `EUREKA_USERNAME`/`EUREKA_PASSWORD`. Credentials for Eureka's external metadata backend must be supplied separately through `metadata-options`, as described in the [Starter backend configuration](../docs/reference/starter.md). Never commit real credentials. See [Consul V2](../docs/reference/registry-consul-v2.md) and [Eureka V2](../docs/reference/registry-eureka-v2.md) for backend contracts.
+These manual profiles explicitly use `TRUSTED_DEVELOPMENT` and configure no backend credentials by default. Protected backends require typed TLS and credential settings under `otryx.rpc.registry.security`. Eureka's external metadata chain uses its own `otryx.rpc.registry.metadata-security`; generic `metadata-options` must not contain credentials. Supply security material through restricted configuration files or your credential management channel. See the [Starter backend configuration](../docs/reference/starter.md), [Consul V2](../docs/reference/registry-consul-v2.md) and [Eureka V2](../docs/reference/registry-eureka-v2.md).
 
 <!-- doc-section:operations -->
 ## 8. Observability, capacity and lifecycle
@@ -422,7 +470,7 @@ The Consul profile reads `CONSUL_HTTP_TOKEN`; Eureka membership reads `EUREKA_US
 | Memory mode cannot discover remote JVM | Memory Registry is not shared across processes |
 | Consumer member exists but calls fail | Membership is not Provider readiness; inspect Mapping, that instance's Manifest, role and `verifiedProviders` |
 | Observer refuses the output file | Use a new filename each time; verify namespace/group/applicationName |
-| `NETWORK_MTLS` rejects requests | Distinguish handshake failure from `RPC authorization denied`; then check fingerprint, ServiceKey, MethodId and the Fory allowlist |
+| `NETWORK_MTLS` rejects startup or calls | Use the exact reason to distinguish configuration, Registry, certificate and method authorization failures. Check the actual ApplicationKey/namespace, chain and hostname, binding/policy expiry, ServiceKey/MethodId and actual Codec capabilities. A missing authorizer rejects Provider/BOTH before startup |
 | Calls timeout | Provider readiness, discovery, deadline, overload and client timeout |
 | Port collision | Provider normally uses 19090; chain and revision use 19090/19091, mTLS uses 19143; stop manual processes and run scripts sequentially |
 
@@ -432,19 +480,19 @@ The Consul profile reads `CONSUL_HTTP_TOKEN`; Eureka membership reads `EUREKA_US
 ```bash
 python3 scripts/test_quickstart_layout.py
 ./mvnw -B -ntp clean verify -Pquality
-# All JARs are built and local Nacos is running:
-bash scripts/run_quickstart_e2e.sh
+# All JARs are built, local Nacos is running, and Etcd 3.5.21 is available:
+ETCD_BINARY=/absolute/path/to/etcd bash scripts/run_quickstart_e2e.sh
 # Only if you started this Compose service and no longer need it:
 docker compose -f otryx-quickstart/docker-compose.yml down
 ```
 
 Read next: [User guide](../docs/user-guide.md) · [Starter reference](../docs/reference/starter.md) · [Architecture](../docs/architecture.md) · [Protocol compatibility](../docs/wire-compatibility.md). A short Quickstart run is **not** a production performance SLO or GA certification.
 
-The aggregate entrypoint prints `Complete application-level Quickstart suite: PASS` only after all five scripts succeed. Raw JVM logs are temporary; their diagnostic tails are printed on failure and are not persistent evidence after cleanup. Scripts manage the application processes they start and leave the user-provided Nacos running.
+The aggregate entrypoint prints `Complete application-level Quickstart suite: PASS` only after all five scripts succeed. Development scenarios print temporary JVM log tails on failure. The security scenario exposes fixed outcomes; its `--diagnostics` option can retain failure logs in a separate restricted local directory. Raw logs are not public acceptance attachments. Scripts manage their own application and observer processes; mTLS also closes the Etcd it started. User-provided Nacos remains running.
 
 <!-- doc-section:migration-status -->
 ## V2 application registry migration status
 
 Core `ApplicationMembershipCoordinator`, `ApplicationServiceResolver`, Client `applicationControlPlane(...)` and Server `applicationMembership(...)` form the only application control plane. Provider, Consumer and BOTH register real members; consumer-only has no RPC endpoint. ServiceInstance remains only a local load-balancing DTO.
 
-#139 combines source/configuration/current-usage cleanup, shared contracts, the four-real-backend independent-JVM matrix and all five rolling pairs into one acceptance package. Retired registry modes cannot be rolling baselines. See the [checkpoint](../docs/engineering/agent-governance-checkpoint.md) for actual backend and CI results for the exact head. Tutorials, static scans and shell fixtures do not substitute for real execution or establish production capacity or a release. See [V2 design](../docs/design/application-registry-v2.md) for the current contract.
+#139 was merged through [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) at `main@783bf8115c9523e5667023678dafe659315b2b66`, with independently verified source/configuration cleanup, shared contracts, the four-real-backend independent-JVM matrix and all five rolling pairs. Retired registry modes cannot be rolling baselines. #140 security changes require their own exact-head execution and post-merge verification; #139 results do not establish this security acceptance. See the [checkpoint](../docs/engineering/agent-governance-checkpoint.md) for evidence and [V2 design](../docs/design/application-registry-v2.md) for the contract. Tutorials, static scans and shell fixtures do not substitute for real execution or establish production capacity or a release.

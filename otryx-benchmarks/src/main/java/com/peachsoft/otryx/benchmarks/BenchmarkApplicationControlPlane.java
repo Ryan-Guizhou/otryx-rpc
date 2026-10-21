@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.benchmarks;
 
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.RpcUnavailableException;
 import com.peachsoft.otryx.core.ApplicationMembershipCoordinator;
@@ -53,7 +54,7 @@ final class BenchmarkApplicationControlPlane implements AutoCloseable {
         this.namespace = namespace;
         registry = ExtensionLoader.getLoader(ApplicationRegistryFactory.class)
                 .getExtension(REGISTRY_EXTENSION)
-                .create(new RegistryOptions(List.of(), namespace, Map.of()));
+                .create(RegistryOptions.trustedDevelopment(List.of(), namespace, Map.of()));
         if (!(registry instanceof ApplicationMetadataBackend metadata)) {
             registry.close();
             throw new IllegalStateException("Benchmark application registry has no metadata backend");
@@ -77,7 +78,9 @@ final class BenchmarkApplicationControlPlane implements AutoCloseable {
     }
 
     OtryxRpcClient.Builder clientBuilder() {
-        return OtryxRpcClient.builder().applicationControlPlane(resolver, consumer, namespace);
+        return OtryxRpcClient.builder()
+                .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT)
+                .applicationControlPlane(resolver, consumer, namespace);
     }
 
     void warmup(OtryxRpcClient client, Runnable probe) throws Exception {

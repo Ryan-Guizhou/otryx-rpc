@@ -145,32 +145,27 @@ public class OtryxRpcAutoConfigurationTest {
 
     @Test
     void networkPolicyMustRequireMutualTlsAndStrictAllowlist() {
-        contextRunner.withPropertyValues(
-                        "otryx.rpc.security-profile=NETWORK_MTLS")
+        networkRunner().withPropertyValues("otryx.rpc.transport.security.mode=PLAINTEXT")
                 .run(context -> {
                     assertThat(context).hasFailed();
-                    assertThat(context.getStartupFailure())
-                            .hasStackTraceContaining("transport.security.mode");
+                    assertThat(context.getStartupFailure()).hasStackTraceContaining("transport.security.mode");
                 });
-        contextRunner.withPropertyValues(
-                        "otryx.rpc.security-profile=NETWORK_MTLS",
-                        "otryx.rpc.transport.security.mode=MTLS")
+        networkRunner().withPropertyValues("otryx.rpc.codec.fory.mode=TRUSTED_COMPATIBILITY")
                 .run(context -> {
                     assertThat(context).hasFailed();
-                    assertThat(context.getStartupFailure())
-                            .hasStackTraceContaining("codec.fory.mode");
+                    assertThat(context.getStartupFailure()).hasStackTraceContaining("codec.fory.mode");
                 });
-        contextRunner.withPropertyValues(
-                        "otryx.rpc.security-profile=NETWORK_MTLS",
-                        "otryx.rpc.transport.security.mode=MTLS",
-                        "otryx.rpc.codec.fory.mode=STRICT_ALLOWLIST",
-                        "otryx.rpc.codec.fory.allowed-class-patterns[0]=com.peachsoft.otryx.demo.*")
-                .run(context -> assertThat(context).hasNotFailed());
+        networkRunner().run(context -> assertThat(context).hasNotFailed());
+    }
+
+    private ApplicationContextRunner networkRunner() {
+        return SecurityTestTransportFactory.networkRunner(contextRunner,
+                "otryx-test-service", new SecurityTestTransportFactory());
     }
 
     @Test
     void networkProfileMustValidateEffectiveCustomCodecRegistry() {
-        contextRunner.withBean(RpcCodecRegistry.class,
+        networkRunner().withBean(RpcCodecRegistry.class,
                         () -> RpcCodecRegistry.of(new ForyRpcCodec()))
                 .withPropertyValues(
                         "otryx.rpc.security-profile=NETWORK_MTLS",
@@ -180,13 +175,13 @@ public class OtryxRpcAutoConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
-                            .hasStackTraceContaining("effective Fory codec");
+                            .hasStackTraceContaining("bounded contract-aware Codec validation");
                 });
     }
 
     @Test
     void networkProfileMustValidateEffectiveCustomTransportOptions() {
-        contextRunner.withBean(RpcTransportOptions.class,
+        networkRunner().withBean(RpcTransportOptions.class,
                         () -> RpcTransportOptions.DEFAULT)
                 .withPropertyValues(
                         "otryx.rpc.security-profile=NETWORK_MTLS",
@@ -196,13 +191,13 @@ public class OtryxRpcAutoConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
-                            .hasStackTraceContaining("effective transport must use MTLS");
+                            .hasStackTraceContaining("effective transport security capabilities");
                 });
     }
 
     @Test
-    void networkProfileMustAllowVerifiedStrictCustomCodec() {
-        contextRunner.withBean(RpcCodecRegistry.class,
+    void networkProfileMustAcceptStrictCodecWithEffectiveDescriptorFixture() {
+        networkRunner().withBean(RpcCodecRegistry.class,
                         () -> RpcCodecRegistry.of(new ForyRpcCodec(
                                 ForyRpcSecurityOptions.strictAllowlist(
                                         java.util.Set.of("com.peachsoft.otryx.demo.*")))))
@@ -216,7 +211,7 @@ public class OtryxRpcAutoConfigurationTest {
 
     @Test
     void networkProfileMustRejectAdditionalUnauditedCodec() {
-        contextRunner.withBean(RpcCodecRegistry.class, () -> {
+        networkRunner().withBean(RpcCodecRegistry.class, () -> {
                     ForyRpcCodec strict = new ForyRpcCodec(
                             ForyRpcSecurityOptions.strictAllowlist(
                                     java.util.Set.of("com.peachsoft.otryx.demo.*")));
@@ -247,7 +242,7 @@ public class OtryxRpcAutoConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
-                            .hasStackTraceContaining("only audited Fory Native codec");
+                            .hasStackTraceContaining("bounded contract-aware Codec validation");
                 });
     }
 
@@ -333,26 +328,21 @@ public class OtryxRpcAutoConfigurationTest {
     }
 
     @Test
-    void consulAndEurekaRegistryOptionsShouldBind() {
+    void consulAndEurekaNonSecurityOptionsShouldBind() {
         contextRunner
                 .withPropertyValues(
-                        "otryx.rpc.registry.consul.token=test-token",
                         "otryx.rpc.registry.consul.ttl-seconds=45",
                         "otryx.rpc.registry.consul.heartbeat-seconds=15",
                         "otryx.rpc.registry.consul.datacenter=dc-east",
-                        "otryx.rpc.registry.eureka.username=test-user",
-                        "otryx.rpc.registry.eureka.password=test-password",
                         "otryx.rpc.registry.eureka.lease-seconds=60",
                         "otryx.rpc.registry.eureka.poll-interval-millis=3000")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     OtryxRpcProperties.Registry props =
                             context.getBean(OtryxRpcProperties.class).getRegistry();
-                    assertThat(props.getConsul().getToken()).isEqualTo("test-token");
                     assertThat(props.getConsul().getTtlSeconds()).isEqualTo(45);
                     assertThat(props.getConsul().getHeartbeatSeconds()).isEqualTo(15);
                     assertThat(props.getConsul().getDatacenter()).isEqualTo("dc-east");
-                    assertThat(props.getEureka().getUsername()).isEqualTo("test-user");
                     assertThat(props.getEureka().getLeaseSeconds()).isEqualTo(60);
                     assertThat(props.getEureka().getPollIntervalMillis()).isEqualTo(3000);
                 });

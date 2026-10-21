@@ -1,52 +1,134 @@
 # Eureka V2 Application Membership
 
-> Issue [#136](https://github.com/Ryan-Guizhou/otryx-rpc/issues/136) · `1.0.0-SNAPSHOT`. Current application backend; integrated #139 acceptance still requires exact-head backend execution and post-merge main CI.
+[中文](registry-eureka-v2.md)
 
-## Separation of responsibilities
+> [Issue #136](https://github.com/Ryan-Guizhou/otryx-rpc/issues/136) · OTRYX RPC 1.0.0-SNAPSHOT · Current application backend. This page describes the implementation; execution evidence must identify the exact source SHA. See [acceptance boundaries](application-registry-acceptance.md).
 
-Eureka is the **only authority for application member leases**: Provider, Consumer-only, and BOTH all register native Eureka InstanceInfo under one deterministic application-scoped name. All interfaces exported by a process share one Eureka member. A pure Consumer uses a **real host identity** with a **native disabled RPC port** (`port=0`, `@enabled=false`) and does not advertise any OTRYX RPC endpoint.
+## Members, metadata and routing
 
-Eureka is **not a transactional metadata database**. Configuration must explicitly provide one external `etcd`, `nacos`, or `consul` adapter with immutable Manifest CAS and instance-owned Mapping. The external backend is not used to register the application member. `ApplicationMetadataBackend` exposes the repository pair and `ServiceMappingCandidateSource` reads candidate mappings independently of another Registry's lease. The Eureka mapping view then verifies the **same publishing instanceId** is an actual UP Provider member, never substituting an unrelated healthy Provider from the same application; Core still verifies Manifest, schema and bound RPC services.
+**Eureka owns application member leases.** Provider, Consumer-only and BOTH register under one native Eureka Application derived from `ApplicationKey(namespace, applicationName)`. All interfaces exported by a process share one `InstanceInfo`. A pure Consumer uses its real local IP/host and a native disabled port (`port=0`, `@enabled=false`), without an RPC endpoint.
 
-Eureka lacks native compare-and-set for InstanceInfo ownership. Registration uses a random per-process suffix in its native Instance ID; two processes with the same logical instanceId are **not allowed to overwrite one another**, and duplicate logical identities in discovery are rejected instead of arbitrarily routed. Deployments must ensure logical instance IDs are unique. Persisted Mapping Generation CAS still fences old owner writes.
+**Etcd, Nacos or Consul owns persistent metadata.** Explicitly include one external backend exposing Manifest/Mapping repositories through `ApplicationMetadataBackend` and instance-owned candidates through `ServiceMappingCandidateSource`. The external backend does not register Eureka business members; Eureka itself provides no KV CAS.
 
-## Configuration
+```mermaid
+flowchart TD
+    R["Core Resolver"]
+    D["Eureka member client"]
+    M["External Manifest repository"]
+    V["Eureka MappingView"]
+    S["External Mapping candidate repository"]
+    R -->|"MEMBERSHIP"| D
+    R -->|"MANIFEST"| M
+    R -->|"MAPPING"| V
+    V -->|"Owner candidates"| S
+    V -->|"Same instanceId health"| D
+```
 
-Explicitly depend on `otryx-registry-eureka` **and** one backend adapter (`otryx-registry-etcd`, `otryx-registry-nacos`, or `otryx-registry-consul`). The default Starter does not include them. Example:
+A Mapping's ServiceKey, ApplicationKey and Owner instanceId are unverified candidates. `Eureka MappingView` requires **that same Owner instance** to be an UP Eureka Provider/BOTH with a real endpoint; an unrelated healthy Provider in the application cannot substitute for it. Core then verifies Manifest, Schema, Wire compatibility and actual service bindings. The Mapping protection descriptor retains both the external candidate source and the Eureka health source; stronger protection on one cannot hide insufficient protection on the other.
+
+Eureka has no cross-process InstanceInfo CAS. Native IDs include a random process token to prevent two processes sharing a logical instanceId from directly overwriting each other. Duplicate logical identities in discovery fail closed; deployment still must provide unique instance IDs. The external backend supplies persistent Mapping generation CAS/fencing.
+
+## Two independent security chains
+
+Explicitly include `otryx-registry-eureka` and one `otryx-registry-etcd / nacos / consul` adapter. The default Starter does not include these dependencies. The old three/four-argument `RegistryOptions` constructors and `fromCsv` default to `UNSPECIFIED`; the Factory rejects startup.
+
+For `NETWORK_MTLS`, the membership chain requires **HTTPS + explicit CA + USER_PASSWORD (HTTP Basic)**. Configure external metadata independently:
+
+| Metadata backend | Registry protection for `NETWORK_MTLS` | Explicit development |
+| --- | --- | --- |
+| Etcd | HTTPS + independent CA + USER_PASSWORD | Supported |
+| Consul | One HTTPS Agent + independent CA + ACL_TOKEN | Supported |
+| Nacos | Unsupported; rejected before creating its SDK | `TRUSTED_DEVELOPMENT` with NONE or USER_PASSWORD |
+
+This example uses Eureka and Consul. Both endpoints are actual deployment-supplied HTTPS URLs. `eurekaCaFile / metadataCaFile` are their respective CA-file `Path` values; `eurekaPassword / metadataAclToken` are `char[]` values from credential sources, and `eurekaUsername` is the username. `RpcSecurityProfile` belongs to `com.peachsoft.otryx.api`, `RpcObserver` to `com.peachsoft.otryx.observability`, and the security DTOs to `com.peachsoft.otryx.registry`.
 
 ```java
+RegistrySecurityOptions memberSecurity = new RegistrySecurityOptions(
+    Optional.of(new RegistryTlsOptions(eurekaCaFile, Optional.empty())),
+    RegistryCredentials.userPassword(eurekaUsername, eurekaPassword));
+
+RegistrySecurityOptions metadataSecurity = new RegistrySecurityOptions(
+    Optional.of(new RegistryTlsOptions(metadataCaFile, Optional.empty())),
+    RegistryCredentials.aclToken(metadataAclToken));
+
 RegistryOptions options = new RegistryOptions(
-    List.of("http://127.0.0.1:8761/eureka"),
+    List.of(eurekaHttpsEndpoint),
     "production",
     Map.of(
         "eurekaMetadataBackend", "consul",
-        "eurekaMetadataEndpoints", "http://127.0.0.1:8500",
-        "eurekaMetadata.consulToken", System.getenv().getOrDefault("CONSUL_HTTP_TOKEN", ""),
-        "eurekaMemberHost", "192.168.1.10",
+        "eurekaMetadataEndpoints", consulHttpsEndpoint,
         "eurekaLeaseSeconds", "30",
         "eurekaHeartbeatSeconds", "10",
-        "eurekaPollIntervalMillis", "1000"));
+        "eurekaPollIntervalMillis", "1000"),
+    RpcObserver.noop(),
+    RpcSecurityProfile.NETWORK_MTLS,
+    memberSecurity,
+    Optional.of(metadataSecurity));
+
 EurekaApplicationRegistry registry = (EurekaApplicationRegistry)
-        ExtensionLoader.getLoader(ApplicationRegistryFactory.class)
-                .getExtension("eureka").create(options);
+    ExtensionLoader.getLoader(ApplicationRegistryFactory.class)
+        .getExtension("eureka").create(options);
+ApplicationManifestRepository manifests = registry.manifestRepository();
+ServiceMappingRepository mappings = registry.serviceMappingRepository();
 ```
 
-All `eurekaMetadata.*` options are passed to the selected backend, with the same logical namespace. Backend omission, invalid adapter, or missing candidate lookup support fail fast. `eurekaUsername`/`eurekaPassword` enable Eureka Basic Auth; use HTTPS and a secure credential source. External Metadata ACL and Eureka credentials are different trust boundaries.
+`security` protects only the Eureka membership chain; `metadataSecurity` protects only the external metadata chain. The latter inherits the same profile and logical namespace, **never the member CA, client key or password**. If omitted, it has no materials and cannot satisfy NETWORK requirements. For Etcd metadata, use `RegistryCredentials.userPassword(...)` for the second credential.
 
-## Consistency and bounds
+Each TLS chain verifies the server hostname and CA; HTTP redirects are disabled. Its own `RegistryTlsOptions.clientIdentity` may add a client certificate/key, but the current factories do not accept standalone `CLIENT_CERTIFICATE` instead of the required password or ACL token. DTOs defensively copy secret arrays and redact `toString()`; protection descriptors are created after actual client installation. Registry configuration does not replace RPC transport mTLS, method authorization or other Core security gates. See [security boundaries](../security.md).
 
-Member count <=256; subscriptions <=128; 2–4 bounded control workers and a queue of 256; default Eureka lease/heartbeat/poll/request timeout 30s/10s/1s/3s. A 404 lease renew triggers re-registration; genuine HTTP, authorization and schema failures propagate and cannot silently replace LKG with an empty result. Mapping candidates are **not routable** until checked against Eureka members, Manifest, schema, endpoint and local service bindings.
+For an explicitly isolated plaintext development fixture:
 
-`directory-max-staleness` limits LKG use only after an explicit synchronization failure. Membership polling treats a parsed and validated HTTP 200 response, or an HTTP 404 handled as an empty application, as a successful synchronization. These results do not automatically signal failure when the server cache has not yet incorporated a membership change. Core cannot infer that cache lag from a successful response, so this budget does not bound the age of Eureka server cache contents. See [directory freshness](registry-freshness.md).
+```java
+RegistryOptions development = RegistryOptions.trustedDevelopment(
+    List.of("http://127.0.0.1:8761/eureka"),
+    "development",
+    Map.of(
+        "eurekaMetadataBackend", "consul",
+        "eurekaMetadataEndpoints", "http://127.0.0.1:8500"));
+```
 
-The Starter and Quickstart use the same application control plane. No automatic GC of durable Generation tombstones or Manifest revisions is claimed: these protect rollbacks and fencing.
+This helper supplies no security materials. Development credentials require the seven-argument constructor, explicit `TRUSTED_DEVELOPMENT` and the two typed security configurations. Historical Map keys such as `eurekaUsername / eurekaPassword` and `eurekaMetadata.consulToken` are rejected and cannot bypass the typed boundary.
 
-## Real service E2E
+## Allowed nonsecurity options
 
-`.github/workflows/eureka-v2.yml` launches a real Spring Boot 3.5.4 / Spring Cloud Netflix Eureka 2025.0.0 server alongside real Consul KV. CI checks Provider/Consumer/BOTH native Info, disabled Consumer port, real Meta CAS + no cross-registry member duplication, 30 real Java interfaces × ten independent Registry client objects in one test JVM, lost lease recovery and a genuine Eureka JVM restart. The server is isolated under `.github/test-fixtures/eureka-server`, not an extra runtime Starter or Maven reactor module.
+| `providerOptions` | Default / requirement |
+| --- | --- |
+| `eurekaMetadataBackend` | Required: `etcd / nacos / consul` |
+| `eurekaMetadataEndpoints` | Required: external backend endpoint CSV |
+| `eurekaMemberHost` | Detect a real local address by default; wildcard addresses are rejected |
+| `eurekaLeaseSeconds` | Default 30; 9–3600 seconds |
+| `eurekaHeartbeatSeconds` | Default 10; at least 1 second and below lease |
+| `eurekaPollIntervalMillis` | Default 1000; 200–60000 milliseconds |
+| `eurekaRequestTimeoutMillis` | Default 3000; 100–60000 milliseconds |
 
-The isolated Eureka fixture sets `eureka.server.use-read-only-response-cache=false`, disabling only the read-only layer. The read-write response cache still uses its own invalidation and expiration mechanisms. The fixture also sets `eureka.server.response-cache-auto-expiration-in-seconds=1` so that read-write cache entries expire one second after they are written; subsequent queries reload expired entries. `eureka.server.response-cache-update-interval-ms` is not the read-write cache expiration time.
+`eurekaMetadata.*` forwards **only the selected backend's allowlist**, not arbitrary properties:
 
-Fixture cache settings define convergence conditions for isolated CI. They are not a production adapter fix and do not guarantee convergence within 25 seconds under Eureka's production defaults. See the [engineering checkpoint](../engineering/agent-governance-checkpoint.md) for actual run configuration, results and outstanding gates.
+| Backend | Allowed complete keys |
+| --- | --- |
+| Etcd | `eurekaMetadata.leaseTtlSeconds` |
+| Nacos | `eurekaMetadata.nacosGroup`, `eurekaMetadata.nacosCluster`, `eurekaMetadata.nacosMemberHost` |
+| Consul | `eurekaMetadata.consulTtlSeconds`, `eurekaMetadata.consulHeartbeatSeconds`, `eurekaMetadata.consulPollIntervalMillis`, `eurekaMetadata.consulRequestTimeoutMillis`, `eurekaMetadata.consulEnterpriseNamespace` |
 
-Independent business JVM process/chain/revision scenarios run separately in `.github/workflows/application-registry-e2e.yml` against real Eureka and Consul. Native members, SPI method-entry calls, subscription creation calls and snapshot/health notifications and convergence time are reported separately; they are not total backend HTTP, lease renewal or server Watch traffic. See [acceptance boundaries](application-registry-acceptance.md).
+The logical namespace is shared; there is no fallback to a second namespace. Eureka and metadata permissions must each follow their actual paths. Service Metadata role/token fields are not authentication or authorization. See [Consul paths](registry-consul-v2.en-US.md) and [Etcd paths](registry-etcd.md).
+
+## Resources, failures and freshness
+
+The member limit is 256, subscriptions 128, control workers 2–4 and queue 256. Raw Eureka HTTP responses are capped at 4 MiB, with at most 64 HTTP requests in flight. The total HTTP budget includes connection, body and JSON parsing. Error statuses and chunked responses share the byte cap; strict UTF-8, JSON depth/scalar limits and duplicate-field checks precede metadata use. These network operations do not run on RPC EventLoops.
+
+Genuine DOWN or unroutable members may be filtered by health, but malformed or foreign V2 declarations must cause a security rejection. TLS, authentication, authorization, reference, integrity and response-limit failures expose stable `RegistrySecurityException.reason()` values without raw causes or response bodies; they cannot publish healthy empty directories. Core security epochs immediately invalidate old snapshots, including another route that has not refreshed. Ordinary network failures retain bounded LKG semantics.
+
+A 404 lease renewal triggers re-registration. Unregister deletes only this process's native ID. External `lookupCandidateOwners` results must never go directly to a load balancer. Ordinary Etcd/Consul `lookup` still checks its own Member Leases; only composed candidate reads bypass another Registry's leases before Eureka checks actual membership health. Persistent generation tombstones and Manifest revisions are retained for rollout, rollback and fencing; no automatic GC is provided.
+
+`directory-max-staleness` bounds LKG use only after an explicit synchronization failure. Parsed and validated HTTP 200 responses, and HTTP 404 responses handled as an empty application, count as successful synchronization. Such success does not signal that the server cache has incorporated the latest member changes. Core cannot infer cache lag from it; the budget is not a maximum age for server cache contents. See [directory freshness](registry-freshness.md).
+
+## Real-service verification and fixture limits
+
+The [Eureka workflow](../../.github/workflows/eureka-v2.yml) `real-eureka` job runs JDK 21, an isolated Spring Boot 3.5.4 / Spring Cloud 2025.0.0 Eureka Server and real Consul KV. Cases include all three roles, the native disabled Consumer port, metadata CAS, instance conflicts, lost leases and a real Eureka JVM restart. This plaintext fixture verifies registration/recovery contracts; it is not evidence that both TLS/credential chains have passed real deployment validation.
+
+The server lives under `.github/test-fixtures/eureka-server`, outside the RPC Reactor, and adds no second production Starter. Shared contracts use 30 real Java interfaces and ten independent Registry client objects in one test JVM. Separate business-JVM process/chain/revision scenarios run in the [application-registry-e2e workflow](../../.github/workflows/application-registry-e2e.yml). Native membership `0→10→0`, SPI entries, subscription creation, snapshot/health notifications and convergence times are measured separately, not as total HTTP, renewal or Watch traffic. Check actual execution and conditional skips against the exact SHA, job/step and original reports.
+
+The isolated fixture sets `eureka.server.use-read-only-response-cache=false`, disabling only the read-only layer. The read-write cache retains its own invalidation and expiration behavior. `eureka.server.response-cache-auto-expiration-in-seconds=1` sets write-based expiration to one second; subsequent queries reload expired entries. `eureka.server.response-cache-update-interval-ms` is not the read-write cache expiration time.
+
+These settings define isolated CI convergence conditions. They are not a production adapter fix and do not guarantee convergence within 25 seconds under production Eureka defaults. See the [engineering checkpoint](../engineering/agent-governance-checkpoint.md) and [acceptance boundaries](application-registry-acceptance.md) for actual configuration, execution evidence and gates.
+
+Implementation references: [Factory](../../otryx-registry/otryx-registry-eureka/src/main/java/com/peachsoft/otryx/registry/eureka/EurekaApplicationRegistryFactory.java), [composed Registry](../../otryx-registry/otryx-registry-eureka/src/main/java/com/peachsoft/otryx/registry/eureka/EurekaApplicationRegistry.java), [RegistryOptions](../../otryx-core/src/main/java/com/peachsoft/otryx/registry/RegistryOptions.java), [HTTP boundary](../../otryx-registry/otryx-registry-http/src/main/java/com/peachsoft/otryx/registry/http/HttpRegistryClient.java), [Resolver](../../otryx-core/src/main/java/com/peachsoft/otryx/registry/ApplicationServiceResolver.java).

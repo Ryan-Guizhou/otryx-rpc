@@ -4,6 +4,9 @@ import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ApplicationManifest;
 import com.peachsoft.otryx.api.ApplicationManifestCodec;
 import com.peachsoft.otryx.registry.ApplicationManifestRepository;
+import com.peachsoft.otryx.registry.RegistrySecurityDescriptor;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
+import com.peachsoft.otryx.registry.RegistrySecurityFailure;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
@@ -32,6 +35,12 @@ public final class ConsulApplicationManifestRepository implements ApplicationMan
         this.identity = Objects.requireNonNull(identity, "identity");
     }
 
+    /** 返回同一实际 Consul HTTP 客户端的保护来源。 */
+    @Override
+    public RegistrySecurityDescriptor securityDescriptor() {
+        return client.securityDescriptor();
+    }
+
     /** 按规范二进制 Revision 幂等创建，绝不以普通 PUT 覆盖既有数据。 */
     @Override
     public CompletionStage<Void> publish(ApplicationManifest manifest) {
@@ -50,7 +59,7 @@ public final class ConsulApplicationManifestRepository implements ApplicationMan
             ConsulV2Client.KvEntry stored = client.get(key).orElseThrow(
                     () -> new IllegalStateException("Consul Manifest was not persisted"));
             if (!Arrays.equals(value, stored.value())) {
-                throw new IllegalStateException("Consul immutable Manifest revision collision");
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_INTEGRITY_REJECTED);
             }
             return null;
         });
@@ -68,7 +77,11 @@ public final class ConsulApplicationManifestRepository implements ApplicationMan
                 return Optional.empty();
             }
             ApplicationManifest manifest = ApplicationManifestCodec.decode(stored.orElseThrow().value());
-            return Optional.of(manifest.requireReference(application, revision));
+            try {
+                return Optional.of(manifest.requireReference(application, revision));
+            } catch (IllegalArgumentException invalidReference) {
+                throw new RegistrySecurityException(RegistrySecurityFailure.METADATA_REFERENCE_MISMATCH);
+            }
         });
     }
 }

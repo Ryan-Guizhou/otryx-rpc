@@ -10,6 +10,9 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.peachsoft.otryx.api.OtryxRpcIdempotent;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcTarget;
+import com.peachsoft.otryx.api.RpcPeerIdentity;
+import com.peachsoft.otryx.transport.RpcTransportResponse;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcUnavailableException;
@@ -466,6 +469,12 @@ class OtryxRpcClientResilienceTest {
     @Test
     void hangingTransportShouldFinishAtLogicalDeadline() throws Exception {
         CompletableFuture<byte[]> neverFinishes = new CompletableFuture<>();
+        CountDownLatch cancellationObserved = new CountDownLatch(1);
+        neverFinishes.whenComplete((value, error) -> {
+            if (neverFinishes.isCancelled()) {
+                cancellationObserved.countDown();
+            }
+        });
         try (OtryxRpcClient client = controlPlane.clientBuilder()
                 .transportClient(new TestTransport(
                         (endpoint, frame, timeout) -> neverFinishes))
@@ -476,6 +485,8 @@ class OtryxRpcClientResilienceTest {
             CompletionException failure = assertThrows(CompletionException.class,
                     () -> service.find("test"));
             assertInstanceOf(RpcTimeoutException.class, failure.getCause());
+            assertTrue(cancellationObserved.await(2, TimeUnit.SECONDS),
+                    "Deadline must propagate cancellation to the transport");
             assertTrue(neverFinishes.isCancelled(), "Deadline must cancel the pending transport");
         }
     }
@@ -534,6 +545,12 @@ class OtryxRpcClientResilienceTest {
             throws Exception {
         CountDownLatch dispatched = new CountDownLatch(1);
         CompletableFuture<byte[]> pendingTransport = new CompletableFuture<>();
+        CountDownLatch cancellationObserved = new CountDownLatch(1);
+        pendingTransport.whenComplete((value, error) -> {
+            if (pendingTransport.isCancelled()) {
+                cancellationObserved.countDown();
+            }
+        });
         OtryxRpcClient client = client((endpoint, frame, timeout) -> {
             dispatched.countDown();
             return pendingTransport;
@@ -554,6 +571,8 @@ class OtryxRpcClientResilienceTest {
             client.close();
             invocation.join(2_000L);
             assertFalse(invocation.isAlive(), "Client close must settle pending calls");
+            assertTrue(cancellationObserved.await(2, TimeUnit.SECONDS),
+                    "Client close must propagate cancellation to the transport");
             assertTrue(pendingTransport.isCancelled(),
                     "Client close must propagate cancellation to the transport");
             Throwable error = failure.get();
@@ -702,11 +721,26 @@ class OtryxRpcClientResilienceTest {
         }
 
         @Override
-        public CompletionStage<byte[]> request(
-                RpcEndpoint endpoint,
+        public CompletionStage<RpcTransportResponse> request(
+                RpcTarget target,
                 byte[] frame,
                 Duration timeout) {
-            return request.request(endpoint, frame, timeout);
+            CompletableFuture<byte[]> original =
+                    request.request(target.endpoint(), frame, timeout).toCompletableFuture();
+            CompletableFuture<RpcTransportResponse> result = new CompletableFuture<>();
+            result.whenComplete((value, error) -> {
+                if (result.isCancelled()) {
+                    original.cancel(true);
+                }
+            });
+            original.whenComplete((response, failure) -> {
+                if (failure != null) {
+                    result.completeExceptionally(failure);
+                } else {
+                    result.complete(new RpcTransportResponse(response, RpcPeerIdentity.anonymous()));
+                }
+            });
+            return result;
         }
 
         @Override
@@ -720,12 +754,12 @@ class OtryxRpcClientResilienceTest {
         private final CountDownLatch releaseClose = new CountDownLatch(1);
 
         @Override
-        public CompletionStage<byte[]> request(
-                RpcEndpoint endpoint,
+        public CompletionStage<RpcTransportResponse> request(
+                RpcTarget target,
                 byte[] frame,
                 Duration timeout) {
             return CompletableFuture.completedFuture(
-                    successResponse(frame, "ok"));
+                    new RpcTransportResponse(successResponse(frame, "ok"), RpcPeerIdentity.anonymous()));
         }
 
         @Override

@@ -276,7 +276,7 @@ class ConsulApplicationRegistryIntegrationTest {
 
     private static ConsulApplicationRegistry registry(String namespace) {
         return (ConsulApplicationRegistry) new ConsulApplicationRegistryFactory().create(
-                new com.peachsoft.otryx.registry.RegistryOptions(
+                com.peachsoft.otryx.registry.RegistryOptions.trustedDevelopment(
                         List.of(ENDPOINT), namespace, Map.of(
                                 "consulTtlSeconds", "10",
                                 "consulHeartbeatSeconds", "1",
@@ -334,7 +334,7 @@ class ConsulApplicationRegistryIntegrationTest {
         private static void check() {
             ApplicationRegistry registry = ExtensionLoader.getLoader(
                     com.peachsoft.otryx.registry.ApplicationRegistryFactory.class)
-                    .getExtension("consul").create(new com.peachsoft.otryx.registry.RegistryOptions(
+                    .getExtension("consul").create(com.peachsoft.otryx.registry.RegistryOptions.trustedDevelopment(
                             List.of(ENDPOINT), "spi-test", Map.of()));
             registry.close();
         }

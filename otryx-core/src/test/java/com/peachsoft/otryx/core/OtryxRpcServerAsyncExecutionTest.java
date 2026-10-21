@@ -20,6 +20,7 @@ import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import com.peachsoft.otryx.transport.RpcRequestHandler;
 import com.peachsoft.otryx.transport.RpcTransportServer;
 import java.lang.reflect.Method;
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -64,6 +66,7 @@ public class OtryxRpcServerAsyncExecutionTest {
             }
         };
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -100,6 +103,7 @@ public class OtryxRpcServerAsyncExecutionTest {
         CapturingTransportServer transport = new CapturingTransportServer();
         ContextServiceImpl service = new ContextServiceImpl();
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -203,6 +207,7 @@ public class OtryxRpcServerAsyncExecutionTest {
         };
 
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -268,6 +273,7 @@ public class OtryxRpcServerAsyncExecutionTest {
 
             CompletionStage<byte[]> slowResponse =
                     transport.handle(request("slow"));
+            assertTrue(service.slowInvoked.await(3, TimeUnit.SECONDS));
             assertFalse(slowResponse.toCompletableFuture().isDone());
 
             byte[] fastResponse = transport.handle(request("fast"))
@@ -373,6 +379,8 @@ public class OtryxRpcServerAsyncExecutionTest {
             CompletionStage<byte[]> queuedResponse =
                     transport.handle(request("queued"));
             assertFalse(queuedResponse.toCompletableFuture().isDone());
+            ApplicationTestControlPlane.await(() -> cpuQueueSize(server) == 1,
+                    "The queued invocation did not enter the CPU queue");
 
             service.slow.complete("slow");
             byte[] overloaded = slowResponse.toCompletableFuture()
@@ -569,6 +577,7 @@ public class OtryxRpcServerAsyncExecutionTest {
 
             CompletionStage<byte[]> slowResponse =
                     transport.handle(request("slow"));
+            assertTrue(service.slowInvoked.await(3, TimeUnit.SECONDS));
             assertFalse(slowResponse.toCompletableFuture().isDone());
 
             byte[] overloaded = transport.handle(request("fast"))
@@ -613,6 +622,7 @@ public class OtryxRpcServerAsyncExecutionTest {
             }
         };
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -696,6 +706,7 @@ public class OtryxRpcServerAsyncExecutionTest {
             }
         };
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -756,6 +767,7 @@ public class OtryxRpcServerAsyncExecutionTest {
             }
         };
         OtryxRpcServer server = OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(new NoopCodec()))
@@ -877,6 +889,7 @@ public class OtryxRpcServerAsyncExecutionTest {
             RpcCodec codec,
             RpcObserver observer) {
         return OtryxRpcServer.builder()
+                .securityProfile(com.peachsoft.otryx.api.RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.membership())
                 .transportServer(transport)
                 .codecRegistry(RpcCodecRegistry.of(codec))
@@ -1052,4 +1065,14 @@ public class OtryxRpcServerAsyncExecutionTest {
         public void close() {
         }
     }
+    private static int cpuQueueSize(OtryxRpcServer server) {
+        try {
+            Field field = OtryxRpcServer.class.getDeclaredField("cpuExecutor");
+            field.setAccessible(true);
+            return ((ThreadPoolExecutor) field.get(server)).getQueue().size();
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
 }

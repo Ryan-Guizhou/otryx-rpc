@@ -1,5 +1,6 @@
 package com.peachsoft.otryx.benchmarks;
 
+import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
@@ -105,6 +106,7 @@ public class ExecutionScenarioBenchmark {
                                 : 1024);
 
         server = OtryxRpcServer.builder()
+                .securityProfile(RpcSecurityProfile.TRUSTED_DEVELOPMENT)
                 .applicationMembership(controlPlane.provider())
                 .transportServer(
                         transportFactory.createServer(

@@ -1,6 +1,8 @@
 package com.peachsoft.otryx.observability;
 
 import com.peachsoft.otryx.api.RpcOverloadedException;
+import com.peachsoft.otryx.api.RpcAuthenticationException;
+import com.peachsoft.otryx.registry.RegistrySecurityException;
 import com.peachsoft.otryx.api.RpcRemoteException;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcTimeoutException;
@@ -32,6 +34,9 @@ public final class RpcFailureClassifier {
             Throwable error) {
         if (status == RpcStatus.OK && error == null) {
             return RpcFailureCategory.NONE;
+        }
+        if (error instanceof RpcAuthenticationException || error instanceof RegistrySecurityException) {
+            return RpcFailureCategory.SECURITY;
         }
         if (error instanceof RpcProtocolException) {
             return RpcFailureCategory.PROTOCOL;
