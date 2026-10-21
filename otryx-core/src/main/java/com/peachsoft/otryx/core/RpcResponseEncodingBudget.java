@@ -1,5 +1,7 @@
 package com.peachsoft.otryx.core;
 
+import com.peachsoft.otryx.api.RpcStatus;
+import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import java.io.OutputStream;
 import java.util.Arrays;
 import java.util.Objects;
@@ -11,8 +13,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>每次扩容先 CAS 预留，再分配新数组。Lease 由当前编码操作持有直到 Frame
  * 已构造完毕，任意失败、取消或异常均在 finally 中释放。扩容前需要同时预留
- * 原数组和目标新数组的占用，复制完成后才归还旧数组。此配额不包含 Codec 内部
- * 对象图、完整帧构造及最终 Payload 副本、JVM DirectMemory。
+ * 原数组和目标新数组的占用，复制完成后才归还旧数组。构造最终 Frame 前
+ * 同时预留 Frame 与当前缓冲的容量，消除另一次 Payload 中间复制。
+ * 此额度仍不包含 Codec 内部对象图、Frame 返回后的存活时间或 JVM DirectMemory。
  *
  * @Author OpenAI
  * @Version 1.0.0-SNAPSHOT
@@ -141,6 +144,37 @@ final class RpcResponseEncodingBudget {
                 throw new IllegalStateException("RPC encoding buffer is closed");
             }
             return Arrays.copyOf(bytes, length);
+        }
+
+        /**
+         * 在创建完整 Wire Frame 前同时预留当前缓冲与 Frame 所需字节。
+         *
+         * <p>此额度覆盖创建时的瞬时复制峰值；Frame 离开本方法后不再
+         * 由编码额度持有，其在写队列阶段仍由 Transport 独立配额管理。
+         *
+         * @param codecId 已协商 Codec ID
+         * @param status 响应状态
+         * @param requestId 请求 ID
+         * @param serviceId 服务 ID
+         * @param methodId 方法 ID
+         * @return 独立持有、仅包含一份最终 Wire Frame 的字节数组
+         */
+        byte[] toResponseFrame(byte codecId, RpcStatus status, long requestId,
+                int serviceId, int methodId) {
+            if (closed.get()) {
+                throw new IllegalStateException("RPC encoding buffer is closed");
+            }
+            if (length > RpcProtocolCodec.MAX_BODY_LENGTH) {
+                throw new CapacityExceededException();
+            }
+            int frameBytes = RpcProtocolCodec.HEADER_LENGTH + length;
+            reserve(frameBytes);
+            try {
+                return RpcProtocolCodec.encodeResponse(codecId, status, requestId,
+                        serviceId, methodId, bytes, 0, length);
+            } finally {
+                release(frameBytes);
+            }
         }
 
         private void ensureCapacity(long required) {

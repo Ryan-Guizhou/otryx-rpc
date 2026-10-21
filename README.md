@@ -138,6 +138,8 @@ Nacos 的 Manifest/Mapping 读取只接受远端查询结果及其权威 MD5，S
 
 [性能证据](docs/reference/performance-evidence.md) · [容量规划](docs/reference/capacity-planning.md) · [可观测性](docs/observability.md)
 
+生产级 `NETWORK_MTLS` 在 Provider 绑定方法时要求 `RpcBoundedResultMethodCodec`，禁止仅依赖先完整分配 Payload 的默认 Codec；Fory 已实现有界 OutputStream，最终 Wire Frame 创建前另预留瞬时内存配额。可信开发模式仍可使用兼容适配；该防护不等于全 JVM Heap/DirectMemory 的硬上限，详见 [Transport 资源说明](docs/reference/transport-admission.md)。
+
 <!-- doc-section:documentation -->
 ## 文档
 

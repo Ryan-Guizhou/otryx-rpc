@@ -1180,14 +1180,16 @@ public final class OtryxRpcServer implements AutoCloseable {
     /**
      * 流式写入全局有界编码缓冲，完整构造 Wire Frame 后再释放局部输出额度。
      *
-     * <p>默认 Codec 兼容实现仍可能预分配其内部 Payload；Fory 实现直接写入此 Sink。
+     * <p>NETWORK_MTLS 的方法级 Codec 必须声明流式编码契约；
+     * 可信开发环境的默认兼容 Codec 仍可能预分配其内部 Payload。
      */
     private byte[] encodedResponse(RpcFrameView request, RpcMethodCodec methodCodec, Object value)
             throws java.io.IOException {
         int codecMax = methodCodec.securityDescriptor().maxPayloadBytes();
         try (RpcResponseEncodingBudget.Buffer encoded = responseEncodingBudget.open(codecMax)) {
             methodCodec.encodeResultTo(value, encoded);
-            return response(request, methodCodec.codecId(), RpcStatus.OK, encoded.toByteArray());
+            return encoded.toResponseFrame(methodCodec.codecId(), RpcStatus.OK,
+                    request.requestId(), request.serviceId(), request.methodId());
         }
     }
 

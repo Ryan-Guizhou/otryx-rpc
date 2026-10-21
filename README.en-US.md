@@ -138,6 +138,8 @@ Validate deadline, admission, backpressure, retries, TLS and observability again
 
 [Performance evidence](docs/reference/performance-evidence.md) · [Capacity planning](docs/reference/capacity-planning.md) · [Observability](docs/observability.md)
 
+Production `NETWORK_MTLS` Providers require `RpcBoundedResultMethodCodec` during method binding, rejecting the default full-array result adapter. Fory writes to a bounded OutputStream; final Wire Frame construction also reserves a temporary frame budget. Trusted development mode retains the legacy adapter. This is not a global JVM heap/direct-memory bound; see [Transport resource ownership](docs/reference/transport-admission.md).
+
 <!-- doc-section:documentation -->
 ## Documentation
 

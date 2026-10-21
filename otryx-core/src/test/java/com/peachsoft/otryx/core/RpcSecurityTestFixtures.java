@@ -4,11 +4,14 @@ import com.peachsoft.otryx.api.ApplicationKey;
 import com.peachsoft.otryx.api.ExportedService;
 import com.peachsoft.otryx.api.RpcCertificateBinding;
 import com.peachsoft.otryx.api.RpcEndpoint;
+import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.api.RpcTarget;
 import com.peachsoft.otryx.api.ServiceKey;
+import com.peachsoft.otryx.codec.RpcBoundedResultMethodCodec;
 import com.peachsoft.otryx.codec.RpcCodec;
+import com.peachsoft.otryx.codec.RpcMethodCodec;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.RpcCodecSecurityDescriptor;
 import com.peachsoft.otryx.observability.RpcSecurityMode;
@@ -23,6 +26,8 @@ import com.peachsoft.otryx.transport.RpcTransportClient;
 import com.peachsoft.otryx.transport.RpcTransportResponse;
 import com.peachsoft.otryx.transport.RpcTransportSecurityDescriptor;
 import com.peachsoft.otryx.transport.RpcTransportServer;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
@@ -130,6 +135,51 @@ final class RpcSecurityTestFixtures {
         @Override
         public byte[] encode(Object value) {
             return new byte[] {1};
+        }
+
+        /**
+         * 测试受信方法级 Codec：真实固定一字节结果直接写入有界输出流，
+         * 不使用默认先整块数组序列化的兼容适配路径。
+         */
+        @Override
+        public RpcMethodCodec bind(RpcMethodDescriptor descriptor) {
+            RpcMethodCodec baseline = RpcCodec.super.bind(descriptor);
+            return new RpcBoundedResultMethodCodec() {
+                @Override
+                public byte codecId() {
+                    return baseline.codecId();
+                }
+
+                @Override
+                public RpcCodecSecurityDescriptor securityDescriptor() {
+                    return baseline.securityDescriptor();
+                }
+
+                @Override
+                public byte[] encodeArguments(Object[] arguments) {
+                    return baseline.encodeArguments(arguments);
+                }
+
+                @Override
+                public Object[] decodeArguments(byte[] payload) {
+                    return baseline.decodeArguments(payload);
+                }
+
+                @Override
+                public byte[] encodeResult(Object value) {
+                    return baseline.encodeResult(value);
+                }
+
+                @Override
+                public void encodeResultTo(Object value, OutputStream output) throws IOException {
+                    output.write(1);
+                }
+
+                @Override
+                public Object decodeResult(byte[] payload) {
+                    return baseline.decodeResult(payload);
+                }
+            };
         }
 
         @Override

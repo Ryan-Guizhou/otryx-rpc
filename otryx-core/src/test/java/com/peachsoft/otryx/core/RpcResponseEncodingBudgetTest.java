@@ -42,6 +42,32 @@ class RpcResponseEncodingBudgetTest {
     }
 
     @Test
+    void finalFrameMustBePreReservedAndMustNotMakeAnotherIntermediatePayloadCopy() throws Exception {
+        RpcResponseEncodingBudget rejected = new RpcResponseEncodingBudget(80L, 64);
+        try (RpcResponseEncodingBudget.Buffer output = rejected.open(64)) {
+            output.write(new byte[8]);
+            assertEquals(64L, rejected.reservedBytes());
+            assertThrows(RpcResponseEncodingBudget.CapacityExceededException.class,
+                    () -> output.toResponseFrame((byte) 1,
+                            com.peachsoft.otryx.api.RpcStatus.OK, 5L, 8, 9));
+            assertEquals(64L, rejected.reservedBytes());
+        }
+        assertEquals(0L, rejected.reservedBytes());
+
+        RpcResponseEncodingBudget allowed = new RpcResponseEncodingBudget(128L, 64);
+        byte[] expected = com.peachsoft.otryx.protocol.RpcProtocolCodec.encodeResponse(
+                (byte) 1, com.peachsoft.otryx.api.RpcStatus.OK, 5L, 8, 9, new byte[8]);
+        try (RpcResponseEncodingBudget.Buffer output = allowed.open(64)) {
+            output.write(new byte[8]);
+            assertArrayEquals(expected, output.toResponseFrame(
+                    (byte) 1, com.peachsoft.otryx.api.RpcStatus.OK, 5L, 8, 9));
+            assertEquals(64L, allowed.reservedBytes(), "Transient Frame must release its own allocation lease");
+            assertEquals(104L, allowed.highWaterBytes(), "Both encoding array and Wire Frame must be measured");
+        }
+        assertEquals(0L, allowed.reservedBytes());
+    }
+
+    @Test
     void codecAndGlobalLimitsMustFailClosedWithoutDoubleRelease() throws Exception {
         RpcResponseEncodingBudget budget = new RpcResponseEncodingBudget(1024, 512);
         RpcResponseEncodingBudget.Buffer sink = budget.open(16);

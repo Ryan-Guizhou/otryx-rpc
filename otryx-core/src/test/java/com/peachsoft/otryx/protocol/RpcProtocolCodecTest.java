@@ -230,6 +230,22 @@ class RpcProtocolCodecTest {
     }
 
     @Test
+    void responsePayloadSliceMustMatchExistingWireEncodingAndRejectMalformedBounds() {
+        byte[] payload = new byte[] {99, 99, 7, 8, 9, 99, 99};
+        byte[] expected = RpcProtocolCodec.encodeResponse(
+                (byte) 1, RpcStatus.OK, 88L, 12, 23, new byte[] {7, 8, 9});
+        byte[] sliced = RpcProtocolCodec.encodeResponse(
+                (byte) 1, RpcStatus.OK, 88L, 12, 23, payload, 2, 3);
+        assertArrayEquals(expected, sliced);
+        assertThrows(IndexOutOfBoundsException.class, () -> RpcProtocolCodec.encodeResponse(
+                (byte) 1, RpcStatus.OK, 88L, 12, 23, payload, -1, 3));
+        assertThrows(IndexOutOfBoundsException.class, () -> RpcProtocolCodec.encodeResponse(
+                (byte) 1, RpcStatus.OK, 88L, 12, 23, payload, 2, 20));
+        assertThrows(NullPointerException.class, () -> RpcProtocolCodec.encodeResponse(
+                (byte) 1, RpcStatus.OK, 88L, 12, 23, null, 0, 0));
+    }
+
+    @Test
     void shouldEncodeUnaryResponseWithoutMetadata() {
         byte[] payload = new byte[] {7, 8};
 

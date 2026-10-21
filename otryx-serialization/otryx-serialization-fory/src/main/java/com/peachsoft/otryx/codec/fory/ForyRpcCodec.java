@@ -3,6 +3,7 @@ package com.peachsoft.otryx.codec.fory;
 import com.peachsoft.otryx.api.RpcContractTypeModel;
 import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.RpcTypeRegistry;
+import com.peachsoft.otryx.codec.RpcBoundedResultMethodCodec;
 import com.peachsoft.otryx.codec.RpcCodec;
 import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecSecurityDescriptor;
@@ -193,7 +194,7 @@ public final class ForyRpcCodec implements RpcCodec {
     }
 
     private final class ForyMethodCodec
-            implements RpcMethodCodec {
+            implements RpcBoundedResultMethodCodec {
 
         @Override
         public RpcCodecSecurityDescriptor securityDescriptor() {

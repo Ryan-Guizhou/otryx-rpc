@@ -5,6 +5,7 @@ import com.peachsoft.otryx.codec.RpcCodecIds;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * OTRYX RPC Wire v1 二进制协议编解码器。
@@ -283,27 +284,43 @@ public final class RpcProtocolCodec {
             int serviceId,
             int methodId,
             byte[] payload) {
-        byte[] actualPayload =
-                payload == null ? new byte[0] : payload;
-        checkedBodyLength(0, actualPayload.length);
-        byte[] bytes =
-                new byte[HEADER_LENGTH + actualPayload.length];
-        writeHeader(
-                bytes,
-                RpcMessageType.RESPONSE,
-                codec,
-                status,
-                requestId,
-                serviceId,
-                methodId,
-                0,
-                actualPayload.length);
-        System.arraycopy(
-                actualPayload,
-                0,
-                bytes,
-                HEADER_LENGTH,
-                actualPayload.length);
+        byte[] actualPayload = payload == null ? new byte[0] : payload;
+        return encodeResponse(codec, status, requestId, serviceId, methodId,
+                actualPayload, 0, actualPayload.length);
+    }
+
+    /**
+     * 直接从受限缓冲的有效 Payload 区间构造 Wire v1 RESPONSE。
+     *
+     * <p>不创建中间 Payload 副本；完整 Frame 仍是独立的 byte[]，
+     * 调用者需在创建前为该 Frame 的瞬时内存保留足够额度。
+     *
+     * @param codec 已协商 Codec ID
+     * @param status 响应状态
+     * @param requestId 原请求 ID
+     * @param serviceId 服务 ID
+     * @param methodId 方法 ID
+     * @param payload 调用期间不可修改的底层 Payload 字节
+     * @param offset 有效 Payload 起始偏移
+     * @param length 有效 Payload 字节数
+     * @return 可独立持有的完整 Wire v1 响应帧
+     */
+    public static byte[] encodeResponse(
+            byte codec,
+            RpcStatus status,
+            long requestId,
+            int serviceId,
+            int methodId,
+            byte[] payload,
+            int offset,
+            int length) {
+        Objects.requireNonNull(payload, "payload");
+        Objects.checkFromIndexSize(offset, length, payload.length);
+        checkedBodyLength(0, length);
+        byte[] bytes = new byte[HEADER_LENGTH + length];
+        writeHeader(bytes, RpcMessageType.RESPONSE, codec, status,
+                requestId, serviceId, methodId, 0, length);
+        System.arraycopy(payload, offset, bytes, HEADER_LENGTH, length);
         return bytes;
     }
 

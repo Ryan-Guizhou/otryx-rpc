@@ -11,6 +11,7 @@ import com.peachsoft.otryx.api.RpcMethodDescriptor;
 import com.peachsoft.otryx.api.ServiceKey;
 import com.peachsoft.otryx.codec.RpcCodecIds;
 import com.peachsoft.otryx.codec.RpcCodecSecurityDescriptor;
+import com.peachsoft.otryx.codec.RpcBoundedResultMethodCodec;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
@@ -115,6 +116,8 @@ class ForyRpcCodecTest {
         RpcMethodCodec method = codec.bind(RpcMethodDescriptor.from(
                 new ServiceKey(SampleService.class.getName(), "1.0.0", "default"),
                 SampleService.class.getMethod("echo", String.class)));
+        assertTrue(method instanceof RpcBoundedResultMethodCodec,
+                "NETWORK_MTLS must use direct bounded result encoding rather than a full-array adapter");
         try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             method.encodeResultTo("OTRYX streaming response", output);
             assertArrayEquals(method.encodeResult("OTRYX streaming response"), output.toByteArray());

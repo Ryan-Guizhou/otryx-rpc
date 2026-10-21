@@ -6,6 +6,7 @@ import com.peachsoft.otryx.api.RpcSecurityProfile;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcAuthenticationException;
 import com.peachsoft.otryx.api.RpcTarget;
+import com.peachsoft.otryx.codec.RpcBoundedResultMethodCodec;
 import com.peachsoft.otryx.codec.RpcCodecRegistry;
 import com.peachsoft.otryx.codec.RpcCodecSecurityDescriptor;
 import com.peachsoft.otryx.codec.RpcMethodCodec;
@@ -96,6 +97,10 @@ final class RpcSecurityChecks {
         }
         if (profile == RpcSecurityProfile.NETWORK_MTLS) {
             codec(read(codec::securityDescriptor, "method codec security descriptor"));
+            if (!(codec instanceof RpcBoundedResultMethodCodec)) {
+                throw new IllegalStateException(
+                        "NETWORK_MTLS requires streaming bounded result encoding for every method Codec");
+            }
         }
         return codec;
     }

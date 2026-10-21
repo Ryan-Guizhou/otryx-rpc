@@ -147,8 +147,9 @@ public interface RpcMethodCodec {
     /**
      * 将结果编码写入调用者提供的有界 OutputStream。
      *
-     * <p>默认实现兼容第三方 Codec，但会先产生完整 Payload 数组；
-     * 对高并发或不可信大对象应覆盖此方法并直接写入有界输出。
+     * <p>默认实现仅用于可信开发环境兼容第三方 Codec，可能先分配完整 Payload。
+     * NETWORK_MTLS Provider 在方法绑定时要求显式实现
+     * {@link RpcBoundedResultMethodCodec}，以免在有界输出之前触发无配额整块分配。
      * Provider 在调用前已校验身份、方法授权和执行预算。
      *
      * @param value 业务返回值
