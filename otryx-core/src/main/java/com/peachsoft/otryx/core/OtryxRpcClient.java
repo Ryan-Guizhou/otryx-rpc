@@ -31,6 +31,7 @@ import com.peachsoft.otryx.protocol.RpcErrorCodec;
 import com.peachsoft.otryx.protocol.RpcFrameView;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
 import com.peachsoft.otryx.proxy.ProxyFactory;
+import com.peachsoft.otryx.routing.RpcRouter;
 import com.peachsoft.otryx.registry.ApplicationServiceResolver;
 import com.peachsoft.otryx.registry.RegistrySecurityException;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
@@ -98,6 +99,7 @@ public final class OtryxRpcClient implements AutoCloseable {
     private final RpcCodecRegistry codecs;
     private final byte defaultCodecId;
     private final LoadBalancer loadBalancer;
+    private final RpcRouter router;
     private final ProxyFactory proxyFactory;
     private final Duration timeout;
     private final Map<String, Duration> methodTimeouts;
@@ -154,6 +156,9 @@ public final class OtryxRpcClient implements AutoCloseable {
         this.loadBalancer = builder.loadBalancer != null
                 ? builder.loadBalancer
                 : ExtensionLoader.getLoader(LoadBalancer.class).getDefaultExtension();
+        this.router = builder.router != null
+                ? builder.router
+                : ExtensionLoader.getLoader(RpcRouter.class).getDefaultExtension();
         this.proxyFactory = builder.proxyFactory != null
                 ? builder.proxyFactory
                 : ExtensionLoader.getLoader(ProxyFactory.class).getDefaultExtension();
@@ -660,7 +665,21 @@ public final class OtryxRpcClient implements AutoCloseable {
         }
 
         ServiceDirectory.Selection selection = reference.directory().selection();
-        ServiceInstance[] instances = selection.instances();
+        ServiceInstance[] verifiedInstances = selection.instances();
+        ServiceInstance[] instances = verifiedInstances;
+        if (verifiedInstances.length > 0 && router.hasRules(reference.key())) {
+            ServiceInstance[] routed = router.route(reference.key(), membership.application(),
+                    callContext == null ? Map.of() : callContext.metadata(), verifiedInstances.clone());
+            requireVerifiedRoute(verifiedInstances, routed);
+            instances = routed;
+            if (routed.length == 0) {
+                RpcUnavailableException unavailable =
+                        new RpcUnavailableException("RPC router excluded all verified providers");
+                observeClientAttempt(reference, method, null, attempt, 0L, RpcStatus.UNAVAILABLE, unavailable);
+                result.completeExceptionally(unavailable);
+                return;
+            }
+        }
         ServiceInstance selected = instances.length == 0
                 ? null
                 : loadBalancer.select(instances, loadMetrics);
@@ -807,6 +826,35 @@ public final class OtryxRpcClient implements AutoCloseable {
             recordEndpointFailure(reference, selected, endpointStats, System.nanoTime() - startedAtNanos);
             retryOrComplete(reference, method, encodedArguments, propagatedMetadata, callContext,
                     deadlineNanos, attempt, result, failure);
+        }
+    }
+
+    /**
+     * 校验可插拔 Router 只能返回原可信候选的对象引用，禁止伪造或重复端点。
+     *
+     * @param verified 原始只读候选数组
+     * @param routed Router 选择的候选子集
+     */
+    private static void requireVerifiedRoute(ServiceInstance[] verified, ServiceInstance[] routed) {
+        if (routed == null || routed.length > verified.length) {
+            throw new IllegalStateException("RPC router returned an invalid candidate array");
+        }
+        for (int index = 0; index < routed.length; index++) {
+            boolean found = false;
+            for (ServiceInstance candidate : verified) {
+                if (routed[index] == candidate) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                throw new IllegalStateException("RPC router introduced an unverified provider");
+            }
+            for (int previous = 0; previous < index; previous++) {
+                if (routed[index] == routed[previous]) {
+                    throw new IllegalStateException("RPC router duplicated a provider");
+                }
+            }
         }
     }
 
@@ -1512,6 +1560,7 @@ public final class OtryxRpcClient implements AutoCloseable {
         private RpcTransportClient transport;
         private RpcCodecRegistry codecs;
         private LoadBalancer loadBalancer;
+        private RpcRouter router;
         private ProxyFactory proxyFactory;
         private Duration timeout = Duration.ofSeconds(3);
         private Map<String, Duration> methodTimeouts = Map.of();
@@ -1607,6 +1656,17 @@ public final class OtryxRpcClient implements AutoCloseable {
          * @param value 代理工厂
          * @return Consumer Builder
          */
+        /**
+         * 配置路由 SPI，先对已验证应用候选做本地过滤，然后执行负载均衡。
+         *
+         * @param value 非 null 路由器，热路径不得远端 IO
+         * @return Consumer Builder
+         */
+        public Builder router(RpcRouter value) {
+            this.router = Objects.requireNonNull(value, "router");
+            return this;
+        }
+
         public Builder proxyFactory(ProxyFactory value) {
             this.proxyFactory = value;
             return this;

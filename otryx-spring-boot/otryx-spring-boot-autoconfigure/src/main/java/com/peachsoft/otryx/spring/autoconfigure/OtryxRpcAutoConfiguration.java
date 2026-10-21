@@ -12,6 +12,7 @@ import com.peachsoft.otryx.core.RpcAuthorizer;
 import com.peachsoft.otryx.core.RpcClientResilienceOptions;
 import com.peachsoft.otryx.core.RpcProviderExecutionOptions;
 import com.peachsoft.otryx.loadbalance.LoadBalancer;
+import com.peachsoft.otryx.routing.RpcRouter;
 import com.peachsoft.otryx.observability.RpcMetadataPropagator;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.observability.RpcTracingBridge;
@@ -349,7 +350,8 @@ public class OtryxRpcAutoConfiguration {
                 registry.registrar().orElseThrow(() ->
                         new IllegalStateException("Application Registry does not support membership registration")),
                 metadata.manifestRepository(), metadata.serviceMappingRepository(),
-                properties.getRegistry().getControlPlaneTimeout());
+                properties.getRegistry().getControlPlaneTimeout(),
+                properties.getRegistry().getMemberAttributes());
     }
 
     /**
@@ -547,6 +549,18 @@ public class OtryxRpcAutoConfiguration {
     }
 
     /**
+     * 创建 Controller/Consumer 的路由扩展，先于负载均衡执行。
+     *
+     * @param properties Consumer SPI 选择
+     * @return Router 扩展
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public RpcRouter peachRpcRouter(OtryxRpcProperties properties) {
+        return requireExtension(RpcRouter.class, "otryx.rpc.client.router", properties.getClient().getRouter());
+    }
+
+    /**
      * 创建 Consumer 代理工厂。
      *
      * @param properties OTRYX RPC 配置
@@ -597,6 +611,7 @@ public class OtryxRpcAutoConfiguration {
      * @param transportFactory Transport 工厂
      * @param transportOptions Transport 配置
      * @param loadBalancer Consumer 负载均衡器
+     * @param router Consumer 本地路由器
      * @param proxyFactory Consumer 代理工厂
      * @param resilienceOptions Consumer 容错参数
      * @param executionOptions Provider 执行资源参数
@@ -618,6 +633,7 @@ public class OtryxRpcAutoConfiguration {
             RpcTransportFactory transportFactory,
             RpcTransportOptions transportOptions,
             LoadBalancer loadBalancer,
+            RpcRouter router,
             ProxyFactory proxyFactory,
             RpcClientResilienceOptions resilienceOptions,
             RpcProviderExecutionOptions executionOptions,
@@ -635,6 +651,7 @@ public class OtryxRpcAutoConfiguration {
                 transportFactory,
                 transportOptions,
                 loadBalancer,
+                router,
                 proxyFactory,
                 resilienceOptions,
                 executionOptions,

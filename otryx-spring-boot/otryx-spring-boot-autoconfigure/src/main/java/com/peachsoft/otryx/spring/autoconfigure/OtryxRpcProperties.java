@@ -268,6 +268,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private String namespace = "";
         private String applicationName = "";
         private String instanceId = "";
+        private Map<String, String> memberAttributes = Map.of();
         private Duration controlPlaneTimeout = DEFAULT_CONTROL_PLANE_TIMEOUT;
         private long leaseTtlSeconds = 30;
         private final Nacos nacos = new Nacos();
@@ -364,6 +365,24 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public void setInstanceId(String instanceId) {
             this.instanceId = instanceId;
+        }
+
+        /**
+         * 获取 Provider/Consumer/BOTH 共享成员的公开路由属性。
+         *
+         * @return 有限的实例属性快照
+         */
+        public Map<String, String> getMemberAttributes() {
+            return memberAttributes;
+        }
+
+        /**
+         * 设置应用实例的路由标签，不得包含令牌或其他秘密。
+         *
+         * @param values 路由标签；在成员构建时再次验证容量和字符边界
+         */
+        public void setMemberAttributes(Map<String, String> values) {
+            this.memberAttributes = Map.copyOf(values);
         }
 
         /**
@@ -1300,6 +1319,7 @@ public class OtryxRpcProperties implements InitializingBean {
         private Map<String, Duration> methodTimeouts = Map.of();
         private Duration directoryMaxStaleness = DEFAULT_DIRECTORY_MAX_STALENESS;
         private String loadBalancer = "p2c-ewma";
+        private String router = "rules";
         private String proxy = "jdk";
         private final Resilience resilience = new Resilience();
 
@@ -1391,6 +1411,24 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public void setLoadBalancer(String loadBalancer) {
             this.loadBalancer = loadBalancer;
+        }
+
+        /**
+         * 获取应用级 Provider 过滤路由 SPI 名称。
+         *
+         * @return Router SPI 名称
+         */
+        public String getRouter() {
+            return router;
+        }
+
+        /**
+         * 配置 Consumer 路由 SPI 名称。
+         *
+         * @param router Router SPI 名称
+         */
+        public void setRouter(String router) {
+            this.router = router;
         }
 
         /**

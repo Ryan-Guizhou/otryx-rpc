@@ -7,7 +7,6 @@ import com.peachsoft.otryx.registry.RegistrySubscription;
 import com.peachsoft.otryx.registry.RegistrySecurityException;
 import com.peachsoft.otryx.registry.ServiceMappingKey;
 import com.peachsoft.otryx.registry.VerifiedProviderSnapshot;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
@@ -140,7 +139,7 @@ final class ServiceDirectory implements AutoCloseable {
         String id = instance.application().namespace() + "/"
                 + instance.application().applicationName() + "/" + instance.instanceId();
         return new ServiceInstance(id, instance.application(), key.serviceKey(),
-                instance.rpcEndpoint(), instance.weight(), Map.of());
+                instance.rpcEndpoint(), instance.weight(), instance.attributes());
     }
 
     private void markUnavailable() {

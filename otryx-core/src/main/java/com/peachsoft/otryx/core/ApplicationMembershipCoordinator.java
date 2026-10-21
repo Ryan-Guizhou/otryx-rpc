@@ -52,6 +52,7 @@ public final class ApplicationMembershipCoordinator implements AutoCloseable {
 
     private final ApplicationKey application;
     private final String instanceId;
+    private final Map<String, String> attributes;
     private final ApplicationRegistrar registrar;
     private final ApplicationManifestRepository manifests;
     private final ServiceMappingRepository mappings;
@@ -86,6 +87,24 @@ public final class ApplicationMembershipCoordinator implements AutoCloseable {
             ApplicationKey application, String instanceId,
             ApplicationRegistrar registrar, ApplicationManifestRepository manifests,
             ServiceMappingRepository mappings, Duration timeout) {
+        this(application, instanceId, registrar, manifests, mappings, timeout, Map.of());
+    }
+
+    /**
+     * 使用不可变成员属性创建实例，属性只供路由，不能用于身份授权。
+     *
+     * @param application 已验证的本地应用身份
+     * @param instanceId 实例身份
+     * @param registrar 实际成员注册器
+     * @param manifests Manifest 仓库
+     * @param mappings Mapping 仓库
+     * @param timeout 控制面单次操作期限
+     * @param attributes 有限且可公开的路由标签
+     */
+    public ApplicationMembershipCoordinator(
+            ApplicationKey application, String instanceId,
+            ApplicationRegistrar registrar, ApplicationManifestRepository manifests,
+            ServiceMappingRepository mappings, Duration timeout, Map<String, String> attributes) {
         this.application = Objects.requireNonNull(application, "application");
         this.registrar = Objects.requireNonNull(registrar, "registrar");
         this.manifests = Objects.requireNonNull(manifests, "manifests");
@@ -96,8 +115,10 @@ public final class ApplicationMembershipCoordinator implements AutoCloseable {
             throw new IllegalArgumentException("Invalid membership control timeout");
         }
         this.timeoutMillis = Math.max(1L, timeout.toMillis());
-        this.instanceId = new ApplicationInstance(
-                instanceId, application, ApplicationRole.CONSUMER, null, 0, null, Map.of()).instanceId();
+        ApplicationInstance candidate = new ApplicationInstance(
+                instanceId, application, ApplicationRole.CONSUMER, null, 0, null, attributes);
+        this.instanceId = candidate.instanceId();
+        this.attributes = candidate.attributes();
     }
 
     /**
@@ -311,7 +332,7 @@ public final class ApplicationMembershipCoordinator implements AutoCloseable {
 
     private ApplicationInstance instance(ApplicationRole role, RpcEndpoint endpoint, String revision) {
         return new ApplicationInstance(instanceId, application, role,
-                endpoint, endpoint == null ? 0 : 100, revision, Map.of());
+                endpoint, endpoint == null ? 0 : 100, revision, attributes);
     }
 
     private <T> CompletionStage<T> bounded(CompletionStage<T> stage) {

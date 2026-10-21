@@ -16,6 +16,7 @@ import com.peachsoft.otryx.core.RpcProviderAdmissionOptions;
 import com.peachsoft.otryx.core.RpcClientResilienceOptions;
 import com.peachsoft.otryx.core.RpcProviderExecutionOptions;
 import com.peachsoft.otryx.loadbalance.LoadBalancer;
+import com.peachsoft.otryx.routing.RpcRouter;
 import com.peachsoft.otryx.observability.RpcMetadataPropagator;
 import com.peachsoft.otryx.observability.RpcObserver;
 import com.peachsoft.otryx.observability.RpcTracingBridge;
@@ -61,6 +62,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
     private final RpcTransportFactory transportFactory;
     private final RpcTransportOptions transportOptions;
     private final LoadBalancer loadBalancer;
+    private final RpcRouter router;
     private final ProxyFactory proxyFactory;
     private final RpcClientResilienceOptions resilienceOptions;
     private final RpcProviderExecutionOptions executionOptions;
@@ -96,6 +98,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
      * @param transportFactory Transport 工厂
      * @param transportOptions Transport 配置
      * @param loadBalancer Consumer 负载均衡器
+     * @param router Consumer 本地 Router SPI
      * @param proxyFactory Consumer 代理工厂
      * @param resilienceOptions Consumer 容错参数
      * @param executionOptions Provider 执行资源参数
@@ -114,6 +117,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
             RpcTransportFactory transportFactory,
             RpcTransportOptions transportOptions,
             LoadBalancer loadBalancer,
+            RpcRouter router,
             ProxyFactory proxyFactory,
             RpcClientResilienceOptions resilienceOptions,
             RpcProviderExecutionOptions executionOptions,
@@ -130,6 +134,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
         this.transportFactory = Objects.requireNonNull(transportFactory, "transportFactory");
         this.transportOptions = Objects.requireNonNull(transportOptions, "transportOptions");
         this.loadBalancer = Objects.requireNonNull(loadBalancer, "loadBalancer");
+        this.router = Objects.requireNonNull(router, "router");
         this.proxyFactory = Objects.requireNonNull(proxyFactory, "proxyFactory");
         this.resilienceOptions = Objects.requireNonNull(
                 resilienceOptions,
@@ -311,6 +316,7 @@ public final class OtryxRpcRuntimeCoordinator implements AutoCloseable {
                 .codecRegistry(codecRegistry)
                 .transportClient(transport)
                 .loadBalancer(loadBalancer)
+                .router(router)
                 .proxyFactory(proxyFactory)
                 .timeout(clientProperties.getTimeout())
                 .methodTimeouts(clientProperties.getMethodTimeouts())

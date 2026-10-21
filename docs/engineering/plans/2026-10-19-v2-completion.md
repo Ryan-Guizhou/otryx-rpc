@@ -1,6 +1,6 @@
 # V2 剩余工作连续实施计划
 
-> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。2026-10-21（UTC）revision 6 的 15 条工作流为 14 成功、1 失败；普通 CI 的受保护 Etcd 夹具前置超时。revision 7 的严格 PKI 修复与本地目标验证已完成，#140 仍待新准确 Head 和合并后 main 的完整门禁。
+> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。截至 2026-10-21：#140 已完成并合并，[PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 的最终 Head 15/15 workflows、19/19 checks 通过；准确合并 main@`b655249d295992b4632c0b1a6019af8a7cc5b89a` 的 16/16 checks 通过。下列 revision 1–9 失败与修复记录保留为历史证据，不代表当前 HEAD 失败状态。后续 #141–#147 未通过各自验收前仍为未完成。
 
 **目标：** 完成应用级注册唯一入口及其生产化能力，保持可运行、可验证、可追溯的主线。
 
@@ -106,6 +106,12 @@ revision 6 在 Spring Boot BOM 前统一导入上游兼容修复 Testcontainers 
 revision 6 准确 `ae9a573a660d27d75f520e694a1f07cdc5e1bb08` 的全部 15 条工作流与 19 项检查已终态：14/18 成功，各有普通 CI 一项失败。该 CI reactor 为 846/0/0/18，真实 Etcd 容器、完整 Nacos 六阶段、chain、revision/rollback 均通过；受保护 Etcd 夹具在 25 秒 readiness 前置失败，9+2 项 IT、17 阶段 mTLS 和计数验收未执行。失败没有原始底层原因记录，不由成功上传步骤补记场景成功。
 
 隔离复现确认原测试 CA 缺少 keyUsage，会被 Python 3.13 起默认启用的严格 X.509 验证拒绝（错误 92）；CI 固定镜像使用 Python 3.14.4，镜像内 Etcd 与本地发行二进制相同。revision 7 补齐证书扩展，保持严格验证与原预算，新增固定分类/数字码的失败 JSON 和真实 OpenSSL 回归。原实现的最终 4 测试方法有 8 项断言失败，修复后通过；同一冻结候选两组真实 Etcd 各 19 项自检及 Java 9/2 项 IT 通过，689 输入不变、自有进程清理完成。独立审查和准确新 Head 的完整验收仍须执行，详见[工程断点第 10 节](../agent-governance-checkpoint.md#10-第六轮-ci-与-revision-7-严格-pki)。
+
+### #140 最终验收（2026-10-21）
+
+- 最终 Head `29b2265cf118f337f6a8e0b7d53537e2b38691cf`：15/15 workflows、19/19 checks success。完整普通 CI [39540002410](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39540002410) 确实执行受保护 Etcd TLS/RBAC 19 项夹具自检、9 项安全 IT、2 项客户端证书 IT 与 17 阶段 NETWORK_MTLS；Nacos process、chain、revision/rollback 及 benchmark smoke 均通过。
+- 已按准确 Head squash 合并到 main `b655249d295992b4632c0b1a6019af8a7cc5b89a`。合并后 main 全部 12 条 workflows、16 项 checks success；Issue #140 自动关闭。此验收不包含 #141 TLS 预握手/Codec 内存硬上限，也不包含 #146 固定物理机 soak。
+- 后续工作全部从该已验证主线继续；禁止将旧失败重新标为通过，也不得将此轮共享 Runner Smoke 冒充 #146 正式性能证据。
 
 ## 3. #141：连接、编码与取消资源上界
 
