@@ -50,6 +50,7 @@ public class OtryxRpcProperties implements InitializingBean {
     private final Server server = new Server();
     private final Codec codec = new Codec();
     private final Interceptor interceptor = new Interceptor();
+    private final Governance governance = new Governance();
 
     /**
      * 返回 OTRYX RPC 总开关。
@@ -184,6 +185,34 @@ public class OtryxRpcProperties implements InitializingBean {
          */
         public void setMaxActive(int value) {
             maxActive = value;
+        }
+    }
+
+    /**
+     * 返回签名治理控制面配置，缺少 Repository/Verifier Bean 时不创建控制资源。
+     *
+     * @return Last-Known-Good 的固定失联容忍时间
+     */
+    public Governance getGovernance() {
+        return governance;
+    }
+
+    /** 远端签名治理的本地安全下限。 */
+    public static class Governance {
+        private Duration maxLastKnownGood = Duration.ofMinutes(5);
+
+        /** 创建配置属性组。 */
+        public Governance() {
+        }
+
+        /** 获取普通治理后端失联可暂时使用已验证规则的上限。 */
+        public Duration getMaxLastKnownGood() {
+            return maxLastKnownGood;
+        }
+
+        /** 设置不可由远端策略放宽的本地 LKG 失联期限。 */
+        public void setMaxLastKnownGood(Duration value) {
+            maxLastKnownGood = value;
         }
     }
 

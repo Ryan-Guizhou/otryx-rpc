@@ -147,3 +147,10 @@ revision 6 准确 `ae9a573a660d27d75f520e694a1f07cdc5e1bb08` 的全部 15 条工
 - 上游已验收：#141 PR #163 合并到 `main@53f3dd9ffd85d4cee40417f20aefcf0cedd8b572`，主线 16/16 checks success。#142 的 Provider 路由 SPI 已在更早的 main 验证。
 - #143 当前为代码候选，拟增加有序 `RpcInterceptor`、独立逻辑与 Retry Attempt、Provider 授权后 Hook、固定 Worker/会话配额、Spring Bean 注入和安全回归。**直到准确 Head CI、合并后 main CI 及 Issue 验收完成前不得标为实现**。
 - #144 仍依赖 #143，#145/#146 依赖 #141 的正式容量/诊断证据。#146 固定物理主机 60 分钟 Soak 缺口不可用共享 CI Smoke 代替。
+
+
+### 2026-10-21 #144 开发候选状态
+
+- 前置 #141/#142/#143 已在 `main@2e6aee91b3c638c5b05c934d6ef159010812d15d` 验收 16/16 check-runs 全绿。
+- 本次 V2-17 代码候选：独立控制面 Repository、确定性 HMAC-SHA256 正文、签名/来源验证、单调 Revision、LKG 失效、统一本地不可变快照、Consumer 固定逻辑调用版本、Provider 原安全 Admission 外加动态方法 quota、Starter 配对校验、Quickstart 与 CN/EN README。
+- **验收前保持候选状态**：尚需准确 PR Head 和独立合并后 main CI。未知性能改善不作正式性能声称，#146 固定物理机 60min Soak 仍 BLOCKED。

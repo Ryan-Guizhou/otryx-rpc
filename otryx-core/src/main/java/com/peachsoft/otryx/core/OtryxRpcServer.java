@@ -4,6 +4,8 @@ import com.peachsoft.otryx.api.RpcAuthorizationContext;
 import com.peachsoft.otryx.api.RpcPeerIdentity;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcException;
+import com.peachsoft.otryx.api.RpcOverloadedException;
+import com.peachsoft.otryx.api.RpcUnavailableException;
 import com.peachsoft.otryx.api.RpcExecutionMode;
 import com.peachsoft.otryx.api.RpcIds;
 import com.peachsoft.otryx.api.RpcRemoteError;
@@ -101,6 +103,7 @@ public final class OtryxRpcServer implements AutoCloseable {
     private final Duration controlPlaneTimeout;
     private final RpcProviderExecutionOptions executionOptions;
     private final RpcObserver observer;
+    private final RpcGovernanceRuntime governance;
     private final RpcInterceptorRuntime interceptors;
     private final RpcMetadataPropagator metadataPropagator;
     private final RpcTracingBridge tracingBridge;
@@ -164,6 +167,7 @@ public final class OtryxRpcServer implements AutoCloseable {
         this.interceptors = builder.interceptors.isEmpty() ? null : new RpcInterceptorRuntime(
                 builder.interceptors, builder.interceptorWorkers,
                 builder.interceptorMaxActive, "provider");
+        this.governance = builder.governance;
         this.metadataPropagator = Objects.requireNonNull(
                 builder.metadataPropagator,
                 "metadataPropagator");
@@ -501,6 +505,28 @@ public final class OtryxRpcServer implements AutoCloseable {
                             "Unsupported codec"));
         }
 
+        if (!RpcSecurityChecks.providerPeer(securityProfile, peer, membership.application(),
+                identityClock.instant(), identityNanoClock.getAsLong())) {
+            return CompletableFuture.completedFuture(frameworkError(
+                    request, RpcStatus.BAD_REQUEST, "RPC authentication rejected"));
+        }
+
+        RpcGovernanceRuntime.Selection selectedGovernance = null;
+        if (governance != null) {
+            try {
+                selectedGovernance = governance.capture(binding.serviceKey(), request.methodId());
+                if (selectedGovernance.method() != null
+                        && selectedGovernance.method().maxTimeout() != null) {
+                    long governedDeadline = receivedAtNanos
+                            + selectedGovernance.method().maxTimeout().toNanos();
+                    requestDeadlineNanos = Math.min(requestDeadlineNanos, governedDeadline);
+                }
+            } catch (RpcUnavailableException unavailable) {
+                return CompletableFuture.completedFuture(
+                        frameworkError(request, RpcStatus.UNAVAILABLE, "Verified governance is unavailable"));
+            }
+        }
+
         // Validate application metadata even when tracing is disabled. The peer
         // identity is sourced exclusively from the authenticated transport connection.
         RpcCallContext callContext;
@@ -512,11 +538,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                     request, RpcStatus.BAD_REQUEST, "Invalid request metadata"));
         }
 
-        if (!RpcSecurityChecks.providerPeer(securityProfile, peer, membership.application(),
-                identityClock.instant(), identityNanoClock.getAsLong())) {
-            return CompletableFuture.completedFuture(frameworkError(
-                    request, RpcStatus.BAD_REQUEST, "RPC authentication rejected"));
-        }
+
         Instant maximumValidUntil = receivedAt.plus(maxAuthorizationGrantLifetime);
         if (initialRequestNanos != Long.MAX_VALUE) {
             Instant requestUntil = receivedAt.plusNanos(initialRequestNanos);
@@ -543,6 +565,7 @@ public final class OtryxRpcServer implements AutoCloseable {
                                     identityClock.instant(), identityNanoClock.getAsLong());
                 }).toCompletableFuture();
         boolean authorizedInline = pendingAuthorization.isDone();
+        RpcGovernanceRuntime.Selection governanceVersion = selectedGovernance;
         CompletableFuture<byte[]> reply = new CompletableFuture<>();
         AtomicReference<CompletableFuture<byte[]>> executing = new AtomicReference<>();
         reply.whenComplete((ignoredValue, ignoredFailure) -> {
@@ -582,13 +605,14 @@ public final class OtryxRpcServer implements AutoCloseable {
                 CompletionStage<byte[]> authorized;
                 if (!authorizedInline && requestExecutor != null) {
                     authorized = dispatchAuthorizedOnRequestExecutor(
-                            requestExecutor, request, binding, methodCodec, callContext, grant);
+                            requestExecutor, request, binding, methodCodec, callContext, grant, governanceVersion);
                 } else if (!authorizedInline && requestExecutor == null
                         && binding.executionMode(request.methodId()) == RpcExecutionMode.DIRECT) {
                     authorized = CompletableFuture.completedFuture(frameworkError(request, RpcStatus.UNAVAILABLE,
                             "DIRECT execution requires a transport request dispatcher"));
                 } else {
-                    authorized = executeAuthorized(request, binding, methodCodec, callContext, grant);
+                    authorized = executeAuthorized(request, binding, methodCodec, callContext, grant,
+                            governanceVersion);
                 }
                 CompletableFuture<byte[]> activeResponse = authorized.toCompletableFuture();
                 executing.set(activeResponse);
@@ -618,7 +642,8 @@ public final class OtryxRpcServer implements AutoCloseable {
             ServiceBinding binding,
             RpcMethodCodec codec,
             RpcCallContext callContext,
-            RpcAuthorizationGrant grant) {
+            RpcAuthorizationGrant grant,
+            RpcGovernanceRuntime.Selection governanceVersion) {
         CompletableFuture<byte[]> reply = new CompletableFuture<>();
         try {
             dispatcher.execute(() -> {
@@ -636,7 +661,8 @@ public final class OtryxRpcServer implements AutoCloseable {
                 }
                 try {
                     CompletableFuture<byte[]> response = executeAuthorized(
-                            request, binding, codec, callContext, grant).toCompletableFuture();
+                            request, binding, codec, callContext, grant,
+                            governanceVersion).toCompletableFuture();
                     reply.whenComplete((ignored, error) -> {
                         if (reply.isCancelled()) {
                             response.cancel(true);
@@ -664,7 +690,8 @@ public final class OtryxRpcServer implements AutoCloseable {
             ServiceBinding binding,
             RpcMethodCodec methodCodec,
             RpcCallContext callContext,
-            RpcAuthorizationGrant grant) {
+            RpcAuthorizationGrant grant,
+            RpcGovernanceRuntime.Selection governanceVersion) {
         if (state.get() != State.STARTED) {
             return CompletableFuture.completedFuture(
                     frameworkError(request, RpcStatus.UNAVAILABLE, "Server is not ready"));
@@ -692,19 +719,43 @@ public final class OtryxRpcServer implements AutoCloseable {
                             "Provider admission rejected: " + decision.reason()));
         }
 
-        CompletableFuture<byte[]> result =
-                new CompletableFuture<>();
+        RpcGovernanceRuntime.QuotaLease governanceLease = null;
+        if (governance != null) {
+            try {
+                governanceLease = governance.acquireQuota(governanceVersion,
+                        RpcGovernanceRuntime.QuotaSide.PROVIDER,
+                        binding.serviceKey(), request.methodId());
+            } catch (RpcOverloadedException capacity) {
+                decision.lease().release();
+                observeAdmissionRejected(request, "governance-method-capacity");
+                return CompletableFuture.completedFuture(frameworkError(
+                        request, RpcStatus.OVERLOADED, "Governance method capacity exhausted"));
+            } catch (RpcUnavailableException invalid) {
+                decision.lease().release();
+                return CompletableFuture.completedFuture(frameworkError(
+                        request, RpcStatus.UNAVAILABLE, "Governance configuration is unavailable"));
+            } catch (RuntimeException invalidConfiguration) {
+                decision.lease().release();
+                return CompletableFuture.completedFuture(frameworkError(
+                        request, RpcStatus.UNAVAILABLE, "Governance configuration was rejected"));
+            }
+        }
+        RpcGovernanceRuntime.QuotaLease acquiredGovernanceLease = governanceLease;
+        CompletableFuture<byte[]> result = new CompletableFuture<>();
         boolean observed = observer.enabled();
         // 两个终态：传输侧响应结束，以及业务执行（含异步 Stage）结束。
         // Future.cancel 不能证明业务线程停止，故不得直接释放并发资源。
         AtomicInteger remainingTerminals = new AtomicInteger(2);
         AtomicBoolean workFinished = new AtomicBoolean();
         Runnable releaseIfComplete = () -> {
-            if (remainingTerminals.decrementAndGet() == 0
-                    && decision.lease().release() && observed) {
-                observer.onServerInflightBytesChanged(
-                        -request.bytes().length);
-                observer.onServerInflightChanged(-1);
+            if (remainingTerminals.decrementAndGet() == 0) {
+                if (acquiredGovernanceLease != null) {
+                    acquiredGovernanceLease.release();
+                }
+                if (decision.lease().release() && observed) {
+                    observer.onServerInflightBytesChanged(-request.bytes().length);
+                    observer.onServerInflightChanged(-1);
+                }
             }
         };
         Runnable markWorkFinished = () -> {
@@ -1588,6 +1639,7 @@ public final class OtryxRpcServer implements AutoCloseable {
         private RpcProviderExecutionOptions executionOptions =
                 RpcProviderExecutionOptions.DEFAULT;
         private RpcObserver observer = RpcObserver.noop();
+        private RpcGovernanceRuntime governance;
         private List<RpcInterceptor> interceptors = List.of();
         private int interceptorWorkers = RpcInterceptorRuntime.DEFAULT_WORKERS;
         private int interceptorMaxActive = RpcInterceptorRuntime.DEFAULT_MAX_ACTIVE;
@@ -1833,6 +1885,17 @@ public final class OtryxRpcServer implements AutoCloseable {
          */
         public Builder authorizer(RpcAuthorizer value) {
             this.authorizer = Objects.requireNonNull(value, "authorizer");
+            return this;
+        }
+
+        /**
+         * 指定已认证完整治理控制面，Provider 只允许它在静态 Admission 之内收紧。
+         *
+         * @param value 已配置受信配置源与签名验证器的治理 Runtime
+         * @return Provider Builder
+         */
+        public Builder governanceRuntime(RpcGovernanceRuntime value) {
+            this.governance = Objects.requireNonNull(value, "governanceRuntime");
             return this;
         }
 

@@ -169,3 +169,8 @@ A successful refresh retires the previous candidate even when its public content
 Configure an ordered `RpcInterceptor` chain. Consumer logical calls are distinct from individual retry attempts; Provider hooks run only after actual peer checks, service/method authorization and business admission. With no configured hooks, no dedicated worker is created and the existing hot path remains unchanged. Enabled hooks use bounded workers, per-call admission and serialized lifecycle events. Timeout or cancellation never treats still-running hook work as completed.
 
 [Interceptor lifecycle and safety contract](docs/reference/interceptors.md) · [Quickstart configuration](otryx-quickstart/README.en-US.md).
+
+
+## Signed dynamic governance (V2-17)
+
+Optional `RpcGovernanceRuntime` consumes complete signed governance snapshots on a bounded control executor and atomically switches timeout, tag routing, application weighting, circuit and concurrency limits. Each Consumer logical call pins one revision; the Provider's original admission and mTLS/auth/Codec security always take precedence. With no configured repository/verifier, there is no dynamic-governance overhead. Once enabled, calls fail closed until the first valid signed snapshot arrives. See [Governance and security contract](docs/reference/governance.md).

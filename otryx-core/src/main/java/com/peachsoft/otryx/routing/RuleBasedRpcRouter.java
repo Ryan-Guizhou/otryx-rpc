@@ -95,6 +95,18 @@ public final class RuleBasedRpcRouter implements RpcRouter {
         Objects.requireNonNull(metadata, "metadata");
         Objects.requireNonNull(candidates, "candidates");
         RpcRouteRule rule = active.get().rules().get(service);
+        return routeRule(rule, candidates);
+    }
+
+    /**
+     * 基于一次调用固定的外部治理规则过滤原始候选，不修改 Router 活跃快照。
+     *
+     * @param rule 经过控制面验证的规则，允许为 null
+     * @param candidates 仅包含原始可信 Provider 引用的候选
+     * @return 匹配规则的原候选子集
+     */
+    public static ServiceInstance[] routeRule(RpcRouteRule rule, ServiceInstance[] candidates) {
+        Objects.requireNonNull(candidates, "candidates");
         if (rule == null || candidates.length == 0) {
             return candidates;
         }
