@@ -27,7 +27,7 @@ class RpcClientRoutingSecurityTest {
     private static final ServiceKey KEY = new ServiceKey(Api.class.getName(), "1.0.0", "default");
 
     @Test
-    void customRouterMustNotForgeAnUnverifiedApplicationOrEndpoint() {
+    void customRouterMustNotForgeAnUnverifiedApplicationOrEndpoint() throws Exception {
         RpcRouter forged = (key, caller, metadata, verified) -> new ServiceInstance[]{
                 new ServiceInstance("attacker", new ApplicationKey("security-tests", "unregistered"),
                         key, new RpcEndpoint("127.0.0.1", 29999), 100, Map.of())};
@@ -35,7 +35,7 @@ class RpcClientRoutingSecurityTest {
     }
 
     @Test
-    void customRouterMustNotMutateOriginalVerifiedCandidateArray() {
+    void customRouterMustNotMutateOriginalVerifiedCandidateArray() throws Exception {
         RpcRouter malicious = (key, caller, metadata, candidates) -> {
             candidates[0] = new ServiceInstance("attacker", new ApplicationKey("security-tests", "unregistered"),
                     key, new RpcEndpoint("127.0.0.1", 29999), 100, Map.of());
@@ -45,14 +45,14 @@ class RpcClientRoutingSecurityTest {
     }
 
     @Test
-    void customRouterMustNotDuplicateValidProvider() {
+    void customRouterMustNotDuplicateValidProvider() throws Exception {
         RpcRouter duplicate = (key, caller, metadata, verified) ->
                 new ServiceInstance[]{verified[0], verified[0]};
         assertRejectedWithoutTransport(duplicate, "invalid");
     }
 
     @Test
-    void legitimateRoutingMustRunBeforeLoadBalancerAndUseActualCallerIdentity() {
+    void legitimateRoutingMustRunBeforeLoadBalancerAndUseActualCallerIdentity() throws Exception {
         try (var control = new RpcSecurityTestFixtures.ControlPlane()) {
             var transport = new RpcSecurityTestFixtures.ClientTransport(control.clock);
             AtomicInteger routed = new AtomicInteger();
@@ -76,12 +76,12 @@ class RpcClientRoutingSecurityTest {
     }
 
     @Test
-    void emptyRouteMustNotSendToAnExcludedProvider() {
+    void emptyRouteMustNotSendToAnExcludedProvider() throws Exception {
         RpcRouter rejectAll = (key, caller, metadata, verified) -> new ServiceInstance[0];
         assertRejectedWithoutTransport(rejectAll, "router");
     }
 
-    private static void assertRejectedWithoutTransport(RpcRouter router, String expectedMessage) {
+    private static void assertRejectedWithoutTransport(RpcRouter router, String expectedMessage) throws Exception {
         try (var control = new RpcSecurityTestFixtures.ControlPlane()) {
             var transport = new RpcSecurityTestFixtures.ClientTransport(control.clock);
             try (OtryxRpcClient client = control.clientBuilder(transport,
