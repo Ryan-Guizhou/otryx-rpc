@@ -104,7 +104,11 @@ public final class RpcInterceptorRuntime implements AutoCloseable {
         return new Session(invocation, scope);
     }
 
-    /** 读取真实存活的 Hook Session 数；正在执行的慢 Hook 仍计入。 */
+    /**
+     * 读取真实存活的 Hook Session 数；正在执行的慢 Hook 仍计入。
+     *
+     * @return 当前实际持有容量的 Hook 会话数
+     */
     public int activeSessions() {
         return activeCalls.get();
     }
