@@ -60,6 +60,24 @@ class RpcResponseEncodingBudgetTest {
     }
 
     @Test
+    void growingBufferMustReserveBothOldAndNewStorageBeforeAllocating() throws Exception {
+        RpcResponseEncodingBudget budget = new RpcResponseEncodingBudget(850, 768);
+        try (RpcResponseEncodingBudget.Buffer buffer = budget.open(768)) {
+            buffer.write(new byte[256]);
+            assertEquals(256L, budget.reservedBytes());
+            buffer.write(1);
+            assertEquals(512L, budget.reservedBytes());
+            assertEquals(768L, budget.highWaterBytes(),
+                    "Peak must include both arrays while the old buffer is copied");
+            assertThrows(RpcResponseEncodingBudget.CapacityExceededException.class,
+                    () -> buffer.write(new byte[400]));
+            assertEquals(512L, budget.reservedBytes(),
+                    "Rejected growth must preserve ownership of the existing buffer");
+        }
+        assertEquals(0L, budget.reservedBytes());
+    }
+
+    @Test
     void growthMustStayInsideGlobalBudgetAfterAllocationFailure() throws Exception {
         RpcResponseEncodingBudget budget = new RpcResponseEncodingBudget(512, 512);
         try (RpcResponseEncodingBudget.Buffer first = budget.open(512)) {

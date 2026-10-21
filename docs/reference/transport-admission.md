@@ -112,9 +112,9 @@ Provider 输出编码使用 `server.encoding`，默认单 Transport 对应 Provi
 
 | 配置键 | 默认值 | 含义 |
 |---|---:|---|
-| `server.encoding.max-buffered-bytes` | 67108864 | 当前 Provider 全部并发编码流保留的可增长缓冲容量总额，扩容前 CAS 预留 |
+| `server.encoding.max-buffered-bytes` | 67108864 | 当前 Provider 全部并发编码流保留的可增长缓冲容量总额，扩容前 CAS 预留新数组全部容量（旧数组在复制完成后才归还） |
 | `server.encoding.max-response-bytes` | 16777216 | 单次响应 Payload 的上限；还受实际 Codec 已声明的 maxPayloadBytes 限制 |
 
 Fory 在编码结果时直接写入受限 OutputStream，单次结果过大或全局容量耗尽会返回 `OVERLOADED`，不会携带业务对象信息。为保障 Wire v1 兼容，需要比较原 `encodeResult(value)` 与新的流式输出字节是否完全相同。未覆盖 `encodeResultTo` 的第三方 Codec 仍由兼容默认方法先分配完整字节数组，**不能据此声称其编码前内存有硬上界**；上线前应提供真实流式覆盖和专用压力试验。
 
-`RpcResponseEncodingBudget` 的 `reservedBytes/highWaterBytes` 只计量当前 Java 输出缓冲的**有效保留容量**，不计算并行数组扩容复制、Fory 对象图、最终 Wire 帧复制、Netty Write Buffer、SSL 内存或内核 Socket。该计量应与 Heap peak、DirectMemory、实际序列化时长和全链路 Lease/FD 采集一起验收，不能把输出缓冲额度改写为整进程的绝对峰值证明。#146 的正式容量矩阵仍独立执行。
+`RpcResponseEncodingBudget` 的 `reservedBytes/highWaterBytes` 只计量当前 Java 输出缓冲的**有效保留容量**，复制扩容时计入同时存活的旧/新数组；不计算最终结果 Payload 复制、Fory 对象图、最终 Wire 帧复制、Netty Write Buffer、SSL 内存或内核 Socket。该计量应与 Heap peak、DirectMemory、实际序列化时长和全链路 Lease/FD 采集一起验收，不能把输出缓冲额度改写为整进程的绝对峰值证明。#146 的正式容量矩阵仍独立执行。

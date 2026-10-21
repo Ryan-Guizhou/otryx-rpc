@@ -7,8 +7,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.peachsoft.otryx.api.RpcEndpoint;
 import com.peachsoft.otryx.api.RpcStatus;
 import com.peachsoft.otryx.protocol.RpcProtocolCodec;
+import com.peachsoft.otryx.transport.RpcTransportSecurityOptions;
 import com.peachsoft.otryx.transport.RpcTransportAdmissionOptions;
 import com.peachsoft.otryx.transport.RpcTransportOptions;
+import java.lang.management.BufferPoolMXBean;
+import java.lang.management.ManagementFactory;
 import java.net.Socket;
 import java.time.Duration;
 import java.time.Instant;
@@ -89,6 +92,65 @@ class VertxTlsPreHandshakeAdmissionTest {
             } finally {
                 server.close();
             }
+        }
+    }
+
+    @Test
+    void handshakeTimeoutAndConnectionFloodMustPreserveFiniteOwnershipAndReportResourceHighWater()
+            throws Exception {
+        try (TlsTestCertificates certificates = TlsTestCertificates.create()) {
+            RpcTransportOptions base = limitedServer(certificates);
+            RpcTransportSecurityOptions tls = base.security();
+            RpcTransportSecurityOptions timed = new RpcTransportSecurityOptions(
+                    tls.mode(), tls.certificatePath(), tls.privateKeyPath(), tls.trustCertificatePath(),
+                    tls.hostnameVerification(), Duration.ofSeconds(2), tls.reloadInterval(),
+                    tls.expiryWarningThreshold(), tls.identity());
+            VertxRpcTransportServer server = new VertxRpcTransportServer(base.withSecurity(timed));
+            RpcEndpoint endpoint = start(server);
+            try (Socket stalled = rawSocket(endpoint)) {
+                await(() -> server.pendingTlsHandshakes() == 1);
+                ResourceSnapshot before = ResourceSnapshot.current();
+                for (int attempt = 0; attempt < 16; attempt++) {
+                    try (Socket rejected = rawSocket(endpoint)) {
+                        assertEquals(-1, rejected.getInputStream().read());
+                    }
+                    assertTrue(server.admittedConnections() <= 2);
+                    assertTrue(server.admittedHandshakes() <= 1);
+                    assertTrue(server.pendingTlsHandshakes() <= 1);
+                }
+                ResourceSnapshot peak = ResourceSnapshot.current();
+                await(() -> server.pendingTlsHandshakes() == 0
+                        && server.admittedConnections() == 0
+                        && server.admittedHandshakes() == 0);
+                ResourceSnapshot settled = ResourceSnapshot.current();
+                System.out.println("RPC TLS resource smoke: before=" + before
+                        + ", underLoad=" + peak + ", settled=" + settled);
+                assertTrue(peak.threadCount() > 0);
+                assertTrue(settled.heapUsedBytes() >= 0L);
+            } finally {
+                server.close();
+            }
+        }
+    }
+
+    /** 测试辅助采样；只记录真实值，不声明是固定硬件正式容量验收。 */
+    private record ResourceSnapshot(long heapUsedBytes, long directBytes, int threadCount,
+                                    long openFileDescriptors) {
+
+        private static ResourceSnapshot current() {
+            long direct = 0L;
+            for (BufferPoolMXBean bufferPool : ManagementFactory.getPlatformMXBeans(BufferPoolMXBean.class)) {
+                if ("direct".equals(bufferPool.getName())) {
+                    direct = bufferPool.getMemoryUsed();
+                }
+            }
+            long descriptors = -1L;
+            var operatingSystem = ManagementFactory.getOperatingSystemMXBean();
+            if (operatingSystem instanceof com.sun.management.UnixOperatingSystemMXBean unix) {
+                descriptors = unix.getOpenFileDescriptorCount();
+            }
+            return new ResourceSnapshot(ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed(),
+                    direct, ManagementFactory.getThreadMXBean().getThreadCount(), descriptors);
         }
     }
 

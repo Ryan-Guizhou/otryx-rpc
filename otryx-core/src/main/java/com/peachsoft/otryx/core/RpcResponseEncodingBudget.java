@@ -10,8 +10,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * Provider 响应编码输出缓冲的全局递增额度，按实际保留容量而非请求数记账。
  *
  * <p>每次扩容先 CAS 预留，再分配新数组。Lease 由当前编码操作持有直到 Frame
- * 已构造完毕，任意失败、取消或异常均在 finally 中释放。字节统计只覆盖框架
- * 控制的输出缓冲，不包含 Codec 内部对象图、复制期间双数组或 JVM DirectMemory。
+ * 已构造完毕，任意失败、取消或异常均在 finally 中释放。扩容前需要同时预留
+ * 原数组和目标新数组的占用，复制完成后才归还旧数组。此配额不包含 Codec 内部
+ * 对象图、完整帧构造及最终 Payload 副本、JVM DirectMemory。
  *
  * @Author OpenAI
  * @Version 1.0.0-SNAPSHOT
@@ -102,7 +103,7 @@ final class RpcResponseEncodingBudget {
     }
 
     /**
-     * 当前编码的有界内存 OutputStream；只可由唯一工作线程写入，close 可跨线程幂等调用。
+     * 当前编码的有界内存 OutputStream；写入与关闭必须由单个拥有者按顺序执行。
      *
      * <p>最终的帧副本在退出 try-with-resources 前创建，避免异常打断后保留全局额度。
      */
@@ -156,8 +157,17 @@ final class RpcResponseEncodingBudget {
             int doubled = previous == 0 ? INITIAL_BUFFER_BYTES
                     : (previous > maxBytes / 2 ? maxBytes : previous * 2);
             int capacity = Math.min(maxBytes, Math.max((int) required, doubled));
-            reserve(capacity - previous);
-            bytes = Arrays.copyOf(bytes, capacity);
+            // 增长期间旧数组与新数组同时存活；先保留完整新容量，完成复制再释放旧容量。
+            reserve(capacity);
+            try {
+                byte[] grown = Arrays.copyOf(bytes, capacity);
+                bytes = grown;
+            } catch (RuntimeException | Error failure) {
+                // OOME 也不得泄漏本次取得但尚未转交给 Buffer 的租约。
+                release(capacity);
+                throw failure;
+            }
+            release(previous);
         }
 
         @Override
