@@ -247,7 +247,7 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         private final TransportAdmissionController.Lease handshakeLease;
         private final long startedAtNanos = System.nanoTime();
         private final AtomicBoolean terminal = new AtomicBoolean();
-        private long timeoutId = -1L;
+        private volatile long timeoutId = -1L;
 
         private PendingTlsConnection(NetSocket socket, RpcRequestHandler handler,
                 TransportAdmissionController.Lease connectionLease,
@@ -259,12 +259,21 @@ final class VertxRpcTransportServer implements RpcTransportServer {
         }
 
         private void begin() {
-            socket.closeHandler(ignored -> reject(
-                    new RpcUnavailableException("RPC TLS connection closed")));
-            socket.exceptionHandler(error -> reject(VertxTlsSupport.connectionFailure(error)));
-            timeoutId = vertx.setTimer(Math.max(1L, options.security().handshakeTimeout().toMillis()),
-                    ignored -> reject(new RpcTimeoutException("RPC TLS handshake timed out")));
+            if (terminal.get()) {
+                return;
+            }
             try {
+                socket.closeHandler(ignored -> reject(
+                        new RpcUnavailableException("RPC TLS connection closed")));
+                socket.exceptionHandler(error -> reject(VertxTlsSupport.connectionFailure(error)));
+                long timer = vertx.setTimer(Math.max(1L, options.security().handshakeTimeout().toMillis()),
+                        ignored -> reject(new RpcTimeoutException("RPC TLS handshake timed out")));
+                timeoutId = timer;
+                // Drain/close 可能在安装定时器的两个语句间完成；不能留下孤儿 Timer。
+                if (terminal.get()) {
+                    vertx.cancelTimer(timer);
+                    return;
+                }
                 socket.upgradeToSsl().onComplete(result -> {
                     if (result.failed()) {
                         reject(VertxTlsSupport.connectionFailure(result.cause()));

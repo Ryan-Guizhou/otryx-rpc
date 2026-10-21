@@ -20,6 +20,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 使用真实 TCP + TLS 证明在创建 SSL Engine 前取得额度，失败和排空均不泄漏租约。
@@ -29,6 +31,7 @@ import org.junit.jupiter.api.Test;
  * @CreateTime 2026/10/21 14:58
  */
 class VertxTlsPreHandshakeAdmissionTest {
+    private static final Logger LOGGER = LoggerFactory.getLogger(VertxTlsPreHandshakeAdmissionTest.class);
     private static final Duration AWAIT_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration RPC_TIMEOUT = Duration.ofSeconds(4);
     private static final int SOCKET_TIMEOUT_MILLIS = 2000;
@@ -123,8 +126,8 @@ class VertxTlsPreHandshakeAdmissionTest {
                         && server.admittedConnections() == 0
                         && server.admittedHandshakes() == 0);
                 ResourceSnapshot settled = ResourceSnapshot.current();
-                System.out.println("RPC TLS resource smoke: before=" + before
-                        + ", underLoad=" + peak + ", settled=" + settled);
+                LOGGER.info("RPC TLS resource smoke: before={}, underLoad={}, settled={}",
+                        before, peak, settled);
                 assertTrue(peak.threadCount() > 0);
                 assertTrue(settled.heapUsedBytes() >= 0L);
             } finally {
@@ -133,7 +136,17 @@ class VertxTlsPreHandshakeAdmissionTest {
         }
     }
 
-    /** 测试辅助采样；只记录真实值，不声明是固定硬件正式容量验收。 */
+    /**
+     * 测试辅助采样，不声明是固定硬件的正式容量验收。
+     *
+     * @param heapUsedBytes JVM Heap 已用字节
+     * @param directBytes Direct Buffer Pool 已用字节
+     * @param threadCount JVM 活动线程总数
+     * @param openFileDescriptors Unix 环境打开的 FD 数，不支持时为 -1
+     * @Author OpenAI
+     * @Version 1.0.0-SNAPSHOT
+     * @CreateTime 2026/10/21 15:20
+     */
     private record ResourceSnapshot(long heapUsedBytes, long directBytes, int threadCount,
                                     long openFileDescriptors) {
 
