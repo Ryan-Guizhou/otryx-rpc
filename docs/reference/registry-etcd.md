@@ -120,11 +120,15 @@ python3 scripts/check_project.py
 
 安全集成通过 `EtcdRegistrySecurityIT` 与 `EtcdRegistryClientCertificateIT` 显式选择执行，使用 [受保护 Etcd 夹具](../../scripts/etcd_security_fixture.py) 的独立实例。前者检查 TLS/用户名密码、CA/主机名拒绝、namespace/实例权限、观察者只读与撤销后的旧快照；后者需 `--require-client-cert`，检查客户端材料和独立用户密码，不能把 TLS 客户端 CN 当成已授予的 RBAC 权限。普通 `mvn test` 不自动选择这些 `*IT` 类；实际结果应按准确 SHA、原始 XML、各次 fixture 和清理记录核对。
 
+夹具生成的 CA/叶证书带有显式用途和密钥标识扩展，客户端在所有受支持的 Python 版本上均启用严格 X.509 验证。可先运行 `python3 scripts/test_etcd_security_fixture.py` 验证实际 OpenSSL 链/用途及拒绝路径。若就绪失败，日志和指定的 `--evidence` 文件只保存固定失败类别、有限错误码和探测状态；失败 JSON 明确标为 `failed`，不能计作已通过的 TLS/RBAC 自检。
+
 实现依据：[Factory](../../otryx-registry/otryx-registry-etcd/src/main/java/com/peachsoft/otryx/registry/etcd/EtcdApplicationRegistryFactory.java)、[安全 IT](../../otryx-registry/otryx-registry-etcd/src/test/java/com/peachsoft/otryx/registry/etcd/EtcdRegistrySecurityIT.java)、[客户端证书 IT](../../otryx-registry/otryx-registry-etcd/src/test/java/com/peachsoft/otryx/registry/etcd/EtcdRegistryClientCertificateIT.java)。
 
 ## English quick reference
 
 Registry setup must select an explicit profile. `NETWORK_MTLS` requires HTTPS, an explicit CA and typed USER_PASSWORD credentials; optional client certificates supplement those credentials. The old `RegistryOptions` constructors use `UNSPECIFIED` and are rejected. Use `RegistryOptions.trustedDevelopment` only for explicit isolated development, or the seven-argument constructor with typed security. All three channels share the actual authenticated TLS client; unknown Map security options and `metadataSecurity` are rejected. The protected `*IT` classes require explicit selection and independent TLS/RBAC fixtures; ordinary Docker integration tests are separate evidence.
+
+Fixture certificates carry explicit CA/key-usage and key-identifier extensions, and fixture clients enforce strict X.509 verification on older Python versions as well. Run `python3 scripts/test_etcd_security_fixture.py` to check actual OpenSSL chain/purpose validation and rejection paths. A readiness failure keeps only fixed categories, finite error codes and probe state in the log and requested `--evidence` file. Failure JSON is marked `failed` and does not prove that the TLS/RBAC checks ran successfully.
 
 jetcd wraps any Authenticate failure as `UNAUTHENTICATED`, so that outer status alone does not establish credential rejection. The adapter follows known status carriers and standard Future wrappers to classify the actual inner status. Timeouts, unavailable connections, unknown setup failures and incomplete bounded cause chains remain ordinary unavailability without advancing the security epoch. Actual authentication rejection retains its fixed reason, and typed TLS failures take priority. SDK descriptions are never parsed for security meaning, and raw causes are never exposed.
 

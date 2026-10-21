@@ -1,6 +1,6 @@
 # OTRYX RPC 工程断点：#140 安全默认值与身份可信
 
-> 更新时间：2026-10-21（UTC，revision 6 验证中）。[#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139) 已由 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合并并完成准确 main 验证。当前 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) 的 [PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 尚未合并。revision 5 分支 Head `99a3a7ed206b22d21baca23e6d8ad8bacf3abe53` 与 PR 内部引用的不同步已通过关闭、重新打开原 PR 修复，没有修改源码或历史。该准确 Head 的 Nacos Chaos 已通过；普通 CI、Etcd Chaos 与 Release Readiness 被 Testcontainers 1.21.3 的旧 Docker API 请求阻塞，尚未完成后续验收。revision 6 统一测试依赖至上游兼容修复 1.21.4，新增真实客户端 API 交互回归；准确新 Head 的全部相关门禁及合并后 main 仍待核验，#140 保持未完成。#142、#143 在独立工作区并行实现，#141 仍为只读准备。
+> 更新时间：2026-10-21（UTC，revision 7 验证中）。[#139](https://github.com/Ryan-Guizhou/otryx-rpc/issues/139) 已由 [PR #160](https://github.com/Ryan-Guizhou/otryx-rpc/pull/160) 合并并完成准确 main 验证。当前 [#140](https://github.com/Ryan-Guizhou/otryx-rpc/issues/140) 的 [PR #161](https://github.com/Ryan-Guizhou/otryx-rpc/pull/161) 尚未合并。revision 5 的引用不同步与 Docker API 前置问题已分别修复。revision 6 准确 Head `ae9a573a660d27d75f520e694a1f07cdc5e1bb08` 的 15 条工作流全部结束：14 成功、1 失败；19 项检查为 18 成功、1 失败。普通 CI reactor、真实 Etcd 容器和完整 Nacos 独立进程链通过，但受保护 Etcd TLS 夹具就绪超时，后续 9+2 项 IT 和 17 阶段 mTLS 未运行。revision 7 修复严格 X.509 验证拒绝缺少 keyUsage 的测试 CA，并保留有界失败诊断；本地真实 Etcd 两组 19 项自检及 9/2 项 IT 已通过。新准确 Head 和合并后 main 门禁仍待核验。#142、#143 在独立工作区并行实现，#141 仍为只读准备。
 
 ## 1. 任务与授权边界
 
@@ -28,7 +28,8 @@ Provider、Consumer、BOTH 均使用真实应用成员身份；纯 Consumer 没�
 | 第三轮失败 | 普通 CI 与 Nacos Chaos 前置构建的 `asyncStageShouldRetainAdmissionUntilCompletion`：预期 OVERLOADED、实际 OK，测试没有等待慢业务真正取得 admission |
 | 第四轮准确 Head | `27e92a2a5a7b41f38dd7af5a9f67d35431110913`；tree `0349024ef332f4a3033b5d0563702237d84396b0`。普通 CI reactor 为 839 tests / 0 failures/errors / 18 skips，随后 Nacos 独立进程恢复失败；见第 8 节 |
 | revision 5 准确 Head | `99a3a7ed206b22d21baca23e6d8ad8bacf3abe53`；tree `862f34be5ef5f63630bf3a02105b0499d31a495b`。原本地证据保留；2026-10-21 PR 引用修复后已执行准确 Head 工作流，三项 Docker API 前置失败见第 9 节 |
-| revision 6 / 合并后 main | 测试依赖 Docker 兼容修复及客户端交互回归验证中；新 Head 门禁 PENDING，合并后 main 尚未形成 |
+| revision 6 准确 Head | `ae9a573a660d27d75f520e694a1f07cdc5e1bb08`；tree `398bf1473f7402df58d84bbf4b296b947e09adc8`。15 条工作流为 14 成功、1 失败，普通 CI 受保护 TLS 夹具前置超时，见第 10 节 |
+| revision 7 / 合并后 main | 严格 PKI 与有界失败证据已修复并完成本地目标验证；新 Head 门禁 PENDING，合并后 main 尚未形成 |
 
 #139 最终 main 原始报告为 638 tests、0 failures/errors、18 条件 skips；style 严格聚合 29 模块且无发现，文档实际渲染 52 个 Mermaid 与 5 个 SVG。真实 Registry 合同、四后端独立 JVM 矩阵、常规快照和五组 rolling 均已核验。依赖审查没有新增漏洞差异，但既有依赖告警仍存在；共享 CI 短时 benchmark 不能作为 #146 正式性能证据。
 
@@ -241,12 +242,34 @@ Reactor ZIP `12201562198` SHA-256 为 `fb15e1f4b347597856a1ba480f78d668f11e5d167
 
 原提交、原源码与原期限的一次定向诊断为 1 test / 0 failures/errors/skips，方法耗时 4.926 秒，全程 43.282 秒，源码哈希不变且自有进程已清理。这次没有复现原超时，不证明原全量已通过。仓库 clean 配置保留旧 Surefire 报告，诊断初次聚合误含其他类的旧 XML；原聚合另存并排除，只以本次目标类 XML 和 Maven 实际执行日志计 1 项。全量运行的 97 份 XML 则已核验均为该轮新报告。
 
-## 10. 恢复与后续动作
+## 10. 第六轮 CI 与 revision 7 严格 PKI
+
+准确 `ae9a573` 的 15 条工作流、19 项检查全部 attempt 1 且全部终态，无在途任务。除普通 CI 外的 14 条工作流均成功；全部 19 个 job 的实际 checkout 已核验，Dependency Review 按契约使用 base `783bf81`、head `ae9a573` 的 merge `3186478a5c672252e089cf78633574caca0b67d2`，其余使用准确 Head。19 份原始 ZIP 已核对 API digest、大小与 CRC。
+
+| 第六轮范围 | 实际结果 |
+| --- | --- |
+| [普通 CI 39532835568](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39532835568) reactor | 120 XML，846 tests / 0 failures / 0 errors / 18 条件 skips；其中真实 Etcd Integration 12/0/0/0、新 Docker API 回归 2/0/0/0 |
+| 同一 CI 独立进程验收 | 完整 Nacos 六阶段、chain 和 revision/rollback 已通过；registry-recovered 第 5 次观测、16 秒收敛，后续新 Consumer 与端点迁移成功 |
+| 同一 CI 受保护 Etcd | job `119002532692` 于 `02:31:27.2197171 UTC` 报告 `Etcd TLS fixture readiness budget expired`；发生在 Maven 前置，9 项安全 IT 未执行，随后 2 项客户端证书 IT、17 阶段 mTLS 与计数校验跳过；没有对应 XML 或成功 fixture JSON |
+| [Etcd Chaos 39532835296](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39532835296) | 真实三节点容器 leader transfer 1/0/0/0；[Release Readiness 39532835425](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39532835425) 也已通过 |
+| 其他适用门禁 | Dependency Review、四后端矩阵、Nacos Chaos、Rolling、Smoke、Style 等分别通过；整仓 style 29 报告/404 源文件/零发现，元数据 410 类型/零发现，conventions 0 errors/29 既有 advisory warnings |
+
+原失败夹具吞掉探测异常并在清理时删除私有服务日志，远端本轮证据只有通用超时，不能事后补写某个原始异常。隔离诊断确认：CI 为 Ubuntu 26.04，固定 runner 镜像清单使用 Python 3.14.4；[Python 3.13 起的默认 TLS context](https://docs.python.org/3.13/library/ssl.html#ssl.create_default_context) 启用严格 X.509 校验。本地 Python 3.12.14 的默认 context 可通过原夹具 19 项自检；对同一源码只添加严格校验后，在原 25 秒预算内持续收到 X.509 错误 92：测试 CA 缺少 keyUsage。该行为与远端环境变化一致，并证明证书生成存在可复现缺陷，不推断此前其他超时的原因。
+
+CI 镜像 index SHA-256 `fd158fbe55240e252947bbd2e8dddc217997ff43978071fac2bd202b6ad15c03` 已逐层校验；其中 amd64 Etcd 二进制 SHA-256 `75510f25ad5de09e368fba1aef0d3a4ee963567cb2a2ee6db125ada8244b0e07` 与本地 3.5.21 发行包逐字节相同，排除二进制差异。
+
+revision 7 为两个测试 CA 显式生成 critical CA basicConstraints、critical keyCertSign/cRLSign 和 SKI，并为叶证书显式生成 SKI/AKI。所有夹具客户端在旧 Python 上也启用严格校验；未关闭证书或主机名检查、未改变启动预算。探测失败只保留固定分类和有限数字码，`--evidence` 在失败时也生成标为 failed 的 JSON，不包含请求、响应、Token、凭据或原始异常文本；原自有进程和私有目录清理继续执行。
+
+新增 `test_etcd_security_fixture.py` 使用真实 OpenSSL strict chain/purpose 验证，并核对错误 CA/SAN 拒绝、有界诊断及失败 JSON。最终同一测试源码 SHA-256 `c7532e731f9fe52dce193f7883ba34910dacd60c6f28a4252751a074b6399f20` 在原实现运行 4 个方法、8 项断言失败（含 subtests）；修复后 4 项通过，原安全 runner 17 项和 snapshot 11 项也通过。
+
+同一冻结候选的真实 Etcd TLS/RBAC 与客户端证书两组各完成 19 项自检，严格 verify flags 为 32800。Java IT 分别为 9/0/0/0 和 2/0/0/0，XML SHA-256 分别为 `7b37bf0ccde93ea3e3274b3cc93e7a575b37edb893fd01b2b4ed4a4c0ab2fb29`、`4e03b2bfacab27f9eeceb6305e21bfd23dc06f5dc70c5258a11f47e35a1ec38f`。本轮 689 个输入前后哈希不变，70.621 秒结束，自有 Maven/Etcd 和私有目录已清理。该本地目标验证不替代 revision 7 的完整 CI 或原 17 阶段 mTLS。
+
+## 11. 恢复与后续动作
 
 1. 核对分支、远端 main 和自有进程；一次仅一个 Maven/真实后端验证窗口，不改动运行中的冻结输入，不混用不同阶段 JAR。
 2. 保留已核验的身份、存活和 Etcd 分类 RED/GREEN；无法唯一归因的旧 TLS 与成员等待超时仍记录证据不足。
 3. 保留全部历史失败及 `build-34` reactor/style、`build-35/36` 两组真实 Etcd、`build-37` quality、`build-38` 的 17 阶段、`build-45/46` 夹具错误与 `build-48/49` 纠正证据。第二轮准确 Head、`build-50` 诊断和 `build-51/52` Directory RED/GREEN 分开记录，不能把任一旧全量或诊断报告改称最新输入。
-4. 完成 revision 6 的 Docker API 客户端 RED/GREEN、依赖与静态检查，再追加到 PR #161。根 POM 修改也会触发 Dependency Review，按新准确 Head 实际适用的全部工作流核验，不能固定沿用旧的 14 条计数。每条 workflow/job/关键 artifact 确实通过后，以预期 Head 合并，再独立核验准确 main。
+4. 完成 revision 7 的严格 PKI、失败证据与独立审查，再追加到 PR #161。按新准确 Head 实际适用的全部工作流核验，不能固定沿用旧工作流计数；尤其核对实际执行的受保护 Etcd 9+2 项、17 阶段 mTLS 和计数校验。每条 workflow/job/关键 artifact 确实通过后，以预期 Head 合并，再独立核验准确 main。
 5. 更新 #140 与 #127，再从新 main 继续 #141–#145 的独立工作包。main 若失败，先修复主线，暂停后续合并。
 6. #146 工具和报告可继续准备，但正式验收必须有固定物理主机、测前确定的 SLO/退化阈值、AB BA AB 六次运行、每次至少 60 分钟 soak 和完整原始指标。条件缺失保持 BLOCKED；#147 只执行已授权发行 dry-run，依赖未完成不能提前关闭。
 

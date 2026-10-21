@@ -35,6 +35,7 @@ REQUEST_TIMEOUT = 3
 START_TIMEOUT = 25
 STOP_TIMEOUT = 10
 MAX_RESPONSE_BYTES = 1024 * 1024
+MAX_DIAGNOSTIC_CODE = 65535
 ROLE_NAMES = ("admin", "provider", "consumer", "observer")
 VALID_NAME = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 
@@ -85,6 +86,31 @@ def stop_owned(process: OwnedProcess | None) -> None:
     stop_process_group(process, STOP_TIMEOUT, STOP_TIMEOUT)
 
 
+def fixture_tls_context(cafile: Path) -> ssl.SSLContext:
+    """Keep the fixture strict even on Python versions predating the 3.13 defaults."""
+    context = ssl.create_default_context(cafile=cafile)
+    context.verify_flags |= ssl.VERIFY_X509_STRICT
+    return context
+
+
+def probe_failure(error: BaseException) -> dict:
+    """Retain only finite numeric codes and fixed categories, never exception text."""
+    def code(value):
+        return value if type(value) is int and -1 <= value <= MAX_DIAGNOSTIC_CODE else -1
+
+    if isinstance(error, FixtureRpcFailure):
+        return {"kind": "rpc", "http": code(error.status), "grpc": code(error.code)}
+    if isinstance(error, URLError):
+        error = error.reason
+    if isinstance(error, ssl.SSLCertVerificationError):
+        return {"kind": "tls-certificate", "verifyCode": code(error.verify_code)}
+    if isinstance(error, TimeoutError):
+        return {"kind": "timeout"}
+    if isinstance(error, OSError):
+        return {"kind": "os", "errno": code(error.errno)}
+    return {"kind": "url"}
+
+
 class EtcdSecurityFixture:
     """Own one local server, private PKI, four users and their finite process lifetime."""
 
@@ -105,6 +131,7 @@ class EtcdSecurityFixture:
         self.endpoint = ""
         self.context = None
         self.credentials = {}
+        self.readiness = {"status": "not-started", "attempts": 0, "lastProbe": {"kind": "not-attempted"}}
         self.root = f"/otryx/v2/ns/{component(namespace)}/"
 
     def __enter__(self):
@@ -138,7 +165,7 @@ class EtcdSecurityFixture:
                        "--key-file=" + str(self.pki / "server.key")]
             if self.require_client_cert:
                 command += ["--client-cert-auth=true", "--trusted-ca-file=" + str(self.pki / "ca.crt")]
-            self.context = ssl.create_default_context(cafile=self.pki / "ca.crt")
+            self.context = fixture_tls_context(self.pki / "ca.crt")
             if self.require_client_cert:
                 # Etcd's HTTP gateway rejects a nonempty client CN when authentication is enabled.
                 # SDK tests retain client.crt with its unmapped CN and use the native gRPC API.
@@ -176,6 +203,9 @@ class EtcdSecurityFixture:
         for name in ("ca", "wrong-ca"):
             self._openssl(["req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-days", "2",
                            "-subj", "/CN=OTRYX Registry Fixture " + name,
+                           "-addext", "basicConstraints=critical,CA:TRUE",
+                           "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+                           "-addext", "subjectKeyIdentifier=hash",
                            "-keyout", str(self.pki / (name + ".key")), "-out", str(self.pki / (name + ".crt"))])
         certificates = [("server", "serverAuth,clientAuth"), ("client", "clientAuth")]
         if self.require_client_cert:
@@ -189,6 +219,7 @@ class EtcdSecurityFixture:
                            "-keyout", str(self.pki / (name + ".key")), "-out", str(self.pki / (name + ".csr"))])
             private_write(self.pki / (name + ".ext"), "basicConstraints=critical,CA:FALSE\n"
                           "keyUsage=critical,digitalSignature,keyEncipherment\n"
+                          "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always,issuer\n"
                           f"extendedKeyUsage={usage}\nsubjectAltName=DNS:localhost\n")
             self._openssl(["x509", "-req", "-sha256", "-days", "2", "-in", str(self.pki / (name + ".csr")),
                            "-CA", str(self.pki / "ca.crt"), "-CAkey", str(self.pki / "ca.key"),
@@ -199,15 +230,23 @@ class EtcdSecurityFixture:
 
     def _await_ready(self) -> None:
         deadline = time.monotonic() + START_TIMEOUT
+        self.readiness["status"] = "waiting"
         while time.monotonic() < deadline:
-            if self.process.poll() is not None:
-                raise FixtureFailure("Etcd TLS fixture exited before readiness")
+            exit_code = self.process.poll()
+            if exit_code is not None:
+                self.readiness.update(status="failed", processExitCode=exit_code)
+                raise FixtureFailure("Etcd TLS fixture exited before readiness: exitCode=" + str(exit_code))
+            self.readiness["attempts"] += 1
             try:
                 self.request("/v3/kv/range", {"key": encoded(self.root)})
+                self.readiness["status"] = "ready"
                 return
-            except (URLError, OSError, FixtureRpcFailure):
+            except (URLError, OSError, FixtureRpcFailure) as error:
+                self.readiness["lastProbe"] = probe_failure(error)
                 time.sleep(0.05)
-        raise FixtureFailure("Etcd TLS fixture readiness budget expired")
+        self.readiness["status"] = "failed"
+        raise FixtureFailure("Etcd TLS fixture readiness budget expired: lastProbe="
+                             + json.dumps(self.readiness["lastProbe"], sort_keys=True))
 
     def request(self, path: str, payload: dict, token: str | None = None, *,
                 endpoint: str | None = None, context: ssl.SSLContext | None = None) -> dict:
@@ -337,7 +376,7 @@ class EtcdSecurityFixture:
                (missing_credentials_code,))
         denied("wrong-credentials", lambda: self.authenticate("observer", password="incorrect-fixture-password"), (3,))
         for name, context, endpoint in (
-                ("wrong-ca", ssl.create_default_context(cafile=self.pki / "wrong-ca.crt"), self.endpoint),
+                ("wrong-ca", fixture_tls_context(self.pki / "wrong-ca.crt"), self.endpoint),
                 ("wrong-san", self.context, self.wrong_host_endpoint)):
             try:
                 self.request("/v3/kv/range", {"key": encoded(provider_key)}, tokens["observer"],
@@ -402,9 +441,11 @@ def main() -> int:
         parser.error("Refusing to overwrite existing fixture evidence")
     previous_umask = os.umask(0o077)
     child = None
+    fixture = None
     try:
-        with EtcdSecurityFixture(args.etcd_binary, args.namespace, args.provider_application,
-                                 args.consumer_application, args.require_client_cert) as fixture:
+        fixture = EtcdSecurityFixture(args.etcd_binary, args.namespace, args.provider_application,
+                                      args.consumer_application, args.require_client_cert)
+        with fixture:
             if args.self_test:
                 evidence = fixture.self_test()
                 if args.evidence:
@@ -425,6 +466,16 @@ def main() -> int:
     except (FixtureFailure, OwnedProcessFailure, OSError, subprocess.SubprocessError) as error:
         reason = ": " + str(error) if isinstance(error, FixtureFailure) else ""
         print("Etcd security fixture failed: type=" + type(error).__name__ + reason, file=sys.stderr)
+        if args.evidence and not args.evidence.exists():
+            failure = {"fixture": "etcd-tls-rbac", "etcdVersion": VERSION, "status": "failed",
+                       "clientCertificateRequired": args.require_client_cert,
+                       "errorType": type(error).__name__,
+                       "readiness": fixture.readiness if fixture is not None else {"status": "not-started"}}
+            try:
+                private_write(args.evidence, json.dumps(failure, indent=2) + "\n")
+            except OSError as evidence_error:
+                print("Could not write fixture failure evidence: type=" + type(evidence_error).__name__,
+                      file=sys.stderr)
         return 1
     finally:
         os.umask(previous_umask)

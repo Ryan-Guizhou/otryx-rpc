@@ -67,6 +67,7 @@ jobs:
           python3 scripts/test_quickstart_scenarios.py
           python3 scripts/test_quickstart_security_runner.py
           python3 scripts/test_quickstart_security_snapshots.py
+          python3 scripts/test_etcd_security_fixture.py
           python3 scripts/test_owned_process_group.py
 
       - name: Verify squash-safe merged branch cleanup

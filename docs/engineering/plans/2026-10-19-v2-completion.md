@@ -1,6 +1,6 @@
 # V2 剩余工作连续实施计划
 
-> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。2026-10-19（UTC）revision 5 本地验证完成：#140 尚待准确新 Head 和合并后 main 的完整门禁；原始执行结果与 run/check API 状态矛盾分别记录。
+> 按已批准的 Issue #127 及 #139–#147 实施契约执行。每个工作包独立提交 PR，准确 Head 检查通过后合并，再核验主线。此计划记录续写顺序，不重新定义或削减原有验收条件。2026-10-21（UTC）revision 6 的 15 条工作流为 14 成功、1 失败；普通 CI 的受保护 Etcd 夹具前置超时。revision 7 的严格 PKI 修复与本地目标验证已完成，#140 仍待新准确 Head 和合并后 main 的完整门禁。
 
 **目标：** 完成应用级注册唯一入口及其生产化能力，保持可运行、可验证、可追溯的主线。
 
@@ -102,6 +102,10 @@ revision 5 将远端 Config 查询与发布收敛到一个受管理 SDK worker�
 [Nacos Chaos 39530873253](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873253) 的真实 Docker 暂停/恢复用例通过，1/0/0/0；这不替代完整独立 JVM 重启链。[普通 CI 39530873130](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873130)、[Etcd Chaos 39530873155](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873155) 与 [Release Readiness 39530873205](https://github.com/Ryan-Guizhou/otryx-rpc/actions/runs/39530873205) 在 Etcd 容器启动前置失败：Testcontainers 1.21.3 请求 Docker API 1.32，服务端 HTTP 400 要求最低 1.40。受影响的后续安全和进程验收没有运行。
 
 revision 6 在 Spring Boot BOM 前统一导入上游兼容修复 Testcontainers 1.21.4 BOM，保持 Jetcd 0.8.5、Boot 3.5.4 和全部项目/协议版本不变。同一源码回归用真实客户端与受控 Docker HTTP 端点验证现代 API 和旧服务端回退：1.21.3 为 2 tests / 1 failure / 0 errors/skips，现代端点拒绝实际请求的 API 1.32；1.21.4 为 2/0/0/0，现代端点接受 1.44，旧端点从 1.44 正确回退至 1.32。解析树和运行时 classpath 已核验，容器组件仍为测试依赖。真实 Docker 验收继续由新 Head CI 执行。根 POM 的变更将额外触发 Dependency Review，必须动态核验全部适用工作流；#140 与合并后 main 验证仍为 **PENDING**。完整证据与本地原提交 TLS 超时、定向未复现的边界见[工程断点](../agent-governance-checkpoint.md)。
+
+revision 6 准确 `ae9a573a660d27d75f520e694a1f07cdc5e1bb08` 的全部 15 条工作流与 19 项检查已终态：14/18 成功，各有普通 CI 一项失败。该 CI reactor 为 846/0/0/18，真实 Etcd 容器、完整 Nacos 六阶段、chain、revision/rollback 均通过；受保护 Etcd 夹具在 25 秒 readiness 前置失败，9+2 项 IT、17 阶段 mTLS 和计数验收未执行。失败没有原始底层原因记录，不由成功上传步骤补记场景成功。
+
+隔离复现确认原测试 CA 缺少 keyUsage，会被 Python 3.13 起默认启用的严格 X.509 验证拒绝（错误 92）；CI 固定镜像使用 Python 3.14.4，镜像内 Etcd 与本地发行二进制相同。revision 7 补齐证书扩展，保持严格验证与原预算，新增固定分类/数字码的失败 JSON 和真实 OpenSSL 回归。原实现的最终 4 测试方法有 8 项断言失败，修复后通过；同一冻结候选两组真实 Etcd 各 19 项自检及 Java 9/2 项 IT 通过，689 输入不变、自有进程清理完成。独立审查和准确新 Head 的完整验收仍须执行，详见[工程断点第 10 节](../agent-governance-checkpoint.md#10-第六轮-ci-与-revision-7-严格-pki)。
 
 ## 3. #141：连接、编码与取消资源上界
 
