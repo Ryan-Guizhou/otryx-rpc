@@ -178,3 +178,5 @@ Optional `RpcGovernanceRuntime` consumes complete signed governance snapshots on
 ## Read-only runtime diagnostics
 
 Use `OtryxRpcClient.diagnose(ServiceKey)` to inspect an already-referenced service's verified local directory state, fixed failure reasons and candidate counts, without Registry I/O, executing a Router, or creating subscriptions. Micrometer `otryx.rpc.client.directory.failures` and JFR expose only fixed reason enums. Provider `responseEncodingDiagnostics()` reports encoding buffer reservation and high-water mark, not process Heap/DirectMemory. See the [diagnostics guide](docs/reference/runtime-diagnostics.md).
+
+> V2-19 evidence boundary: fixed-host native control-plane measurements and six controlled AB BA AB full JMH runs, each with a 60-minute soak, **have not yet been collected**. Shared-runner CI smoke is not capacity proof. See [registration-scale evidence](docs/reference/v2-19-performance-closure.md).
