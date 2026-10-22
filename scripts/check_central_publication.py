@@ -260,7 +260,7 @@ def check_dependency_only_starter() -> None:
 
         placeholder = (
             ROOT
-            / module
+            / module_path(module)
             / "src"
             / "central-placeholder"
             / "README.md"

@@ -8,7 +8,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from check_central_publication import PUBLIC_MODULES, module_path
+from check_central_publication import PUBLIC_MODULES, module_path, check_dependency_only_starter
 from first_release_dry_run import (
     SNAPSHOT,
     build_manifest,
@@ -57,6 +57,12 @@ def make_fixture(root: Path, version: str) -> Path:
 
 
 def main() -> None:
+    # Regression: the dependency-only Starter is nested under otryx-spring-boot.
+    check_dependency_only_starter()
+    assert (
+        Path(__file__).resolve().parents[1] / module_path("otryx-spring-boot-starter")
+        / "src/central-placeholder/README.md"
+    ).is_file()
     check_stage("rc1", "1.0.0-RC1")
     check_stage("ga", "1.0.0")
     expect_invalid(lambda: check_stage("rc1", "1.0.0"))
