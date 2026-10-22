@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import subprocess
 import sys
@@ -26,6 +27,7 @@ def environment() -> dict[str, str]:
         "OTRYX_RPC_SOAK_DURATION_SECONDS": "3600",
         "OTRYX_RPC_SOAK_MAX_ERROR_RATE": "0.005",
         "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT": "8000",
+        "OTRYX_RPC_SOAK_MAX_P99_MICROS": "100000",
     }
 
 
@@ -49,7 +51,8 @@ class V219ControlledCampaignTest(unittest.TestCase):
         self.assertEqual("dedicated-fixed-01", validated["runnerId"])
         for missing in ("OTRYX_RPC_RUNNER_ID", "OTRYX_RPC_JVM_FLAGS",
                         "OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256",
-                        "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT"):
+                        "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT",
+                        "OTRYX_RPC_SOAK_MAX_P99_MICROS"):
             changed = copy.deepcopy(env)
             del changed[missing]
             with self.assertRaisesRegex(ValueError, missing):
@@ -65,6 +68,8 @@ class V219ControlledCampaignTest(unittest.TestCase):
                            ("OTRYX_RPC_SOAK_CONCURRENCY", "9999"),
                            ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "NaN"),
                            ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "-1"),
+                           ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "1"),
+                           ("OTRYX_RPC_SOAK_MAX_P99_MICROS", "0"),
                            ("OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT", "10001"),
                            ("OTRYX_RPC_EVIDENCE_PROFILE", "smoke"),
                            ("OTRYX_RPC_RUNNER_ID", "github-hosted-ephemeral"),
@@ -124,8 +129,8 @@ class V219ControlledCampaignTest(unittest.TestCase):
             repo, base, candidate = self._fixture_repository(root)
             output = root / "evidence"
             execute(repo, output, plan(base, candidate), policy(environment()), environment())
-            recorded = [(output / f"runs/{i:02d}-{side}/evidence-manifest.json")
-                        .read_text(encoding="utf-8")
+            recorded = [json.loads((output / f"runs/{i:02d}-{side}/evidence-manifest.json")
+                                   .read_text(encoding="utf-8"))["runId"]
                         for i, side in enumerate(ORDER, 1)]
             self.assertEqual([f"run{i:02d}-{side}" for i, side in enumerate(ORDER, 1)],
                              recorded)
@@ -138,11 +143,13 @@ class V219ControlledCampaignTest(unittest.TestCase):
     def test_partial_failure_preserves_partial_and_no_campaign_claim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            repo, base, candidate = self._fixture_repository(root, "run03-candidate")
+            repo, base, candidate = self._fixture_repository(root)
             output = root / "evidence"
+            failing = environment()
+            failing["OTRYX_RPC_TEST_FAIL_RUN"] = "run03-candidate"
             with self.assertRaises(subprocess.CalledProcessError):
                 execute(repo, output, plan(base, candidate),
-                        policy(environment()), environment())
+                        policy(failing), failing)
             self.assertFalse((output / "campaign.json").exists())
             self.assertTrue((output / "campaign-failure.json").is_file())
             self.assertTrue((output / "runs/02-candidate/evidence-manifest.json").is_file())
