@@ -5,11 +5,6 @@ name: Safe merged branch cleanup
 # Updating this file intentionally triggers one safe post-merge cleanup pass.
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/prune-merged-branches.yml
   workflow_dispatch:
     inputs:
       apply:

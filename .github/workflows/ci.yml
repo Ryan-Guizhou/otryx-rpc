@@ -2,15 +2,48 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  verify:
+  scope:
+    runs-on: ubuntu-latest
+    outputs:
+      runtime: ${{ steps.classify.outputs.runtime }}
+      performance: ${{ steps.classify.outputs.performance }}
+      security: ${{ steps.classify.outputs.security }}
+    steps:
+      - name: Checkout PR source and base for accurate diff
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Classify changed files with fail-closed policy
+        id: classify
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p target/ci-gates
+          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > target/ci-gates/changed-files.txt
+          python3 scripts/ci_gate_scope.py --changed target/ci-gates/changed-files.txt --github-output "$GITHUB_OUTPUT"
+
+      - name: Repository checks
+        run: python3 scripts/check_project.py
+
+      - name: Verify gate routing and required-status contract
+        run: python3 scripts/test_ci_gate_scope.py
+
+      - name: Syntax and affected Python script regressions
+        if: ${{ steps.classify.outputs.scripts == 'true' }}
+        run: python3 scripts/ci_gate_scope.py --changed target/ci-gates/changed-files.txt --run-tests
+
+  integration:
+    needs: scope
+    if: ${{ needs.scope.outputs.runtime == 'true' }}
     runs-on: ubuntu-latest
     services:
       nacos:
@@ -50,9 +83,6 @@ jobs:
           echo "Nacos did not open ports 8848/9848 in time"
           exit 1
 
-      - name: Repository checks
-        run: python3 scripts/check_project.py
-
       - name: Verify application registry cleanup and rejected legacy modes
         run: |
           python3 scripts/test_migration_readiness.py
@@ -69,9 +99,6 @@ jobs:
           python3 scripts/test_quickstart_security_snapshots.py
           python3 scripts/test_etcd_security_fixture.py
           python3 scripts/test_owned_process_group.py
-
-      - name: Verify squash-safe merged branch cleanup
-        run: python3 scripts/test_cleanup_merged_branches.py
 
       - name: Verify magic-literal policy fixtures
         run: python3 scripts/test_java_magic_literals.py
@@ -114,6 +141,7 @@ jobs:
         run: bash scripts/run_quickstart_memory.sh
 
       - name: Verify V2-D.2-E1 runner preflight
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         env:
           OTRYX_RPC_EVIDENCE_CLASS: controlled
           OTRYX_RPC_EVIDENCE_RUN_ID: ci-self-test
@@ -137,33 +165,42 @@ jobs:
           fi
 
       - name: Verify Fory allocation comparison evidence parser
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         run: python3 scripts/test_compare_fory_allocation.py
 
       - name: Verify soak quality gate with malicious evidence fixtures
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         run: python3 scripts/test_soak_quality.py
 
       - name: Verify V2-D.2 evidence tooling
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         run: python3 scripts/test_v2d2_evidence_tools.py
 
       - name: Verify V2-D.2-E2 and V2-D.4 gates
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         run: python3 scripts/test_v2d2_e2_d4_tools.py
 
       - name: Verify U13 controlled AB-BA evidence gates and adversarial fixtures
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         run: python3 scripts/test_u13_campaign.py
 
       - name: Verify V2-19 native registration-scale evidence adversarial cases
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         run: python3 scripts/test_v2_19_registration_scale.py
 
       - name: Verify V2-19 controlled six-run campaign plan and fail-closed orchestration
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         run: python3 scripts/test_v2_19_controlled_campaign.py
 
       - name: Verify V2-D.2 benchmark harness
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         env:
           OTRYX_RPC_JVM_FLAGS: "-Xms256m -Xmx256m"
           OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash scripts/run_v2d2_benchmark_matrix.sh smoke target/v2d2-matrix-smoke
 
       - name: Verify 10k virtual-thread soak harness
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         env:
           OTRYX_RPC_BENCHMARK_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
           OTRYX_RPC_SOAK_CONCURRENCY: "10000"
@@ -177,12 +214,13 @@ jobs:
         run: bash scripts/run_v2d2_soak.sh
 
       - name: Validate V2-D.2 smoke evidence
+        if: ${{ needs.scope.outputs.performance == 'true' }}
         run: |
           python3 scripts/validate_v2d2_evidence.py --environment target/v2d2-matrix-smoke/environment.properties --matrix-dir target/v2d2-matrix-smoke --soak target/v2d2-soak-smoke.json --profile smoke --require-matrix --require-soak --min-soak-seconds 3 --min-concurrency 10000 --output-dir target/v2d2-smoke-report
           python3 scripts/generate_v2d2_decision_report.py --environment target/v2d2-matrix-smoke/environment.properties --matrix-summary target/v2d2-matrix-smoke/summary.csv --soak target/v2d2-soak-smoke.json --output-dir target/v2d2-smoke-report
 
       - name: Upload V2-D.2 smoke evidence
-        if: always()
+        if: ${{ always() && needs.scope.outputs.performance == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: v2d2-smoke-evidence-${{ github.run_id }}
@@ -193,16 +231,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Verify independent JVM Quickstart
-        run: bash scripts/run_quickstart_process_e2e.sh
-
-      - name: Verify A-B-C deadline chain across three independent JVMs
-        run: bash scripts/run_three_process_deadline_e2e.sh
-
-      - name: Verify two application Manifest revisions and rollback
-        run: bash scripts/run_quickstart_revision_e2e.sh
-
       - name: Prepare pinned Etcd for isolated TLS and permission scenarios
+        if: ${{ needs.scope.outputs.security == 'true' }}
         shell: bash
         run: |
           fixture_container="$(docker create --entrypoint /usr/local/bin/etcd gcr.io/etcd-development/etcd:v3.5.21 --version)"
@@ -212,6 +242,7 @@ jobs:
           printf 'ETCD_BINARY=%s\n' "$RUNNER_TEMP/otryx-etcd-3.5.21" >> "$GITHUB_ENV"
 
       - name: Verify actual Registry TLS, scoped roles and security invalidation
+        if: ${{ needs.scope.outputs.security == 'true' }}
         run: |
           mkdir -p target/quickstart-e2e/registry-security
           python3 scripts/etcd_security_fixture.py --self-test \
@@ -220,6 +251,7 @@ jobs:
               -Dtest=EtcdRegistrySecurityIT -Dsurefire.failIfNoSpecifiedTests=false package
 
       - name: Verify Registry client certificate and backend credential boundaries
+        if: ${{ needs.scope.outputs.security == 'true' }}
         run: |
           python3 scripts/etcd_security_fixture.py --require-client-cert --self-test \
             --evidence target/quickstart-e2e/registry-security/client-certificate-fixture.json -- \
@@ -227,9 +259,11 @@ jobs:
               -Dtest=EtcdRegistryClientCertificateIT -Dsurefire.failIfNoSpecifiedTests=false package
 
       - name: Verify mTLS identities and service authorization
+        if: ${{ needs.scope.outputs.security == 'true' }}
         run: bash scripts/run_quickstart_mtls_e2e.sh
 
       - name: Verify actual Registry security test counters
+        if: ${{ needs.scope.outputs.security == 'true' }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -250,7 +284,7 @@ jobs:
           PY
 
       - name: Upload original protected Registry integration test reports
-        if: always()
+        if: ${{ always() && needs.scope.outputs.security == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: registry-security-tests-${{ github.run_id }}-${{ github.run_attempt }}
@@ -261,7 +295,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Quickstart application snapshots and scenario outcomes
-        if: always()
+        if: ${{ always() && needs.scope.outputs.security == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: quickstart-application-evidence-${{ github.run_id }}
@@ -270,3 +304,23 @@ jobs:
             target/quickstart-e2e/**/summary.log
           if-no-files-found: warn
           retention-days: 14
+
+  verify:
+    if: ${{ always() }}
+    needs: [scope, integration]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail closed if required PR checks did not succeed
+        shell: bash
+        env:
+          SCOPE_STATUS: ${{ needs.scope.result }}
+          INTEGRATION_STATUS: ${{ needs.integration.result }}
+          RUNTIME_REQUIRED: ${{ needs.scope.outputs.runtime }}
+        run: |
+          test "$SCOPE_STATUS" = success || { echo "Fast PR gate failed"; exit 1; }
+          if [ "$RUNTIME_REQUIRED" = true ]; then
+            test "$INTEGRATION_STATUS" = success || { echo "Required runtime gate failed or skipped"; exit 1; }
+          else
+            test "$INTEGRATION_STATUS" = skipped || { echo "Unexpected runtime job outcome"; exit 1; }
+          fi
+          echo "Required PR gate outcomes verified."

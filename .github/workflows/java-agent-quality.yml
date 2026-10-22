@@ -1,16 +1,6 @@
 name: Java Agent Quality
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**/*.java"
-      - "AGENTS.md"
-      - ".agents/**"
-      - "pom.xml"
-      - "scripts/check_java_doc_metadata.py"
-      - "scripts/test_java_doc_metadata.py"
-      - ".github/workflows/java-agent-quality.yml"
   pull_request:
     paths:
       - "**/*.java"

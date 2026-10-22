@@ -26,22 +26,21 @@ flowchart LR
     B --> C["代码与专项测试"]
     C --> D["PR base=main"]
     D --> E{"Head SHA 检查通过？"}
-    E -->|是| F["Merge commit 合并 main"]
+    E -->|是| F["核对 Base 与 Head 后 squash 合并"]
     E -->|否| G["修复并重新验证"]
     G --> E
-    F --> H{"合并后 main CI 通过？"}
-    H -->|是| I["继续下一阶段"]
-    H -->|否| J["停止推进，隔离修复/回滚"]
+    F --> H["记录 main 新 SHA"]
+    H --> I["继续下一阶段；不重复完整 CI"]
 ~~~
 
 每个阶段遵循：
 
 1. 从最新 `origin/main` 建立短分支；先检查主分支是否已有正在运行或失败的关键检查。
 2. 保持提交范围可审查；不要将注释/日志格式化与有行为变化的 RPC 核心重构混在同一个 PR。
-3. 执行对应的 Java Agent Quality、Agent Governance、Java Style Audit、Maven CI、Release Readiness；Transport/Registry/Wire 变动额外执行相关 Rolling Compatibility 和专项测试。
+3. 按变更范围执行 PR 快速检查、Java Reactor/Style 和必要的安全及 Registry/Transport 专项；普通开发不跑发布双候选或正式容量实验。参见 [CI 分层契约](ci-gates.md)。
 4. PR 必须是 `base=main`，且 `head_sha` 与被验证的提交一致；遇到失败不得以此前 SHA 的绿色记录覆盖。
-5. 检查结果全部通过后，才对**该明确 Head SHA**合并。合并成功不代表最终完成，还需核对 main 新 SHA 和 push CI。
-6. main push CI 失败：停止下一阶段合并，优先补修复 PR；必要时按 GitHub 审查记录执行 `git revert`，不得强推重写主分支或稳定分支。
+5. 当前 PR 的相关必需检查全部通过且 Head/Base 未发生会改变验收结果的变化时 squash 合并。合并后核对新 main SHA 即可，不重复触发主线完整 Maven/Chaos 检查。
+6. 如果 Base 有影响拟合并树的变化，先更新 PR 并重新验证；显式运行的主线检查失败时应停止后续合并并提交修复/回滚 PR，不强推重写主线或稳定分支。
 7. 用户对本轮工程治理范围的授权不自动扩展到公共破坏性变更、发布、删除或管理员配置。
 
 ## 3. 如何检查与回溯

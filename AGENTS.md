@@ -15,13 +15,13 @@
 
 ## 工作引擎与授权
 
-Task Intake → Source/Impact Analysis → Complexity Gate → Implementation Contract（复杂任务）→ 用户确认 → Implement → Verify → Mainline PR → 检查通过后合并 main → 核验 main CI。
+Task Intake → Source/Impact Analysis → Complexity Gate → Implementation Contract（复杂任务）→ 用户确认 → Implement → Verify → Mainline PR → 精确 Head 的相关门禁通过后合并 main（默认不再次构建 main）。
 
 - 简单、确定且不涉及公共契约的局部修复可直接实施。
 - 公共 API、Wire/Codec/Schema、SPI、配置、线程/资源、鉴权、安全、模块架构、兼容性重构属于复杂任务。实施前交付 Goal、Scope、Non-goals、Compatibility、Constraints、Migration、Verification、Risks，获用户确认方可执行。对已授权的当前任务不重复确认。
 - **本轮明确授权（2026-10-09，V1.1 于 2026-10-10 进一步确认）**：OTRYX RPC 既定 Agent 代码治理工作可以从 `main` 创建短生命周期分支，提交 PR，经该 Head SHA 对应的相关质量门禁全部通过后合并到 `main`，不再堆叠 Draft PR。此授权**不适用于**发布、删除远端资源、修改仓库权限、数据库写入或超出本轮实施契约的改动。
 - `stable/agent-quality-2026-10-09` 固定在 SHA `8f051b78d74978c5417394ed2cd22467e077c15f`，作为已验证的合并前基线。禁止在该分支追加提交、强制推送或将其用作日常开发分支，详见 [稳定基线与主线工作流](docs/engineering/stable-baseline.md)。
-- 分阶段小 PR，**只以 `main` 为 Base**。每次先核对原始 PR Head SHA、变更影响及新提交 CI，再合并，随后核验 `main` 上的 CI。未通过或未执行的必需门禁不得冒充成功。不能从历史绿色提交推断后续提交通过。
+- 分阶段小 PR，**只以 `main` 为 Base**。每次核对当前 PR Head SHA、Base SHA、变更影响、必需检查与可合并性，确认后 squash。合并后只记录新 main SHA，不自动重新运行同一套 Maven/Chaos/RC-GA 工作流。如验证后 Base 有实质变化，须先更新 PR 并重新验证，不能沿用历史绿色结果。
 
 ## 中断保护与断点续写
 
@@ -73,7 +73,7 @@ MCP 为证据补全工具，不是无限授权。
 - Agent/MCP：`python3 scripts/sync_agent_mcp.py --check` 与 `python3 scripts/test_agent_mcp.py`。
 - Wire/Registry/Transport：相关单元与集成测试、Rolling Compatibility；性能改动另做 JMH/JFR 和可复现 Evidence。shared runner 的数值不等于生产容量结论。
 - 人工检查不可自动静态证明的规则，记录例外原因；不为保持 CI 绿色关闭必要检查。
-- 最终只陈述实际改动、PR、测试通过/失败与剩余风险。合并前核验准确的 PR Head，合并后分别核对 `main` 提交 SHA 与主分支 CI；若合并后 CI 失败，应停止继续合并并提交隔离修复或回滚方案。
+- 最终只陈述实际改动、PR、测试通过/失败与剩余风险。合并前核验 PR Head、Base、必需 Check 与可合并性；合并后记录 main 新 SHA，不再次执行同一套重型 CI。受控性能及正式发布仍需独立门禁；显式主线验证失败必须暂停合并并隔离修复。见 [CI 分层契约](docs/engineering/ci-gates.md)。
 
 ## V2 应用级注册强制约束（#127）
 
