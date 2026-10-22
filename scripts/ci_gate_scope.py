@@ -45,7 +45,10 @@ def classify(paths: list[str]) -> dict[str, bool]:
             flags["scripts"] = True
         runtime = (name in RUNTIME_ROOT_FILES or name.startswith(".mvn/")
                    or (module and not is_doc)
-                   or (name.startswith("scripts/") and path.name in RUNTIME_SCRIPTS))
+                   or (name.startswith("scripts/") and path.name in RUNTIME_SCRIPTS)
+                   or (name.startswith("scripts/") and not path.name.startswith("test_")
+                       and any(part in path.name for part in
+                               ("security", "tls", "mtls", "registry"))))
         if runtime:
             flags["runtime"] = True
         if (name.startswith(("otryx-benchmarks/", "otryx-transport/",

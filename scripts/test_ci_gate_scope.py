@@ -36,6 +36,11 @@ class ScopeTest(unittest.TestCase):
         self.assertTrue(flags["scripts"])
         self.assertFalse(flags["runtime"])
 
+    def test_security_scripts_fail_closed_to_runtime_and_security(self):
+        flags = classify(["scripts/run_quickstart_security_runner.py"])
+        self.assertTrue(flags["runtime"])
+        self.assertTrue(flags["security"])
+
     def test_unknown_module_resource_still_runs_runtime(self):
         self.assertTrue(classify(["otryx-core/src/main/resources/custom.bin"])["runtime"])
         self.assertFalse(classify(["otryx-core/README.md"])["runtime"])
@@ -56,6 +61,13 @@ class ScopeTest(unittest.TestCase):
             self.assertEqual([scripts / "test_v2_19_controlled_campaign.py"],
                              affected_tests(["scripts/run_v2_19_controlled_campaign.py",
                                              "docs/a.md"], root))
+
+    def test_docs_do_not_trigger_java_style_or_rpc_comparison(self):
+        style = (ROOT / ".github/workflows/java-style-audit.yml").read_text(encoding="utf-8")
+        self.assertNotIn("docs/engineering/**", style)
+        comparison = (ROOT / ".github/workflows/rpc-comparison-smoke.yml").read_text(
+            encoding="utf-8")
+        self.assertNotIn('"benchmarks/rpc-comparison/**"', comparison)
 
     def test_no_duplicate_main_push_quality_workflows(self):
         for file in sorted((ROOT / ".github/workflows").glob("*.yml")):

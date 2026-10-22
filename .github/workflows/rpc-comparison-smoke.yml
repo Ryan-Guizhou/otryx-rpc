@@ -3,7 +3,8 @@ name: RPC Comparison Smoke
 on:
   pull_request:
     paths:
-      - 'benchmarks/rpc-comparison/**'
+      - 'benchmarks/rpc-comparison/**/pom.xml'
+      - 'benchmarks/rpc-comparison/src/**'
       - 'scripts/run_rpc_comparison_smoke.sh'
       - 'scripts/validate_rpc_comparison.py'
       - 'scripts/test_rpc_comparison_validator.py'
