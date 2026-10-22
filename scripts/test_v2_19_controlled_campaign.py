@@ -98,16 +98,45 @@ class V219ControlledCampaignTest(unittest.TestCase):
         subprocess.run(["git", "config", "user.name", "Fixture"], cwd=repo, check=True)
         scripts = repo / "scripts"
         scripts.mkdir()
+        # The fixture's minimal native file is TEST-ONLY, never performance data.
+        (scripts / "manage_v2d2_evidence_manifest.py").write_text(
+            'import pathlib,sys,json,hashlib\n'
+            'from os import environ as env\n'
+            'root=pathlib.Path(sys.argv[3])\n'
+            'def files():\n'
+            ' return [{"path":p.name,"sizeBytes":p.stat().st_size,\n'
+            '          "sha256":hashlib.sha256(p.read_bytes()).hexdigest()}\n'
+            '         for p in sorted(root.iterdir()) if p.is_file()\n'
+            '         and p.name!="evidence-manifest.json"]\n'
+            'manifest=root/"evidence-manifest.json"\n'
+            'if sys.argv[1]=="create":\n'
+            ' json.dump({"commit":env["OTRYX_RPC_BENCHMARK_COMMIT"],\n'
+            '  "runId":env["OTRYX_RPC_EVIDENCE_RUN_ID"],\n'
+            '  "runnerId":env["OTRYX_RPC_RUNNER_ID"],\n'
+            '  "evidenceClass":"controlled","files":files()},manifest.open("w"))\n'
+            'elif sys.argv[1]=="verify":\n'
+            ' assert json.loads(manifest.read_text())["files"]==files()\n',
+            encoding="utf-8")
         fake_runner = scripts / "run_v2d2_fixed_evidence.sh"
         fake_runner.write_text(
             '#!/usr/bin/env bash\nset -euo pipefail\n'
             'mkdir -p "$1"\n'
-            + ('if [[ "$OTRYX_RPC_EVIDENCE_RUN_ID" == "' + fail_run
-               + '" ]]; then exit 17; fi\n' if fail_run else '')
-            + 'printf %s "$OTRYX_RPC_EVIDENCE_RUN_ID" > "$1/evidence-manifest.json"\n',
+            'if [[ "${OTRYX_RPC_TEST_FAIL_RUN:-}" == '
+            '"$OTRYX_RPC_EVIDENCE_RUN_ID" ]]; then '
+            'echo incomplete > "$1/incomplete.txt"; exit 17; fi\n'
+            'cat > "$1/environment.properties" <<EOF\n'
+            'commit=$OTRYX_RPC_BENCHMARK_COMMIT\n'
+            'run_id=$OTRYX_RPC_EVIDENCE_RUN_ID\n'
+            'runner_id=$OTRYX_RPC_RUNNER_ID\n'
+            'host_fingerprint_sha256=$OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256\n'
+            'evidence_class=controlled\n'
+            'EOF\n'
+            'printf "test-only %s" "$OTRYX_RPC_EVIDENCE_RUN_ID" > "$1/native-sample.txt"\n'
+            'python3 scripts/manage_v2d2_evidence_manifest.py create --bundle "$1"\n',
             encoding="utf-8")
         (scripts / "check_u13_campaign.py").write_text(
-            '#!/usr/bin/env python3\nimport pathlib,sys\n'
+            '#!/usr/bin/env python3\nimport pathlib,sys,os\n'
+            'if os.getenv("OTRYX_RPC_TEST_FAIL_VALIDATION"): sys.exit(19)\n'
             'p=pathlib.Path(sys.argv[-1]);p.mkdir(parents=True)\n'
             '(p/"test-only").write_text("fixture,not performance evidence")\n',
             encoding="utf-8")
