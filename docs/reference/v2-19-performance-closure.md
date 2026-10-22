@@ -70,7 +70,7 @@ python3 scripts/check_v2_19_registration_scale.py \
 
 ## 六轮受控 Campaign 一次性执行入口
 
-当前补充 `scripts/run_v2_19_controlled_campaign.py`，只在真实固定 Linux 物理机、JDK 21、可用 Maven Wrapper、完整历史两版本 SHA 和测前冻结阈值齐全后启动。自动建立两个本地 detached worktree，**串行**运行 Baseline → Candidate → Candidate → Baseline → Baseline → Candidate。每轮复用原有 `run_v2d2_fixed_evidence.sh` 严格执行完整 JMH Matrix、10000 逻辑并发、至少 3600 秒 Soak，检查 Runner 基线与原始 SHA256；六轮全部成功后再调用 `check_u13_campaign.py` 重新复算。所有报告保持 REPORT_ONLY。
+当前补充 `scripts/run_v2_19_controlled_campaign.py`，只在真实固定 Linux 物理机、JDK 21、可用 Maven Wrapper、完整历史两版本 SHA 和测前冻结阈值齐全后启动。自动建立两个本地 detached worktree，**串行**运行 Baseline → Candidate → Candidate → Baseline → Baseline → Candidate。每轮复用原有 `run_v2d2_fixed_evidence.sh` 严格执行完整 JMH Matrix、10000 逻辑并发、至少 3600 秒 Soak；独立 Fixed Runner、手动 Actions Controlled 与六轮 Campaign 三个入口均拒绝空 p99 或错误率上限达到 100%，检查 Runner 基线与原始 SHA256；六轮全部成功后再调用 `check_u13_campaign.py` 重新复算。所有报告保持 REPORT_ONLY。
 
 在仓库根目录运行（占位值必须替换为真实机器/审批结果）：
 

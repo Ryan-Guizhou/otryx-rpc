@@ -211,9 +211,12 @@ def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict,
         max_error_rate = float(preflight["soak_max_error_rate"])
         min_inflight = int(preflight["soak_min_observed_inflight"])
         max_p99_raw = preflight.get("soak_max_p99_micros", "")
-        max_p99 = float(max_p99_raw) if max_p99_raw else None
+        max_p99 = float(max_p99_raw)
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"Missing predeclared soak thresholds: {path}") from error
+    require(math.isfinite(max_error_rate) and 0 <= max_error_rate < 1
+            and math.isfinite(max_p99) and max_p99 > 0,
+            f"Invalid predeclared controlled error/p99 thresholds: {path}")
     require(thresholds.get("maxErrorRate") == max_error_rate
             and thresholds.get("minObservedLogicalInflight") == min_inflight
             and thresholds.get("maxP99Micros") == max_p99,
