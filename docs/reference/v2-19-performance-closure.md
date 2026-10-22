@@ -100,6 +100,8 @@ python3 scripts/run_v2_19_controlled_campaign.py \
   --resume
 ```
 
+在 `--resume` 最终成功后，旧的 `campaign-failure.json` 会移动至 `failed-attempts/campaign-status/attempt-NNN` 保留审计痕迹，不再与成功清单同时占据顶层目录。
+
 提交前会运行完整 `check_u13_campaign.py` 校验；`campaign.json` **仅在六轮通过复算后原子生成**，此前只允许存在隐藏的 `.campaign-validation-pending.json`。即使全部六轮执行结束，如果完整证据检查失败，也只有 `campaign-failure.json`，不可误认为正式通过。
 
 ```mermaid
