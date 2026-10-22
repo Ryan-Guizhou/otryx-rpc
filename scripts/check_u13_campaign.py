@@ -16,7 +16,7 @@ from pathlib import Path
 
 from check_soak_quality import check_soak
 from check_v2d2_runner_baseline import STABLE_KEYS, properties
-from manage_v2d2_evidence_manifest import files
+from manage_v2d2_evidence_manifest import validate_manifest
 from summarize_v2d2_results import load_rows, write_csv
 from validate_v2d2_evidence import validate_matrix
 
@@ -67,13 +67,7 @@ def load_json(path: Path) -> dict:
 def inspect_bundle(path: Path, sha: str, run_ids: set[str]) -> tuple[dict, dict, datetime, datetime]:
     """Recheck provenance, hashes, thresholds and observed soak duration."""
     require(path.is_dir(), f"Missing controlled bundle: {path}")
-    manifest = load_json(path / "evidence-manifest.json")
-    declared = manifest.get("files")
-    require(isinstance(declared, list), f"Missing evidence manifest files: {path}")
-    expected = {item["path"]: item for item in declared}
-    require(len(expected) == len(declared), f"Duplicate manifest paths: {path}")
-    actual = {item["path"]: item for item in files(path)}
-    require(actual == expected, f"Bundle file hashes or inventory changed: {path}")
+    manifest = validate_manifest(path)
     env = properties(path / "environment.properties")
     require(env.get("evidence_class") == "controlled", f"Not controlled evidence: {path}")
     require(env.get("commit") == sha, f"Unexpected commit: {path}")

@@ -159,6 +159,11 @@ def execute(repo: Path, output: Path, campaign: dict, settings: dict,
     if resume:
         require(output.is_dir() and not output.is_symlink(),
                 "Resume requires an existing nonsymlink evidence directory")
+        for relative in ("predeclared-policy.json", "runs", "failed-attempts",
+                         ".campaign-validation-pending.json", "campaign.json",
+                         "campaign-failure.json"):
+            require(not (output / relative).is_symlink(),
+                    f"Refusing symlinked campaign control or run path: {relative}")
         require((output / "predeclared-policy.json").read_text(encoding="utf-8")
                 == record, "Resume policy or pinned source SHAs do not match")
         require(not (output / "campaign.json").exists(),
