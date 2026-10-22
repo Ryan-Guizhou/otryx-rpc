@@ -200,6 +200,8 @@ class V219ControlledCampaignTest(unittest.TestCase):
             execute(repo, output, campaign, policy(stable), stable, resume=True)
             self.assertEqual(original_mtime, first.stat().st_mtime_ns)
             self.assertTrue((output / "campaign.json").exists())
+            self.assertFalse((output / "campaign-failure.json").exists())
+            self.assertTrue((output / "failed-attempts/campaign-status/attempt-001").is_file())
             self.assertTrue((output / "failed-attempts/run03-candidate"
                              / "attempt-001/incomplete.txt").exists())
             with self.assertRaisesRegex(ValueError, "completed campaign"):
