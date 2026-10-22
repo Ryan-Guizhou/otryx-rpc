@@ -209,3 +209,7 @@ python3 scripts/check_u13_campaign.py --campaign target/u13-campaign.json --outp
 ## 15. V2-19 完整受控六轮自动编排
 
 [六轮原始证据采集、前置校验与失败恢复](v2-19-performance-closure.md) 提供 `scripts/run_v2_19_controlled_campaign.py` 的固定主机串行调度和对抗性自测；它只有真实硬件与事先声明的 SLO 才能执行，结果仍为 `REPORT_ONLY`。
+
+### V2-19 中断恢复与原始证据校验
+
+六轮正式 AB BA AB 实验必须使用测前批准的非空 p99 上限及小于 100% 的错误率预算；`--resume` 只能复用相同固定物理机、相同两版 SHA/工作负载/JVM/SLO 下 checksum 验证通过的连续前缀，不会重跑或覆盖有效证据。完整 U13 验证成功之前不会出现正式 `campaign.json`。详见 [V2-19 六轮操作手册](v2-19-performance-closure.md)。

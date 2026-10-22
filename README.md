@@ -179,4 +179,4 @@ Core 与 Spring Starter 的 `otryx.rpc.client.directory-max-staleness` 默认均
 
 > V2-19 实证边界：固定物理机控制面原生计数、AB BA AB 六次完整 JMH 与每次至少 60 分钟 Soak **尚未采集**，不得以 Shared Runner CI Smoke 推断正式性能或容量。工具与证据入口参见 [注册规模量测](docs/reference/v2-19-performance-closure.md)。
 
-V2-19 六轮真实固定机性能实验现可使用 `python3 scripts/run_v2_19_controlled_campaign.py` 一次组织执行；没有有效物理机和预声明 SLO 时会拒绝运行，不提供官方吞吐/容量承诺。详见[真实性能验收](docs/reference/v2-19-performance-closure.md)。
+V2-19 六轮真实固定机性能实验现可使用 `python3 scripts/run_v2_19_controlled_campaign.py` 一次组织执行；支持 `--resume` 严格校验并复用前面已完成的实验，且仅在全量证据复核通过后生成正式清单；未填写正数 p99 预算、没有有效物理机或预声明 SLO 时会拒绝运行，不提供官方吞吐/容量承诺。详见[真实性能验收](docs/reference/v2-19-performance-closure.md)。

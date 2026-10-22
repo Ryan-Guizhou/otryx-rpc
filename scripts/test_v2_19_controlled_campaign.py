@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import subprocess
 import sys
@@ -26,6 +27,7 @@ def environment() -> dict[str, str]:
         "OTRYX_RPC_SOAK_DURATION_SECONDS": "3600",
         "OTRYX_RPC_SOAK_MAX_ERROR_RATE": "0.005",
         "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT": "8000",
+        "OTRYX_RPC_SOAK_MAX_P99_MICROS": "100000",
     }
 
 
@@ -49,7 +51,8 @@ class V219ControlledCampaignTest(unittest.TestCase):
         self.assertEqual("dedicated-fixed-01", validated["runnerId"])
         for missing in ("OTRYX_RPC_RUNNER_ID", "OTRYX_RPC_JVM_FLAGS",
                         "OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256",
-                        "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT"):
+                        "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT",
+                        "OTRYX_RPC_SOAK_MAX_P99_MICROS"):
             changed = copy.deepcopy(env)
             del changed[missing]
             with self.assertRaisesRegex(ValueError, missing):
@@ -65,6 +68,8 @@ class V219ControlledCampaignTest(unittest.TestCase):
                            ("OTRYX_RPC_SOAK_CONCURRENCY", "9999"),
                            ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "NaN"),
                            ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "-1"),
+                           ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "1"),
+                           ("OTRYX_RPC_SOAK_MAX_P99_MICROS", "0"),
                            ("OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT", "10001"),
                            ("OTRYX_RPC_EVIDENCE_PROFILE", "smoke"),
                            ("OTRYX_RPC_RUNNER_ID", "github-hosted-ephemeral"),
@@ -93,16 +98,45 @@ class V219ControlledCampaignTest(unittest.TestCase):
         subprocess.run(["git", "config", "user.name", "Fixture"], cwd=repo, check=True)
         scripts = repo / "scripts"
         scripts.mkdir()
+        # The fixture's minimal native file is TEST-ONLY, never performance data.
+        (scripts / "manage_v2d2_evidence_manifest.py").write_text(
+            'import pathlib,sys,json,hashlib\n'
+            'from os import environ as env\n'
+            'root=pathlib.Path(sys.argv[3])\n'
+            'def files():\n'
+            ' return [{"path":p.name,"sizeBytes":p.stat().st_size,\n'
+            '          "sha256":hashlib.sha256(p.read_bytes()).hexdigest()}\n'
+            '         for p in sorted(root.iterdir()) if p.is_file()\n'
+            '         and p.name!="evidence-manifest.json"]\n'
+            'manifest=root/"evidence-manifest.json"\n'
+            'if sys.argv[1]=="create":\n'
+            ' json.dump({"commit":env["OTRYX_RPC_BENCHMARK_COMMIT"],\n'
+            '  "runId":env["OTRYX_RPC_EVIDENCE_RUN_ID"],\n'
+            '  "runnerId":env["OTRYX_RPC_RUNNER_ID"],\n'
+            '  "evidenceClass":"controlled","files":files()},manifest.open("w"))\n'
+            'elif sys.argv[1]=="verify":\n'
+            ' assert json.loads(manifest.read_text())["files"]==files()\n',
+            encoding="utf-8")
         fake_runner = scripts / "run_v2d2_fixed_evidence.sh"
         fake_runner.write_text(
             '#!/usr/bin/env bash\nset -euo pipefail\n'
             'mkdir -p "$1"\n'
-            + ('if [[ "$OTRYX_RPC_EVIDENCE_RUN_ID" == "' + fail_run
-               + '" ]]; then exit 17; fi\n' if fail_run else '')
-            + 'printf %s "$OTRYX_RPC_EVIDENCE_RUN_ID" > "$1/evidence-manifest.json"\n',
+            'if [[ "${OTRYX_RPC_TEST_FAIL_RUN:-}" == '
+            '"$OTRYX_RPC_EVIDENCE_RUN_ID" ]]; then '
+            'echo incomplete > "$1/incomplete.txt"; exit 17; fi\n'
+            'cat > "$1/environment.properties" <<EOF\n'
+            'commit=$OTRYX_RPC_BENCHMARK_COMMIT\n'
+            'run_id=$OTRYX_RPC_EVIDENCE_RUN_ID\n'
+            'runner_id=$OTRYX_RPC_RUNNER_ID\n'
+            'host_fingerprint_sha256=$OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256\n'
+            'evidence_class=controlled\n'
+            'EOF\n'
+            'printf "test-only %s" "$OTRYX_RPC_EVIDENCE_RUN_ID" > "$1/native-sample.txt"\n'
+            'python3 scripts/manage_v2d2_evidence_manifest.py create --bundle "$1"\n',
             encoding="utf-8")
         (scripts / "check_u13_campaign.py").write_text(
-            '#!/usr/bin/env python3\nimport pathlib,sys\n'
+            '#!/usr/bin/env python3\nimport pathlib,sys,os\n'
+            'if os.getenv("OTRYX_RPC_TEST_FAIL_VALIDATION"): sys.exit(19)\n'
             'p=pathlib.Path(sys.argv[-1]);p.mkdir(parents=True)\n'
             '(p/"test-only").write_text("fixture,not performance evidence")\n',
             encoding="utf-8")
@@ -124,8 +158,8 @@ class V219ControlledCampaignTest(unittest.TestCase):
             repo, base, candidate = self._fixture_repository(root)
             output = root / "evidence"
             execute(repo, output, plan(base, candidate), policy(environment()), environment())
-            recorded = [(output / f"runs/{i:02d}-{side}/evidence-manifest.json")
-                        .read_text(encoding="utf-8")
+            recorded = [json.loads((output / f"runs/{i:02d}-{side}/evidence-manifest.json")
+                                   .read_text(encoding="utf-8"))["runId"]
                         for i, side in enumerate(ORDER, 1)]
             self.assertEqual([f"run{i:02d}-{side}" for i, side in enumerate(ORDER, 1)],
                              recorded)
@@ -138,15 +172,95 @@ class V219ControlledCampaignTest(unittest.TestCase):
     def test_partial_failure_preserves_partial_and_no_campaign_claim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            repo, base, candidate = self._fixture_repository(root, "run03-candidate")
+            repo, base, candidate = self._fixture_repository(root)
             output = root / "evidence"
+            failing = environment()
+            failing["OTRYX_RPC_TEST_FAIL_RUN"] = "run03-candidate"
             with self.assertRaises(subprocess.CalledProcessError):
                 execute(repo, output, plan(base, candidate),
-                        policy(environment()), environment())
+                        policy(failing), failing)
             self.assertFalse((output / "campaign.json").exists())
             self.assertTrue((output / "campaign-failure.json").is_file())
             self.assertTrue((output / "runs/02-candidate/evidence-manifest.json").is_file())
             self.assertFalse((output / "runs/03-candidate/evidence-manifest.json").exists())
+
+    def test_resume_reuses_verified_prefix_and_preserves_failed_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, base, candidate = self._fixture_repository(root)
+            campaign = plan(base, candidate)
+            output = root / "evidence"
+            failing = environment()
+            failing["OTRYX_RPC_TEST_FAIL_RUN"] = "run03-candidate"
+            with self.assertRaises(subprocess.CalledProcessError):
+                execute(repo, output, campaign, policy(failing), failing)
+            first = output / "runs/01-baseline/native-sample.txt"
+            original_mtime = first.stat().st_mtime_ns
+            stable = environment()
+            execute(repo, output, campaign, policy(stable), stable, resume=True)
+            self.assertEqual(original_mtime, first.stat().st_mtime_ns)
+            self.assertTrue((output / "campaign.json").exists())
+            self.assertFalse((output / "campaign-failure.json").exists())
+            self.assertTrue((output / "failed-attempts/campaign-status/attempt-001").is_file())
+            self.assertTrue((output / "failed-attempts/run03-candidate"
+                             / "attempt-001/incomplete.txt").exists())
+            with self.assertRaisesRegex(ValueError, "completed campaign"):
+                execute(repo, output, campaign, policy(stable), stable, resume=True)
+
+    def test_resume_rejects_changed_policy_and_tampered_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, base, candidate = self._fixture_repository(root)
+            campaign = plan(base, candidate)
+            output = root / "evidence"
+            failing = environment()
+            failing["OTRYX_RPC_TEST_FAIL_RUN"] = "run03-candidate"
+            with self.assertRaises(subprocess.CalledProcessError):
+                execute(repo, output, campaign, policy(failing), failing)
+            changed = environment()
+            changed["OTRYX_RPC_SOAK_MAX_P99_MICROS"] = "90000"
+            with self.assertRaisesRegex(ValueError, "policy"):
+                execute(repo, output, campaign, policy(changed), changed, resume=True)
+            original = output / "runs/01-baseline/native-sample.txt"
+            original.write_text("tampered", encoding="utf-8")
+            with self.assertRaises(subprocess.CalledProcessError):
+                execute(repo, output, campaign, policy(environment()),
+                        environment(), resume=True)
+            self.assertFalse((output / "campaign.json").exists())
+
+    def test_final_validator_failure_never_publishes_campaign_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, base, candidate = self._fixture_repository(root)
+            output = root / "evidence"
+            # Fake checker fails only by an explicit test-only env control.
+            with patch.dict(os.environ, {"OTRYX_RPC_TEST_FAIL_VALIDATION": "1"}):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    execute(repo, output, plan(base, candidate),
+                            policy(environment()), environment())
+            self.assertFalse((output / "campaign.json").exists())
+            self.assertTrue((output / "campaign-failure.json").exists())
+            self.assertTrue((output / ".campaign-validation-pending.json").exists())
+            execute(repo, output, plan(base, candidate), policy(environment()),
+                    environment(), resume=True)
+            self.assertTrue((output / "campaign.json").exists())
+
+    def test_out_of_order_completed_run_rejected_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, base, candidate = self._fixture_repository(root)
+            output = root / "evidence"
+            fail = environment()
+            fail["OTRYX_RPC_TEST_FAIL_RUN"] = "run03-candidate"
+            with self.assertRaises(subprocess.CalledProcessError):
+                execute(repo, output, plan(base, candidate), policy(fail), fail)
+            late = output / "runs/04-baseline"
+            late.mkdir(parents=True)
+            (late / "evidence-manifest.json").write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Out-of-order"):
+                execute(repo, output, plan(base, candidate),
+                        policy(environment()), environment(), resume=True)
+            self.assertEqual("{}", (late / "evidence-manifest.json").read_text())
 
     def test_cli_fails_before_create_on_missing_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
