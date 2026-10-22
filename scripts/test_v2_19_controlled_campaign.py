@@ -184,6 +184,82 @@ class V219ControlledCampaignTest(unittest.TestCase):
             self.assertTrue((output / "runs/02-candidate/evidence-manifest.json").is_file())
             self.assertFalse((output / "runs/03-candidate/evidence-manifest.json").exists())
 
+    def test_resume_reuses_verified_prefix_and_preserves_failed_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, base, candidate = self._fixture_repository(root)
+            campaign = plan(base, candidate)
+            output = root / "evidence"
+            failing = environment()
+            failing["OTRYX_RPC_TEST_FAIL_RUN"] = "run03-candidate"
+            with self.assertRaises(subprocess.CalledProcessError):
+                execute(repo, output, campaign, policy(failing), failing)
+            first = output / "runs/01-baseline/native-sample.txt"
+            original_mtime = first.stat().st_mtime_ns
+            stable = environment()
+            execute(repo, output, campaign, policy(stable), stable, resume=True)
+            self.assertEqual(original_mtime, first.stat().st_mtime_ns)
+            self.assertTrue((output / "campaign.json").exists())
+            self.assertTrue((output / "failed-attempts/run03-candidate"
+                             / "attempt-001/incomplete.txt").exists())
+            with self.assertRaisesRegex(ValueError, "completed campaign"):
+                execute(repo, output, campaign, policy(stable), stable, resume=True)
+
+    def test_resume_rejects_changed_policy_and_tampered_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, base, candidate = self._fixture_repository(root)
+            campaign = plan(base, candidate)
+            output = root / "evidence"
+            failing = environment()
+            failing["OTRYX_RPC_TEST_FAIL_RUN"] = "run03-candidate"
+            with self.assertRaises(subprocess.CalledProcessError):
+                execute(repo, output, campaign, policy(failing), failing)
+            changed = environment()
+            changed["OTRYX_RPC_SOAK_MAX_P99_MICROS"] = "90000"
+            with self.assertRaisesRegex(ValueError, "policy"):
+                execute(repo, output, campaign, policy(changed), changed, resume=True)
+            original = output / "runs/01-baseline/native-sample.txt"
+            original.write_text("tampered", encoding="utf-8")
+            with self.assertRaises(subprocess.CalledProcessError):
+                execute(repo, output, campaign, policy(environment()),
+                        environment(), resume=True)
+            self.assertFalse((output / "campaign.json").exists())
+
+    def test_final_validator_failure_never_publishes_campaign_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, base, candidate = self._fixture_repository(root)
+            output = root / "evidence"
+            # Fake checker fails only by an explicit test-only env control.
+            with patch.dict(os.environ, {"OTRYX_RPC_TEST_FAIL_VALIDATION": "1"}):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    execute(repo, output, plan(base, candidate),
+                            policy(environment()), environment())
+            self.assertFalse((output / "campaign.json").exists())
+            self.assertTrue((output / "campaign-failure.json").exists())
+            self.assertTrue((output / ".campaign-validation-pending.json").exists())
+            execute(repo, output, plan(base, candidate), policy(environment()),
+                    environment(), resume=True)
+            self.assertTrue((output / "campaign.json").exists())
+
+    def test_out_of_order_completed_run_rejected_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, base, candidate = self._fixture_repository(root)
+            output = root / "evidence"
+            fail = environment()
+            fail["OTRYX_RPC_TEST_FAIL_RUN"] = "run03-candidate"
+            with self.assertRaises(subprocess.CalledProcessError):
+                execute(repo, output, plan(base, candidate), policy(fail), fail)
+            late = output / "runs/04-baseline"
+            late.mkdir(parents=True)
+            (late / "evidence-manifest.json").write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Out-of-order"):
+                execute(repo, output, plan(base, candidate),
+                        policy(environment()), environment(), resume=True)
+            self.assertEqual("{}", (late / "evidence-manifest.json").read_text())
+
     def test_cli_fails_before_create_on_missing_host(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "bundles"
