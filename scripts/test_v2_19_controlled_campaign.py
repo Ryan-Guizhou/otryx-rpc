@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Positive scheduling and negative-host/policy cases for the controlled AB BA AB runner."""
+from __future__ import annotations
+
+import copy
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from run_v2_19_controlled_campaign import ORDER, execute, plan, policy
+
+BASE = "a" * 40
+CANDIDATE = "b" * 40
+
+
+def environment() -> dict[str, str]:
+    return {
+        "OTRYX_RPC_RUNNER_ID": "dedicated-fixed-01",
+        "OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256": "c" * 64,
+        "OTRYX_RPC_JVM_FLAGS": "-Xms256m -Xmx256m",
+        "OTRYX_RPC_SOAK_CONCURRENCY": "10000",
+        "OTRYX_RPC_SOAK_DURATION_SECONDS": "3600",
+        "OTRYX_RPC_SOAK_MAX_ERROR_RATE": "0.005",
+        "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT": "8000",
+    }
+
+
+class V219ControlledCampaignTest(unittest.TestCase):
+    def test_exact_order_and_immutable_paths(self) -> None:
+        campaign = plan(BASE, CANDIDATE)
+        self.assertEqual(list(ORDER), [run["side"] for run in campaign["runs"]])
+        self.assertEqual(6, len(set(run["path"] for run in campaign["runs"])))
+        self.assertEqual(3, sum(run["side"] == "baseline" for run in campaign["runs"]))
+
+    def test_refuse_invalid_or_identical_source(self) -> None:
+        for base, candidate in (("short", CANDIDATE), (BASE, BASE),
+                                (BASE, "z" * 40)):
+            with self.assertRaisesRegex(ValueError, "different full"):
+                plan(base, candidate)
+
+    def test_policy_requires_real_fixed_runner(self) -> None:
+        env = environment()
+        validated = policy(env)
+        self.assertEqual(3600, validated["durationSeconds"])
+        self.assertEqual("dedicated-fixed-01", validated["runnerId"])
+        for missing in ("OTRYX_RPC_RUNNER_ID", "OTRYX_RPC_JVM_FLAGS",
+                        "OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256",
+                        "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT"):
+            changed = copy.deepcopy(env)
+            del changed[missing]
+            with self.assertRaisesRegex(ValueError, missing):
+                policy(changed)
+        env["GITHUB_ACTIONS"] = "true"
+        with self.assertRaisesRegex(ValueError, "self-hosted"):
+            policy(env)
+        env["RUNNER_ENVIRONMENT"] = "self-hosted"
+        self.assertIsNotNone(policy(env))
+
+    def test_bad_numbers_and_shared_runner_rejected(self) -> None:
+        for key, value in (("OTRYX_RPC_SOAK_DURATION_SECONDS", "3599"),
+                           ("OTRYX_RPC_SOAK_CONCURRENCY", "9999"),
+                           ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "NaN"),
+                           ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "-1"),
+                           ("OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT", "10001"),
+                           ("OTRYX_RPC_EVIDENCE_PROFILE", "smoke"),
+                           ("OTRYX_RPC_RUNNER_ID", "github-hosted-ephemeral"),
+                           ("OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256", "not-a-hash")):
+            env = environment()
+            env[key] = value
+            with self.assertRaises(ValueError, msg=f"Expected rejection: {key}={value}"):
+                policy(env)
+
+    def test_preexisting_evidence_must_not_be_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "evidence"
+            output.mkdir()
+            (output / "evidence-manifest.json").write_text("original")
+            with self.assertRaisesRegex(ValueError, "overwrite"):
+                execute(root, output, plan(BASE, CANDIDATE), policy(environment()), environment())
+            self.assertEqual("original", (output / "evidence-manifest.json").read_text())
+
+    def _fixture_repository(self, root: Path, fail_run: str = "") -> tuple[Path, str, str]:
+        repo = root / "source"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "config", "user.email", "fixture@example.test"],
+                       cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Fixture"], cwd=repo, check=True)
+        scripts = repo / "scripts"
+        scripts.mkdir()
+        fake_runner = scripts / "run_v2d2_fixed_evidence.sh"
+        fake_runner.write_text(
+            '#!/usr/bin/env bash\nset -euo pipefail\n'
+            'mkdir -p "$1"\n'
+            + ('if [[ "$OTRYX_RPC_EVIDENCE_RUN_ID" == "' + fail_run
+               + '" ]]; then exit 17; fi\n' if fail_run else '')
+            + 'printf %s "$OTRYX_RPC_EVIDENCE_RUN_ID" > "$1/evidence-manifest.json"\n',
+            encoding="utf-8")
+        (scripts / "check_u13_campaign.py").write_text(
+            '#!/usr/bin/env python3\nimport pathlib,sys\n'
+            'p=pathlib.Path(sys.argv[-1]);p.mkdir(parents=True)\n'
+            '(p/"test-only").write_text("fixture,not performance evidence")\n',
+            encoding="utf-8")
+        subprocess.run(["git", "add", "scripts"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
+        baseline = subprocess.check_output(["git", "rev-parse", "HEAD"],
+                                           cwd=repo, text=True).strip()
+        (repo / "marker.txt").write_text("version two", encoding="utf-8")
+        subprocess.run(["git", "add", "marker.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "candidate"], cwd=repo, check=True)
+        candidate = subprocess.check_output(["git", "rev-parse", "HEAD"],
+                                            cwd=repo, text=True).strip()
+        return repo, baseline, candidate
+
+    def test_six_real_git_worktrees_are_serial_and_cleaned_up(self) -> None:
+        # The subprocess fixture writes run IDs only; no performance evidence is synthesized.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, base, candidate = self._fixture_repository(root)
+            output = root / "evidence"
+            execute(repo, output, plan(base, candidate), policy(environment()), environment())
+            recorded = [(output / f"runs/{i:02d}-{side}/evidence-manifest.json")
+                        .read_text(encoding="utf-8")
+                        for i, side in enumerate(ORDER, 1)]
+            self.assertEqual([f"run{i:02d}-{side}" for i, side in enumerate(ORDER, 1)],
+                             recorded)
+            self.assertTrue((output / "campaign.json").is_file())
+            self.assertTrue((output / "campaign-report/test-only").is_file())
+            self.assertEqual(1, len(subprocess.check_output(
+                ["git", "worktree", "list", "--porcelain"], cwd=repo,
+                text=True).split("worktree ")) - 1)
+
+    def test_partial_failure_preserves_partial_and_no_campaign_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, base, candidate = self._fixture_repository(root, "run03-candidate")
+            output = root / "evidence"
+            with self.assertRaises(subprocess.CalledProcessError):
+                execute(repo, output, plan(base, candidate),
+                        policy(environment()), environment())
+            self.assertFalse((output / "campaign.json").exists())
+            self.assertTrue((output / "campaign-failure.json").is_file())
+            self.assertTrue((output / "runs/02-candidate/evidence-manifest.json").is_file())
+            self.assertFalse((output / "runs/03-candidate/evidence-manifest.json").exists())
+
+    def test_cli_fails_before_create_on_missing_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "bundles"
+            script = Path(__file__).with_name("run_v2_19_controlled_campaign.py")
+            with patch.dict(os.environ, {}, clear=True):
+                result = subprocess.run([sys.executable, str(script), "--baseline-sha", BASE,
+                                         "--candidate-sha", CANDIDATE,
+                                         "--output-dir", str(output)],
+                                        capture_output=True, text=True, check=False)
+            self.assertEqual(2, result.returncode)
+            self.assertFalse(output.exists())
+            self.assertIn("BLOCKED", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

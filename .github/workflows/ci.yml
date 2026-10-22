@@ -154,6 +154,9 @@ jobs:
       - name: Verify V2-19 native registration-scale evidence adversarial cases
         run: python3 scripts/test_v2_19_registration_scale.py
 
+      - name: Verify V2-19 controlled six-run campaign plan and fail-closed orchestration
+        run: python3 scripts/test_v2_19_controlled_campaign.py
+
       - name: Verify V2-D.2 benchmark harness
         env:
           OTRYX_RPC_JVM_FLAGS: "-Xms256m -Xmx256m"
