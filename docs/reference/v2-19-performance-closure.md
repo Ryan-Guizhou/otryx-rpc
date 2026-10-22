@@ -79,6 +79,7 @@ export OTRYX_RPC_RUNNER_ID="<actual-physical-runner-id>"
 export OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256="<64-hex-preflight-host-hash>"
 export OTRYX_RPC_JVM_FLAGS="-Xms2g -Xmx2g"
 export OTRYX_RPC_SOAK_MAX_ERROR_RATE="<predeclared-maximum-error-ratio>"
+export OTRYX_RPC_SOAK_MAX_P99_MICROS="<predeclared-positive-p99-budget>"
 export OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT="<predeclared-observed-floor>"
 export OTRYX_RPC_SOAK_CONCURRENCY="10000"
 export OTRYX_RPC_SOAK_DURATION_SECONDS="3600"
@@ -88,6 +89,34 @@ python3 scripts/run_v2_19_controlled_campaign.py \
   --output-dir "/data/otryx-v2-19-evidence/campaign-01"
 ```
 
-该命令**拒绝覆盖已有目录**、两个相同 SHA、错误或空的宿主身份、GitHub shared-runner、降低为 Smoke 的测试配置及不满足的阈值；并将 `OTRYX_RPC_REQUIRE_BARE_METAL=true` 传递给原有物理主机预检。无环境、脚本出错或任一轮不足时返回非零，保留已完成的原始包及 `campaign-failure.json`，不生成完整的 `campaign.json` 或伪成功结论。测试中的 Git worktree/manifest Fixture 仅验证脚本调度，不是性能证据，命令 `python3 scripts/test_v2_19_controlled_campaign.py`。
+如果第 N 轮失败，需在**同一固定物理机**按完全相同的 SHA、环境和测前阈值重用上面的命令，仅额外添加 `--resume`；无需重新运行已经校验的前 N−1 轮。恢复操作先比对 `predeclared-policy.json` 的两侧源码 SHA、Runner 身份、JVM 参数、错误率/inflight/p99 预算；对已经完成的连续前缀逐轮校验来源身份、宿主指纹和原始文件 SHA256，拒绝乱序、重复或被篡改的证据。上轮失败的非完整目录会被**移动保留**至 `failed-attempts/<run-id>/attempt-NNN/` 后重新执行，不会直接删除原始现场。
+
+```bash
+# 复用与初次命令完全相同的 export 和两个 SHA / 证据目录
+python3 scripts/run_v2_19_controlled_campaign.py \
+  --baseline-sha "<same-baseline-commit>" \
+  --candidate-sha "<same-candidate-commit>" \
+  --output-dir "/data/otryx-v2-19-evidence/campaign-01" \
+  --resume
+```
+
+提交前会运行完整 `check_u13_campaign.py` 校验；`campaign.json` **仅在六轮通过复算后原子生成**，此前只允许存在隐藏的 `.campaign-validation-pending.json`。即使全部六轮执行结束，如果完整证据检查失败，也只有 `campaign-failure.json`，不可误认为正式通过。
+
+```mermaid
+flowchart TD
+    P[Freeze full SHAs and SLO] --> V{Existing campaign?}
+    V -->|No| N[Create new evidence folder]
+    V -->|Resume| R[Verify original bundles and policy]
+    R -->|Invalid| B[BLOCKED and preserve evidence]
+    N --> A[Run missing AB BA AB trials]
+    R -->|Valid prefix| A
+    A --> T{Six bundles ready?}
+    T -->|No| F[Archive partial attempt and stop]
+    T -->|Yes| C[Recheck U13 full raw evidence]
+    C -->|Fail| B
+    C -->|Success| J[Atomically write campaign.json REPORT_ONLY]
+```
+
+该命令**拒绝覆盖已有目录**、两个相同 SHA、错误或空的宿主身份、GitHub shared-runner、降低为 Smoke 的测试配置、未填写 p99 正数预算、错误率上限为 100% 或不满足的阈值；并将 `OTRYX_RPC_REQUIRE_BARE_METAL=true` 传递给原有物理主机预检。无环境、脚本出错或任一轮不足时返回非零，保留已完成的原始包及 `campaign-failure.json`，不生成完整的 `campaign.json` 或伪成功结论。测试中的 Git worktree/manifest Fixture 仅验证脚本调度，不是性能证据，命令 `python3 scripts/test_v2_19_controlled_campaign.py`。
 
 **正式阻塞尚未解除：** 尚未取得授权的物理主机及测前 SLO、两个版本中适用且可比较的真实基准工作负载、至少六个不可篡改的实际证据包和独立性能复核。不得用共享 CI、模拟数据或单机局部 smoke 关闭 #146，也不自动发布 1.0.0。
