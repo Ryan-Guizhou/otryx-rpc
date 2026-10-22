@@ -109,15 +109,12 @@ def check_soak(
     if mode not in ("smoke", "controlled"):
         errors.append("Unexpected soak acceptance mode")
     if mode == "controlled":
-        if not finite(max_error_rate) or not 0 <= max_error_rate <= 1:
-            errors.append("Controlled acceptance requires maxErrorRate in [0,1]")
+        if not finite(max_error_rate) or not 0 <= max_error_rate < 1:
+            errors.append("Controlled acceptance requires maxErrorRate in [0,1)")
         if not count(min_observed_inflight) or min_observed_inflight <= 0:
             errors.append("Controlled acceptance requires minObservedLogicalInflight")
-        if (
-            max_p99_micros is not None
-            and (not finite(max_p99_micros) or max_p99_micros <= 0)
-        ):
-            errors.append("maxP99Micros must be positive")
+        if not finite(max_p99_micros) or max_p99_micros <= 0:
+            errors.append("Controlled acceptance requires positive maxP99Micros")
         if rate is not None and finite(max_error_rate) and rate > max_error_rate:
             errors.append(
                 f"Observed error rate {rate:.6f} exceeds maxErrorRate {max_error_rate:.6f}"

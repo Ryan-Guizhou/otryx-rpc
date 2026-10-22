@@ -317,6 +317,20 @@ def main() -> None:
         create(second)
         assert validate_campaign(data, root)["integrity"] == "PASS"
 
+        # Removing a predeclared p99 ceiling must never yield POLICY_PASS.
+        preflight = second / "preflight.properties"
+        saved_preflight = preflight.read_text(encoding="utf-8")
+        assert "soak_max_p99_micros=500.0" in saved_preflight
+        preflight.write_text(
+            saved_preflight.replace("soak_max_p99_micros=500.0",
+                                    "soak_max_p99_micros="), encoding="utf-8"
+        )
+        create(second)
+        rejected(lambda: validate_campaign(data, root))
+        preflight.write_text(saved_preflight, encoding="utf-8")
+        create(second)
+        assert validate_campaign(data, root)["integrity"] == "PASS"
+
         # A copied JMH matrix from another build must fail even with a new manifest.
         matrix_environment_path = second / "matrix" / "environment.properties"
         original_matrix_environment = matrix_environment_path.read_text(encoding="utf-8")

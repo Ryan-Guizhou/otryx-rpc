@@ -20,7 +20,7 @@ flowchart LR
     Run --> Raw[原始 Soak JSON]
     Raw --> Check[数据一致性校验]
     Check -->|Smoke| Report[REPORT_ONLY]
-    Check -->|Controlled| Policy[显式错误率/在途阈值]
+    Check -->|Controlled| Policy[显式错误率/在途/p99 阈值]
     Policy -->|达到设定阈值| Pass[POLICY_PASS]
     Policy -->|未达到| Fail[FAIL 并阻断]
     Pass --> Validate[受控 Evidence 验证]
@@ -31,9 +31,9 @@ flowchart LR
 
 受控模式在开始固定环境测试**之前**必须由使用者明确配置：
 
-- `OTRYX_RPC_SOAK_MAX_ERROR_RATE`：应用可接受的最大错误率（0～1），不能沿用未知业务的假设；
+- `OTRYX_RPC_SOAK_MAX_ERROR_RATE`：应用可接受的最大错误率（0 ≤ 比率 < 1），不能沿用未知业务的假设；
 - `OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT`：最低实际观测并发数，必须在 1 与配置调用者数之间；
-- 可选 `OTRYX_RPC_SOAK_MAX_P99_MICROS`：本次环境容许的最大 p99（微秒）。
+- 必填 `OTRYX_RPC_SOAK_MAX_P99_MICROS`：测前明确批准的正数最大 p99（微秒），未填写则禁止 controlled 验收。
 
 这三个阈值是使用者的 SLO 决策，框架不会擅自填入“行业通用”数值。
 
@@ -48,7 +48,7 @@ export OTRYX_RPC_SOAK_CONCURRENCY="10000"
 export OTRYX_RPC_SOAK_DURATION_SECONDS="3600"
 export OTRYX_RPC_SOAK_MAX_ERROR_RATE="<your-error-rate-limit>"
 export OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT="<your-measured-concurrency-floor>"
-# 可选：OTRYX_RPC_SOAK_MAX_P99_MICROS="<your-p99-budget>"
+export OTRYX_RPC_SOAK_MAX_P99_MICROS="<preapproved-positive-p99-budget>"
 bash scripts/run_v2d2_fixed_evidence.sh target/v2d2-fixed-evidence
 ```
 
@@ -81,7 +81,7 @@ bash scripts/run_v2d2_fixed_evidence.sh target/v2d2-fixed-evidence
 
 ## 6. U13 受控 AB/BA 验收（新增工具）
 
-固定测试主机验证完整执行三对实验，运行顺序必须为 **Baseline → Candidate → Candidate → Baseline → Baseline → Candidate**，每个单独实验均要求 >=3600 秒真实 Soak、>=10000 配置逻辑并发、明确指定的实际在途下限、错误率上限和可选 p99 上限。启动前必须设置 Runner ID、期望主机指纹、完整 Commit SHA、JVM Flags。
+固定测试主机验证完整执行三对实验，运行顺序必须为 **Baseline → Candidate → Candidate → Baseline → Baseline → Candidate**，每个单独实验均要求 >=3600 秒真实 Soak、>=10000 配置逻辑并发、明确指定的实际在途下限、严格小于 100% 的错误率上限和**必填正数** p99 上限。启动前必须设置 Runner ID、期望主机指纹、完整 Commit SHA、JVM Flags。
 
 `scripts/check_v2d2_runner_baseline.py` 只比较固定硬件与 JVM 环境属性，**Commit SHA 不再作为硬件基线字段**：不同版本共用同一主机时可以通过基线核验，版本来源则由每个 Evidence Bundle 及 `check_u13_campaign.py` 单独校验。
 

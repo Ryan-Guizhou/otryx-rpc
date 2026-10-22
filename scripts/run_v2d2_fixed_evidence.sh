@@ -38,8 +38,8 @@ if (( CONCURRENCY < 10000 )); then
 fi
 # A configured 10k worker count alone does not prove 10k actual inflight calls.
 # Require operator-selected quality thresholds before starting a 60+ minute run.
-if [[ -z "$MAX_ERROR_RATE" || -z "$MIN_OBSERVED_INFLIGHT" ]]; then
-  echo "Controlled soak requires OTRYX_RPC_SOAK_MAX_ERROR_RATE and OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT" >&2
+if [[ -z "$MAX_ERROR_RATE" || -z "$MIN_OBSERVED_INFLIGHT" || -z "$MAX_P99_MICROS" ]]; then
+  echo "Controlled soak requires predeclared max error rate, observed inflight and positive p99" >&2
   exit 1
 fi
 python3 - "$MAX_ERROR_RATE" "$MIN_OBSERVED_INFLIGHT" "$CONCURRENCY" "$MAX_P99_MICROS" <<'PY'
@@ -49,12 +49,12 @@ max_rate = float(sys.argv[1])
 observed = int(sys.argv[2])
 configured = int(sys.argv[3])
 p99 = sys.argv[4]
-if not math.isfinite(max_rate) or not (0 <= max_rate <= 1):
-    raise SystemExit("Max error rate must be finite and between 0 and 1")
+if not math.isfinite(max_rate) or not (0 <= max_rate < 1):
+    raise SystemExit("Max error rate must be finite in [0, 1)")
 if not 1 <= observed <= configured:
     raise SystemExit("Min observed inflight must be within configured logical callers")
-if p99 and (not math.isfinite(float(p99)) or float(p99) <= 0):
-    raise SystemExit("Optional max p99 must be positive")
+if not math.isfinite(float(p99)) or float(p99) <= 0:
+    raise SystemExit("Controlled max p99 must be predeclared and positive")
 PY
 
 if [[ -e "$OUTPUT_DIR" && -n "$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
@@ -109,9 +109,7 @@ POLICY_ARGS=(
   --min-observed-inflight "$MIN_OBSERVED_INFLIGHT"
   --output-dir "$OUTPUT_DIR/soak-policy"
 )
-if [[ -n "$MAX_P99_MICROS" ]]; then
-  POLICY_ARGS+=(--max-p99-micros "$MAX_P99_MICROS")
-fi
+POLICY_ARGS+=(--max-p99-micros "$MAX_P99_MICROS")
 python3 scripts/check_soak_quality.py "${POLICY_ARGS[@]}"
 
 python3 scripts/validate_v2d2_evidence.py   --environment "$OUTPUT_DIR/environment.properties"   --matrix-dir "$OUTPUT_DIR/matrix"   --soak "$OUTPUT_DIR/soak.json"   --profile full   --require-matrix   --require-soak   --require-controlled   --min-soak-seconds 3600   --min-concurrency 10000   --output-dir "$OUTPUT_DIR"

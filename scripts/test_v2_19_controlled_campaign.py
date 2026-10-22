@@ -79,6 +79,19 @@ class V219ControlledCampaignTest(unittest.TestCase):
             with self.assertRaises(ValueError, msg=f"Expected rejection: {key}={value}"):
                 policy(env)
 
+    def test_all_controlled_entrypoints_require_real_p99_and_strict_error_budget(self):
+        repository = Path(__file__).resolve().parents[1]
+        shell = (repository / "scripts/run_v2d2_fixed_evidence.sh").read_text(
+            encoding="utf-8")
+        workflow = (repository / ".github/workflows/performance-evidence.yml").read_text(
+            encoding="utf-8")
+        self.assertIn('|| -z "$MAX_P99_MICROS"', shell)
+        self.assertIn('not (0 <= max_rate < 1)', shell)
+        self.assertIn('POLICY_ARGS+=(--max-p99-micros "$MAX_P99_MICROS")', shell)
+        self.assertIn('|| -z "$MAX_P99_MICROS"', workflow)
+        self.assertIn('not 0 <= rate < 1', workflow)
+        self.assertIn('if not math.isfinite(float(p99))', workflow)
+
     def test_preexisting_evidence_must_not_be_overwritten(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

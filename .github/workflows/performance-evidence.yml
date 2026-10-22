@@ -76,7 +76,7 @@ on:
         default: "4"
         type: string
       soak_max_error_rate:
-        description: Explicit max error ratio (0..1); required before controlled runs
+        description: Explicit max error ratio [0,1); required before controlled runs
         required: false
         default: ""
         type: string
@@ -86,7 +86,7 @@ on:
         default: ""
         type: string
       soak_max_p99_micros:
-        description: Optional maximum p99 latency in microseconds
+        description: Required positive maximum p99 latency for controlled runs (microseconds)
         required: false
         default: ""
         type: string
@@ -135,8 +135,8 @@ jobs:
           if [[ -z "$RUN_ID" || "$RUN_ID" == "manual-run" ]]; then echo "Controlled evidence requires a unique run_id such as run-1"; exit 1; fi
           if [[ "$MATRIX_PROFILE" != "full" || "$RUN_MATRIX" != "true" || "$RUN_SOAK" != "true" ]]; then echo "Controlled evidence requires full matrix and soak"; exit 1; fi
           if (( SOAK_CONCURRENCY < 10000 || SOAK_DURATION_SECONDS < 3600 )); then echo "Controlled evidence requires >=10000 concurrency and >=3600s soak"; exit 1; fi
-          if [[ -z "$MAX_ERROR_RATE" || -z "$MIN_OBSERVED_INFLIGHT" ]]; then
-            echo "Controlled soak requires predeclared max error rate and observed inflight floor" >&2
+          if [[ -z "$MAX_ERROR_RATE" || -z "$MIN_OBSERVED_INFLIGHT" || -z "$MAX_P99_MICROS" ]]; then
+            echo "Controlled soak requires max error rate, observed inflight floor and positive p99 limit" >&2
             exit 1
           fi
           python3 - "$MAX_ERROR_RATE" "$MIN_OBSERVED_INFLIGHT" "$SOAK_CONCURRENCY" "$MAX_P99_MICROS" <<'PY'
@@ -146,12 +146,12 @@ jobs:
           floor = int(sys.argv[2])
           callers = int(sys.argv[3])
           p99 = sys.argv[4]
-          if not math.isfinite(rate) or not 0 <= rate <= 1:
+          if not math.isfinite(rate) or not 0 <= rate < 1:
               raise SystemExit("Invalid controlled max error rate")
           if not 1 <= floor <= callers:
               raise SystemExit("Invalid observed inflight floor")
-          if p99 and (not math.isfinite(float(p99)) or float(p99) <= 0):
-              raise SystemExit("Invalid p99 limit")
+          if not math.isfinite(float(p99)) or float(p99) <= 0:
+              raise SystemExit("Controlled p99 limit must be positive")
           PY
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

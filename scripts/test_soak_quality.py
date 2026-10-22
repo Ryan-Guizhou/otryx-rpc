@@ -40,6 +40,7 @@ class SoakQualityTest(unittest.TestCase):
             "controlled",
             max_error_rate=0.02,
             min_observed_inflight=8000,
+            max_p99_micros=500.0,
         )
         self.assertEqual(result["status"], "POLICY_PASS")
 
@@ -71,6 +72,16 @@ class SoakQualityTest(unittest.TestCase):
         result = check_soak(valid_soak(), "controlled")
         self.assertEqual(result["status"], "FAIL")
         self.assertIn("requires maxErrorRate", " ".join(result["validationErrors"]))
+
+    def test_missing_p99_or_permissive_error_budget_never_passes(self):
+        for error_budget, p99_budget in ((0.02, None), (1.0, 500.0),
+                                        (0.02, float("nan")), (0.02, 0.0)):
+            with self.subTest(error_budget=error_budget, p99_budget=p99_budget):
+                result = check_soak(
+                    valid_soak(), "controlled", max_error_rate=error_budget,
+                    min_observed_inflight=8000, max_p99_micros=p99_budget,
+                )
+                self.assertEqual("FAIL", result["status"])
 
     def test_smoke_is_never_policy_pass(self):
         result = check_soak(valid_soak(), "smoke")
@@ -109,7 +120,7 @@ class SoakQualityTest(unittest.TestCase):
             soak.write_text(json.dumps(payload), encoding="utf-8")
             policy_folder = root / "soak-policy"
             policy_folder.mkdir()
-            policy = check_soak(payload, "controlled", 0.02, 8000)
+            policy = check_soak(payload, "controlled", 0.02, 8000, 500.0)
             policy["soakSha256"] = hashlib.sha256(soak.read_bytes()).hexdigest()
             policy_path = policy_folder / "report.json"
             policy_path.write_text(json.dumps(policy), encoding="utf-8")
