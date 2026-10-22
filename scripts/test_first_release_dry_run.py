@@ -89,6 +89,15 @@ def main() -> None:
             "project=ga\nversion=1.0.0\n", encoding="utf-8"
         )
         expect_invalid(lambda: check_development_source(root))
+    workflow = (Path(__file__).resolve().parents[1]
+                / ".github/workflows/first-release-dry-run.yml").read_text(encoding="utf-8")
+    for required in ("  pull_request:", "  push:", "  workflow_dispatch:",
+                     "fail-fast: false", '["rc1","ga"]',
+                     "github.event.pull_request.head.sha || github.sha",
+                     'SOURCE_SHA:', '--source-sha "$SOURCE_SHA"'):
+        assert required in workflow, f"Unsigned release workflow lost required guard: {required}"
+    assert "central-release" not in workflow
+    assert "--source-sha \"$GITHUB_SHA\"" not in workflow
     print("OTRYX first-release dry-run negative fixtures passed")
 
 

@@ -12,11 +12,11 @@
 | U13 性能证据 | JMH/Matrix/10k Smoke、六轮 AB BA AB 受控证据校验、原始 JMH 可复算及负面测试；PR #123 与合并后 main CI 成功 | 真实固定 Runner 上完成六轮至少 60 分钟 Soak、工程师独立审查及生产性能指标 |
 | U14 构建/供应链 | 首发 Dry-run、CycloneDX、SHA256、恶意证据校验 | 已完成签名、Tag、Central 或 Namespace 授权 |
 
-PR/main CI 通过与手动运行完整 RC/GA Dry-run 是不同的验收信号。没有执行不得声称候选产物已验证。
+普通 PR/main CI 只覆盖 `1.0.0-SNAPSHOT`；真正 RC/GA Dry-run 需要以专用工作流两个阶段的 **原始 Actions 运行结果、产物清单、SHA256、SBOM 和 source SHA** 为准。工作流配置存在与实际执行成功是不同的验收信号；无执行证据不能宣称候选产物通过。
 
 ## RC1 / GA Dry-run 流程
 
-从 GitHub Actions **OTRYX First Release Dry Run** 选择 `rc1` 或 `ga`。两者只使用临时 `-Drevision`，根 POM 及版本状态始终为 `1.0.0-SNAPSHOT`。
+完整无签名 Dry-run 现由 **OTRYX First Release Dry Run** 在相关 PR 上自动分别执行 `rc1`、`ga` 两个候选（也可通过 GitHub Actions 的 `workflow_dispatch` 手动选择一个阶段）。精确 Checkout 使用 PR Head SHA 而非自动生成的 PR Merge SHA，最终 Manifest 与来源一致；合并到 `main` 且工作流或发布脚本发生变更时会再次执行两个阶段。各阶段只使用临时 `-Drevision`，根 POM 及版本状态始终为 `1.0.0-SNAPSHOT`。
 
 1. 检查精确 Git SHA、仓库、Java 21、Maven 发布元数据、恶意证据 Fixtures 与开发版状态。
 2. 等待测试 Nacos，运行完整 `-Pquality,release` Reactor，不跳过核心测试及严格 Javadoc。
@@ -48,7 +48,7 @@ flowchart LR
 
 相关：[公开发布核查](../publication-readiness.md) · [性能证据](performance-evidence.md) · [历史发行边界](../archive/releases/release-readiness.md)。
 
-**当前结论：候选构建具有执行入口，不等于 GA Ready 或 Published；#146 真实硬件证据与 #147 最终依赖尚未满足。**
+**当前结论：已经新增可自动运行两种版本的无签名构建门禁；只有真实 PR/main 运行成功并保存 Manifest 才可认定工程候选验证通过。#146 物理机性能原始证据、外部 Namespace/商标/签名和发布授权仍缺失，不等于 GA Ready 或 Published。**
 
 
 ## U13 性能工具新增边界
