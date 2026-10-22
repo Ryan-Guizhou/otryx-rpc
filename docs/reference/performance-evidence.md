@@ -205,3 +205,7 @@ python3 scripts/check_u13_campaign.py --campaign target/u13-campaign.json --outp
 校验通过仍返回 `REPORT_ONLY`（原始数据未经过独立真实性审计），输出同硬件三次 Baseline/Candidate 中位 QPS、p99 和错误率；需人工评审独立的 `gc.alloc.rate.norm`、JFR/JVM 分配剖析、CPU/GC/heap、方差/置信区间、异常拒绝和端到端 p99/p99.9，再决定是否实施特定热点改造。对每个优化候选必须额外证明 Wire、限流、取消与资源 Lease 语义无回归。
 
 **当前工程状态：验收工具实现，真实固定 Runner 的六次长稳试验尚未执行。** 不得将测试用合成 Fixtures 或 Shared CI Smoke 表述为性能数字。
+
+## 15. V2-19 完整受控六轮自动编排
+
+[六轮原始证据采集、前置校验与失败恢复](v2-19-performance-closure.md) 提供 `scripts/run_v2_19_controlled_campaign.py` 的固定主机串行调度和对抗性自测；它只有真实硬件与事先声明的 SLO 才能执行，结果仍为 `REPORT_ONLY`。

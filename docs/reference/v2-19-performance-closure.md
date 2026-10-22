@@ -67,3 +67,27 @@ python3 scripts/check_v2_19_registration_scale.py \
 4. 完成注册规模实测、真实 TLS/mTLS 和故障场景，并经人工核对原始来源及回归结论。
 
 缺少这些真实结果时保持 `BLOCKED`，不得以 CI Smoke 或模拟输出关闭 Issue #146。
+
+## 六轮受控 Campaign 一次性执行入口
+
+当前补充 `scripts/run_v2_19_controlled_campaign.py`，只在真实固定 Linux 物理机、JDK 21、可用 Maven Wrapper、完整历史两版本 SHA 和测前冻结阈值齐全后启动。自动建立两个本地 detached worktree，**串行**运行 Baseline → Candidate → Candidate → Baseline → Baseline → Candidate。每轮复用原有 `run_v2d2_fixed_evidence.sh` 严格执行完整 JMH Matrix、10000 逻辑并发、至少 3600 秒 Soak，检查 Runner 基线与原始 SHA256；六轮全部成功后再调用 `check_u13_campaign.py` 重新复算。所有报告保持 REPORT_ONLY。
+
+在仓库根目录运行（占位值必须替换为真实机器/审批结果）：
+
+```bash
+export OTRYX_RPC_RUNNER_ID="<actual-physical-runner-id>"
+export OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256="<64-hex-preflight-host-hash>"
+export OTRYX_RPC_JVM_FLAGS="-Xms2g -Xmx2g"
+export OTRYX_RPC_SOAK_MAX_ERROR_RATE="<predeclared-maximum-error-ratio>"
+export OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT="<predeclared-observed-floor>"
+export OTRYX_RPC_SOAK_CONCURRENCY="10000"
+export OTRYX_RPC_SOAK_DURATION_SECONDS="3600"
+python3 scripts/run_v2_19_controlled_campaign.py \
+  --baseline-sha "<40-hex-baseline-commit>" \
+  --candidate-sha "<40-hex-candidate-commit>" \
+  --output-dir "/data/otryx-v2-19-evidence/campaign-01"
+```
+
+该命令**拒绝覆盖已有目录**、两个相同 SHA、错误或空的宿主身份、GitHub shared-runner、降低为 Smoke 的测试配置及不满足的阈值；并将 `OTRYX_RPC_REQUIRE_BARE_METAL=true` 传递给原有物理主机预检。无环境、脚本出错或任一轮不足时返回非零，保留已完成的原始包及 `campaign-failure.json`，不生成完整的 `campaign.json` 或伪成功结论。测试中的 Git worktree/manifest Fixture 仅验证脚本调度，不是性能证据，命令 `python3 scripts/test_v2_19_controlled_campaign.py`。
+
+**正式阻塞尚未解除：** 尚未取得授权的物理主机及测前 SLO、两个版本中适用且可比较的真实基准工作负载、至少六个不可篡改的实际证据包和独立性能复核。不得用共享 CI、模拟数据或单机局部 smoke 关闭 #146，也不自动发布 1.0.0。

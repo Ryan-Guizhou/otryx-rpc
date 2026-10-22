@@ -178,3 +178,5 @@ Core 与 Spring Starter 的 `otryx.rpc.client.directory-max-staleness` 默认均
 通过 `OtryxRpcClient.diagnose(ServiceKey)` 查看已经引用的服务的可信本地目录状态、固定失败原因与候选数量；不访问远端 Registry、不执行 Router 或新建订阅。Micrometer `otryx.rpc.client.directory.failures` 和 JFR 只使用固定枚举原因。Provider `responseEncodingDiagnostics()` 返回编码临时缓冲预留量和峰值，不等于进程 Heap/DirectMemory。详见[诊断指南](docs/reference/runtime-diagnostics.md)。
 
 > V2-19 实证边界：固定物理机控制面原生计数、AB BA AB 六次完整 JMH 与每次至少 60 分钟 Soak **尚未采集**，不得以 Shared Runner CI Smoke 推断正式性能或容量。工具与证据入口参见 [注册规模量测](docs/reference/v2-19-performance-closure.md)。
+
+V2-19 六轮真实固定机性能实验现可使用 `python3 scripts/run_v2_19_controlled_campaign.py` 一次组织执行；没有有效物理机和预声明 SLO 时会拒绝运行，不提供官方吞吐/容量承诺。详见[真实性能验收](docs/reference/v2-19-performance-closure.md)。
