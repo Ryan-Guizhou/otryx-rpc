@@ -92,6 +92,22 @@ class V219ControlledCampaignTest(unittest.TestCase):
         self.assertIn('not 0 <= rate < 1', workflow)
         self.assertIn('if not math.isfinite(float(p99))', workflow)
 
+    def test_resume_rejects_symlinked_run_parent_before_worktree_io(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "evidence"
+            output.mkdir()
+            outside = root / "outside"
+            outside.mkdir()
+            try:
+                (output / "runs").symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("Directory symlinks not supported on this platform")
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                execute(root, output, plan(BASE, CANDIDATE),
+                        policy(environment()), environment(), resume=True)
+            self.assertEqual([], list(outside.iterdir()))
+
     def test_preexisting_evidence_must_not_be_overwritten(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

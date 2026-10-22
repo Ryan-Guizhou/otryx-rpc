@@ -269,6 +269,15 @@ def main() -> None:
         rejected(lambda: validate_campaign(dict(data, runs=data["runs"][:-1]), root))
 
         first = root / "run-1"
+        # A valid checksum list with a false aggregate count is still invalid.
+        first_manifest = first / "evidence-manifest.json"
+        original_manifest = first_manifest.read_text(encoding="utf-8")
+        forged_manifest = json.loads(original_manifest)
+        forged_manifest["fileCount"] += 1
+        first_manifest.write_text(json.dumps(forged_manifest), encoding="utf-8")
+        rejected(lambda: validate_campaign(data, root))
+        first_manifest.write_text(original_manifest, encoding="utf-8")
+        assert validate_campaign(data, root)["integrity"] == "PASS"
         raw_path = first / "matrix" / "sample-p64-c1-t1.json"
         saved_raw = raw_path.read_text(encoding="utf-8")
         raw_path.unlink()

@@ -206,6 +206,9 @@ python3 scripts/check_u13_campaign.py --campaign target/u13-campaign.json --outp
 
 **当前工程状态：验收工具实现，真实固定 Runner 的六次长稳试验尚未执行。** 不得将测试用合成 Fixtures 或 Shared CI Smoke 表述为性能数字。
 
+
+证据包清单通过 `scripts/manage_v2d2_evidence_manifest.py verify --bundle <bundle-dir>` 校验时，除了重新计算各文件的 SHA-256，还须检查 schema、创建时间时区、Runner/Run ID/Commit 头部身份、唯一规范化相对路径、`fileCount`、`totalBytes` 与目录内真实文件的一致性；文件或目录符号链接必须拒绝，避免指向证据目录外的数据。六轮 `check_u13_campaign.py` 与断点恢复使用同一清单校验器。**哈希一致性不能代替签名或独立核对实际物理机来源；通过后仍只标记 REPORT_ONLY。**
+
 ## 15. V2-19 完整受控六轮自动编排
 
 [六轮原始证据采集、前置校验与失败恢复](v2-19-performance-closure.md) 提供 `scripts/run_v2_19_controlled_campaign.py` 的固定主机串行调度和对抗性自测；它只有真实硬件与事先声明的 SLO 才能执行，结果仍为 `REPORT_ONLY`。
