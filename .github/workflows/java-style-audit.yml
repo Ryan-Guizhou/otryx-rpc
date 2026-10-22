@@ -10,15 +10,6 @@ on:
       - "scripts/test_checkstyle_audit.py"
       - ".github/workflows/java-style-audit.yml"
       - "docs/engineering/**"
-  push:
-    branches: [main]
-    paths:
-      - "**/*.java"
-      - "pom.xml"
-      - ".github/checkstyle/otryx-checkstyle.xml"
-      - "scripts/summarize_checkstyle_audit.py"
-      - ".github/workflows/java-style-audit.yml"
-
 jobs:
   style-audit:
     runs-on: ubuntu-latest

@@ -16,22 +16,6 @@ on:
       - 'pom.xml'
       - '.github/test-fixtures/eureka-server/**'
       - '.github/workflows/application-registry-e2e.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'otryx-core/**'
-      - 'otryx-codegen/**'
-      - 'otryx-registry/**'
-      - 'otryx-transport/**'
-      - 'otryx-serialization/**'
-      - 'otryx-spring-boot/**'
-      - 'otryx-quickstart/**'
-      - 'scripts/*quickstart*'
-      - 'scripts/run_three_process_deadline_e2e.sh'
-      - 'pom.xml'
-      - '.github/test-fixtures/eureka-server/**'
-      - '.github/workflows/application-registry-e2e.yml'
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true

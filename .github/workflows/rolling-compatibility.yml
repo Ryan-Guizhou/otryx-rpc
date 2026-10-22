@@ -24,24 +24,6 @@ on:
       - 'scripts/check_registry_generation_boundary.py'
       - 'scripts/test_registry_generation_boundary.py'
       - '.github/workflows/rolling-compatibility.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'otryx-core/**'
-      - 'otryx-codegen/**'
-      - 'otryx-serialization/otryx-serialization-fory/**'
-      - 'otryx-transport/otryx-transport-vertx/**'
-      - 'otryx-registry/**'
-      - 'otryx-spring-boot/**'
-      - 'otryx-quickstart/**'
-      - 'pom.xml'
-      - 'docs/release-status.properties'
-      - 'scripts/run_rolling_compatibility_e2e.sh'
-      - 'scripts/bootstrap_quickstart_nacos.sh'
-      - 'scripts/check_registry_generation_boundary.py'
-      - 'scripts/test_registry_generation_boundary.py'
-      - '.github/workflows/rolling-compatibility.yml'
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true

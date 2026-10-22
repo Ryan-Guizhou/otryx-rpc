@@ -2,9 +2,6 @@ name: Documentation Previews
 
 on:
   pull_request:
-  push:
-    branches: [main]
-
 jobs:
   render:
     runs-on: ubuntu-latest
@@ -12,25 +9,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Detect documentation and renderer changes
+        id: scope
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/otryx-pr-files.txt"
+          python3 scripts/ci_gate_scope.py --changed "$RUNNER_TEMP/otryx-pr-files.txt" --github-output "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
+        if: ${{ steps.scope.outputs.docs == 'true' }}
         with:
           node-version: '22'
       - uses: actions/setup-python@v5
+        if: ${{ steps.scope.outputs.docs == 'true' }}
         with:
           python-version: '3.12'
       - name: Install CJK fonts for readable Chinese diagrams
+        if: ${{ steps.scope.outputs.docs == 'true' }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk
       - name: Install pinned Mermaid renderer and SVG verification dependencies
+        if: ${{ steps.scope.outputs.docs == 'true' }}
         run: |
           npm install --no-save --no-package-lock @mermaid-js/mermaid-cli@11.12.0
           python3 -m pip install --disable-pip-version-check "Pillow==11.3.0" "CairoSVG==2.8.2"
       - name: Configure Chromium
+        if: ${{ steps.scope.outputs.docs == 'true' }}
         run: |
           printf '%s\n' '{"args":["--no-sandbox","--disable-setuid-sandbox"]}' > target-puppeteer.json
       - name: Render all Markdown diagrams and SVG preview assets
+        if: ${{ steps.scope.outputs.docs == 'true' }}
         run: |
           python3 scripts/check_doc_previews.py \
             --mmdc node_modules/.bin/mmdc \

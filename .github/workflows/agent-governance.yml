@@ -12,19 +12,6 @@ on:
       - "scripts/test_agent_mcp.py"
       - "docs/engineering/**"
       - ".github/workflows/agent-governance.yml"
-  push:
-    branches: [main]
-    paths:
-      - "AGENTS.md"
-      - ".agents/**"
-      - ".cursor/**"
-      - ".codex/**"
-      - ".agents/config/agent-mcp.json"
-      - "scripts/sync_agent_mcp.py"
-      - "scripts/test_agent_mcp.py"
-      - "docs/engineering/**"
-      - ".github/workflows/agent-governance.yml"
-
 jobs:
   governance:
     runs-on: ubuntu-latest

@@ -3,31 +3,12 @@ name: RPC Comparison Smoke
 on:
   pull_request:
     paths:
-      - "benchmarks/rpc-comparison/**"
-      - "otryx-core/**"
-      - "otryx-codegen/**"
-      - "otryx-registry/otryx-registry-etcd/**"
-      - "otryx-serialization/otryx-serialization-fory/**"
-      - "otryx-transport/otryx-transport-vertx/**"
-      - "pom.xml"
-      - "scripts/run_rpc_comparison_smoke.sh"
-      - "scripts/validate_rpc_comparison.py"
-      - "scripts/test_rpc_comparison_validator.py"
-      - ".github/workflows/rpc-comparison-smoke.yml"
-  push:
-    branches: [main]
-    paths:
-      - "benchmarks/rpc-comparison/**"
-      - "otryx-core/**"
-      - "otryx-codegen/**"
-      - "otryx-registry/otryx-registry-etcd/**"
-      - "otryx-serialization/otryx-serialization-fory/**"
-      - "otryx-transport/otryx-transport-vertx/**"
-      - "pom.xml"
-      - "scripts/run_rpc_comparison_smoke.sh"
-      - "scripts/validate_rpc_comparison.py"
-      - "scripts/test_rpc_comparison_validator.py"
-      - ".github/workflows/rpc-comparison-smoke.yml"
+      - 'benchmarks/rpc-comparison/**'
+      - 'scripts/run_rpc_comparison_smoke.sh'
+      - 'scripts/validate_rpc_comparison.py'
+      - 'scripts/test_rpc_comparison_validator.py'
+      - '.github/workflows/rpc-comparison-smoke.yml'
+
   workflow_dispatch:
 
 jobs:

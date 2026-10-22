@@ -4,17 +4,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'otryx-core/**'
-      - 'otryx-spring-boot/**'
-      - 'pom.xml'
-      - 'otryx-registry/otryx-registry-etcd/**'
-      - '.github/workflows/etcd-chaos.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'otryx-core/**'
-      - 'otryx-spring-boot/**'
-      - 'pom.xml'
+      - 'otryx-core/src/main/java/com/peachsoft/otryx/registry/**'
       - 'otryx-registry/otryx-registry-etcd/**'
       - '.github/workflows/etcd-chaos.yml'
 

@@ -7,18 +7,8 @@ on:
       - 'scripts/first_release_dry_run.py'
       - 'scripts/test_first_release_dry_run.py'
       - 'scripts/check_central_publication.py'
-      - 'docs/reference/first-release-acceptance.md'
-      - 'docs/reference/v2-20-final-gates.md'
-      - 'pom.xml'
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/first-release-dry-run.yml'
-      - 'scripts/first_release_dry_run.py'
-      - 'scripts/test_first_release_dry_run.py'
-      - 'scripts/check_central_publication.py'
-      - 'pom.xml'
+      - 'docs/release-status.properties'
+
   workflow_dispatch:
     inputs:
       stage:
