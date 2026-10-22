@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-      stage: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.stage) || '["rc1","ga"]') }}
+        stage: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.stage) || '["rc1","ga"]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     services:
