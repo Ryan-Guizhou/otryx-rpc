@@ -8,7 +8,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from check_central_publication import PUBLIC_MODULES, module_path
+from check_central_publication import PUBLIC_MODULES, module_path, check_dependency_only_starter
 from first_release_dry_run import (
     SNAPSHOT,
     build_manifest,
@@ -57,6 +57,12 @@ def make_fixture(root: Path, version: str) -> Path:
 
 
 def main() -> None:
+    # Regression: the dependency-only Starter is nested under otryx-spring-boot.
+    check_dependency_only_starter()
+    assert (
+        Path(__file__).resolve().parents[1] / module_path("otryx-spring-boot-starter")
+        / "src/central-placeholder/README.md"
+    ).is_file()
     check_stage("rc1", "1.0.0-RC1")
     check_stage("ga", "1.0.0")
     expect_invalid(lambda: check_stage("rc1", "1.0.0"))
@@ -89,6 +95,15 @@ def main() -> None:
             "project=ga\nversion=1.0.0\n", encoding="utf-8"
         )
         expect_invalid(lambda: check_development_source(root))
+    workflow = (Path(__file__).resolve().parents[1]
+                / ".github/workflows/first-release-dry-run.yml").read_text(encoding="utf-8")
+    for required in ("  pull_request:", "  push:", "  workflow_dispatch:",
+                     "fail-fast: false", '["rc1","ga"]',
+                     "github.event.pull_request.head.sha || github.sha",
+                     'SOURCE_SHA:', '--source-sha "$SOURCE_SHA"'):
+        assert required in workflow, f"Unsigned release workflow lost required guard: {required}"
+    assert "central-release" not in workflow
+    assert "--source-sha \"$GITHUB_SHA\"" not in workflow
     print("OTRYX first-release dry-run negative fixtures passed")
 
 

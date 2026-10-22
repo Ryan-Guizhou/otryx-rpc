@@ -22,7 +22,7 @@
 | Registry/部署兼容 | 四后端独立 JVM Matrix、Nacos/Etcd/Consul/Eureka E2E 与 Chaos、Rolling Compatibility | 同 JVM 10 Client 不等于十个业务进程，Shared CI 不是生产稳定性 |
 | 业务安全与资源 | Security Profile、mTLS、授权前解码阻断、容量、Deadline、Governance 原子快照 | 不得因旧 Snapshot/安全 epoch 失效恢复旧连接或先解码未经授权业务参数 |
 | 首发文档 | 中英文 README 标记一致、Markdown 链接、Mermaid/SVG 预览及 Quickstart 使用路径 | `docs/reference/governance.md`、首发验收当前状态不得残留 Lite Starter、Examples 等退役入口 |
-| 供应链 | CycloneDX SBOM、Sources/Javadoc、依赖审计、SHA256 和 RC/GA dry-run 脚本 | 工具可运行不等于手动 rc1/ga 完整 Dry Run 已执行；不含签名、Central 上传或授权证明 |
+| 供应链 | CycloneDX SBOM、Sources/Javadoc、依赖审计、SHA256 与自动 RC1/GA 无签名 Dry-run 工作流 | 必须核对准确 PR/main 的两个 Release Dry Run 运行及原始产物；不含签名、Central 上传或授权证明 |
 | 性能正式量化 | `docs/reference/performance-evidence.md`、`scripts/check_u13_campaign.py`、真实固定机采样要求 | 尚未取得独立物理机六轮每轮至少 3600 秒 soak 和原始分配/故障/注册规模证据，**BLOCKED** |
 
 ## 3. 发布安全门
@@ -47,3 +47,8 @@ flowchart TD
 当前工程门禁 `scripts/check_project.py` 会显式阻断在当前首发参考文档中重新写入 `Lite Starter`、`Examples/Benchmarks` 及已完成 Issue #144 的旧「开发候选」状态；不改历史 archive 文档。这属于**回归防护**，不是补充生产遥测、强行关闭性能问题或降低质量规则。
 
 完整发布前材料：[首发 RC/GA 验收](first-release-acceptance.md) · [应用注册验收](application-registry-acceptance.md) · [正式性能证据](performance-evidence.md) · [性能长稳门槛](soak-acceptance.md) · [动态治理](governance.md)。
+
+
+## 5. 自动无签名首发候选验证
+
+[OTRYX First Release Dry Run](../../.github/workflows/first-release-dry-run.yml) 对影响首发构建的 PR 分别运行 RC1 / GA，完成实际 Maven `-Pquality,release`、Sources/Javadoc、CycloneDX SBOM、SHA256 和原始来源 Manifest 校验；手动 `workflow_dispatch` 仍允许单独重跑某一阶段。工作流永远不启用 `central-release`、GPG、Tag、部署或中央仓库上传。**仅在两阶段都真实成功且产物可复核时**才算候选工程构建验证通过，不能替代 #146 真正的物理机吞吐/长稳证据及外部 Namespace/版权授权。
