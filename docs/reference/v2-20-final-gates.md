@@ -17,12 +17,12 @@
 
 | 验收项 | 已有入口 | 验收边界 |
 |---|---|---|
-| Maven Reactor + 单元/集成测试 | `./mvnw -B -ntp clean verify -Pquality`、CI 与 Release Readiness | 每次只认准确 Head 对应的全部必需检查，无测试运行就不能判定通过 |
+| Maven Reactor + 单元/集成测试 | `./mvnw -B -ntp clean verify -Pquality`、按需 `CI / integration` 与 Release Readiness | 对应源代码 PR 只认准确 Head 的实际必需检查；文档类 PR 不重复完整 Reactor；未经实际测试的发行 SHA 不声称已测 |
 | 代码风格/Javadoc/中文 API 注释、英文 SLF4J 日志 | `-Pstyle-audit`、`scripts/check_java_magic_literals.py`、`scripts/check_project.py` | 静态零报告不证明所有并发/资源行为正确；架构禁止 Core 逆向依赖外部 Adapter |
 | Registry/部署兼容 | 四后端独立 JVM Matrix、Nacos/Etcd/Consul/Eureka E2E 与 Chaos、Rolling Compatibility | 同 JVM 10 Client 不等于十个业务进程，Shared CI 不是生产稳定性 |
 | 业务安全与资源 | Security Profile、mTLS、授权前解码阻断、容量、Deadline、Governance 原子快照 | 不得因旧 Snapshot/安全 epoch 失效恢复旧连接或先解码未经授权业务参数 |
 | 首发文档 | 中英文 README 标记一致、Markdown 链接、Mermaid/SVG 预览及 Quickstart 使用路径 | `docs/reference/governance.md`、首发验收当前状态不得残留 Lite Starter、Examples 等退役入口 |
-| 供应链 | CycloneDX SBOM、Sources/Javadoc、依赖审计、SHA256 与自动 RC1/GA 无签名 Dry-run 工作流 | 必须核对准确 PR/main 的两个 Release Dry Run 运行及原始产物；不含签名、Central 上传或授权证明 |
+| 供应链 | CycloneDX SBOM、Sources/Javadoc、依赖审计、SHA256 与自动 RC1/GA 无签名 Dry-run 工作流 | 必须核对准确 PR Head 自动触发或维护者手动对发行 SHA 执行的两个 Release Dry Run 运行及原始产物；不含签名、Central 上传或授权证明 |
 | 性能正式量化 | `docs/reference/performance-evidence.md`、`scripts/check_u13_campaign.py`、真实固定机采样要求 | 尚未取得独立物理机六轮每轮至少 3600 秒 soak 和原始分配/故障/注册规模证据，**BLOCKED** |
 
 ## 3. 发布安全门
@@ -51,4 +51,6 @@ flowchart TD
 
 ## 5. 自动无签名首发候选验证
 
-[OTRYX First Release Dry Run](../../.github/workflows/first-release-dry-run.yml) 对影响首发构建的 PR 分别运行 RC1 / GA，完成实际 Maven `-Pquality,release`、Sources/Javadoc、CycloneDX SBOM、SHA256 和原始来源 Manifest 校验；手动 `workflow_dispatch` 仍允许单独重跑某一阶段。工作流永远不启用 `central-release`、GPG、Tag、部署或中央仓库上传。**仅在两阶段都真实成功且产物可复核时**才算候选工程构建验证通过，不能替代 #146 真正的物理机吞吐/长稳证据及外部 Namespace/版权授权。
+[OTRYX First Release Dry Run](../../.github/workflows/first-release-dry-run.yml) 对修改候选脚本、发布状态及工作流入口的 PR 分别运行 RC1 / GA，完成实际 Maven `-Pquality,release`、Sources/Javadoc、CycloneDX SBOM、SHA256 和原始来源 Manifest 校验；手动 `workflow_dispatch` 仍允许单独重跑某一阶段。工作流永远不启用 `central-release`、GPG、Tag、部署或中央仓库上传。**仅在两阶段都真实成功且产物可复核时**才算候选工程构建验证通过，不能替代 #146 真正的物理机吞吐/长稳证据及外部 Namespace/版权授权。
+
+**主线合并策略（#172）**：通过当前 PR Head 的相关门禁并 squash 合并后，仅核对新 `main` SHA；不会再为同一提交自动重复运行 Reactor/RC1/GA。最终发行前维护者可以在对应准确发行 SHA 上使用上述手动入口分别运行两阶段，不应把别的提交的历史成功证据当作当前发行产物。参见 [CI 门禁分层](../engineering/ci-gates.md)。

@@ -224,6 +224,22 @@ def check_public_docs_are_ga_clean() -> None:
                 fail(f"Stale pre-1.0 wording in {path.relative_to(ROOT)}: {token}")
 
 
+def check_first_release_documentation_contract() -> None:
+    """Prevent current release docs from reverting to duplicate main-push CI claims."""
+    workflow_path = ROOT / ".github/workflows/first-release-dry-run.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    for trigger in ("\\n  pull_request:", "\\n  workflow_dispatch:"):
+        if trigger not in workflow:
+            fail("Unsigned release workflow lost required PR/manual trigger: " + trigger)
+    if "\\n  push:" in workflow:
+        fail("Unsigned release builds must not automatically repeat on main push")
+    for relative in ("docs/reference/first-release-acceptance.md",
+                     "docs/reference/v2-20-final-gates.md"):
+        body = (ROOT / relative).read_text(encoding="utf-8")
+        if "PR/main" in body or "再次执行两个阶段" in body:
+            fail("Stale automatic main-push release validation in " + relative)
+
+
 def check_current_dependency_coordinates() -> None:
     """Reject historical Maven dependency snippets in current OTRYX docs."""
     for directory in (ROOT / "docs", ROOT / "docs/design", ROOT / "docs/reference"):
@@ -367,6 +383,7 @@ def main() -> int:
     check_repository_identity()
     check_readme_parity()
     check_public_docs_are_ga_clean()
+    check_first_release_documentation_contract()
     check_current_dependency_coordinates()
     check_current_documentation_version()
     check_chinese_first_docs()
