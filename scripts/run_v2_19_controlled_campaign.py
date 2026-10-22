@@ -232,6 +232,9 @@ def execute(repo: Path, output: Path, campaign: dict, settings: dict,
                            encoding="utf-8")
         checked_run(["python3", "scripts/check_u13_campaign.py", "--campaign",
                      str(pending), "--output-dir", str(output / "campaign-report")], repo)
+        previous_failure = output / "campaign-failure.json"
+        if previous_failure.is_file():
+            _archive_partial(output, previous_failure, "campaign-status")
         pending.replace(output / "campaign.json")
         print("Six controlled bundles verified; results remain REPORT_ONLY")
     except (OSError, ValueError, subprocess.CalledProcessError,
