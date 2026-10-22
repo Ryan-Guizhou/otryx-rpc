@@ -228,10 +228,10 @@ def check_first_release_documentation_contract() -> None:
     """Prevent current release docs from reverting to duplicate main-push CI claims."""
     workflow_path = ROOT / ".github/workflows/first-release-dry-run.yml"
     workflow = workflow_path.read_text(encoding="utf-8")
-    for trigger in ("\\n  pull_request:", "\\n  workflow_dispatch:"):
+    for trigger in ("\n  pull_request:", "\n  workflow_dispatch:"):
         if trigger not in workflow:
             fail("Unsigned release workflow lost required PR/manual trigger: " + trigger)
-    if "\\n  push:" in workflow:
+    if "\n  push:" in workflow:
         fail("Unsigned release builds must not automatically repeat on main push")
     for relative in ("docs/reference/first-release-acceptance.md",
                      "docs/reference/v2-20-final-gates.md"):
