@@ -83,13 +83,17 @@ export OTRYX_RPC_SOAK_MAX_P99_MICROS="<predeclared-positive-p99-budget>"
 export OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT="<predeclared-observed-floor>"
 export OTRYX_RPC_SOAK_CONCURRENCY="10000"
 export OTRYX_RPC_SOAK_DURATION_SECONDS="3600"
+export OTRYX_RPC_SOAK_PAYLOAD_SIZE="256"
+export OTRYX_RPC_SOAK_CONNECTIONS="4"
+export OTRYX_RPC_SOAK_WARMUP_SECONDS="30"
+export OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS="15000"
 python3 scripts/run_v2_19_controlled_campaign.py \
   --baseline-sha "<40-hex-baseline-commit>" \
   --candidate-sha "<40-hex-candidate-commit>" \
   --output-dir "/data/otryx-v2-19-evidence/campaign-01"
 ```
 
-如果第 N 轮失败，需在**同一固定物理机**按完全相同的 SHA、环境和测前阈值重用上面的命令，仅额外添加 `--resume`；无需重新运行已经校验的前 N−1 轮。恢复操作先比对 `predeclared-policy.json` 的两侧源码 SHA、Runner 身份、JVM 参数、错误率/inflight/p99 预算；对已经完成的连续前缀逐轮校验来源身份、宿主指纹和原始文件 SHA256，拒绝乱序、重复或被篡改的证据。上轮失败的非完整目录会被**移动保留**至 `failed-attempts/<run-id>/attempt-NNN/` 后重新执行，不会直接删除原始现场。
+如果第 N 轮失败，需在**同一固定物理机**按完全相同的 SHA、环境和测前阈值重用上面的命令，仅额外添加 `--resume`；无需重新运行已经校验的前 N−1 轮。恢复操作先比对 `predeclared-policy.json` 的两侧源码 SHA、Runner 身份、JVM 参数、错误率/inflight/p99 预算，**以及 Payload、每端点连接数、预热时间和调用超时**；对已经完成的连续前缀逐轮校验来源身份、宿主指纹和原始文件 SHA256，拒绝乱序、重复或被篡改的证据。上轮失败的非完整目录会被**移动保留**至 `failed-attempts/<run-id>/attempt-NNN/` 后重新执行，不会直接删除原始现场。
 
 ```bash
 # 复用与初次命令完全相同的 export 和两个 SHA / 证据目录

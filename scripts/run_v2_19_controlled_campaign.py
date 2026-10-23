@@ -54,6 +54,10 @@ def policy(environment: dict[str, str]) -> dict[str, object]:
     try:
         concurrency = int(environment.get("OTRYX_RPC_SOAK_CONCURRENCY", "10000"))
         duration = int(environment.get("OTRYX_RPC_SOAK_DURATION_SECONDS", "3600"))
+        payload = int(environment.get("OTRYX_RPC_SOAK_PAYLOAD_SIZE", "256"))
+        connections = int(environment.get("OTRYX_RPC_SOAK_CONNECTIONS", "4"))
+        warmup = int(environment.get("OTRYX_RPC_SOAK_WARMUP_SECONDS", "30"))
+        client_timeout = int(environment.get("OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS", "15000"))
         min_inflight = int(environment["OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT"])
         max_error = float(environment["OTRYX_RPC_SOAK_MAX_ERROR_RATE"])
         p99 = float(environment["OTRYX_RPC_SOAK_MAX_P99_MICROS"])
@@ -61,6 +65,8 @@ def policy(environment: dict[str, str]) -> dict[str, object]:
         raise ValueError("Invalid controlled numeric policy") from error
     require(concurrency >= 10000 and duration >= 3600,
             "Controlled runs require 10k callers and at least 3600 seconds")
+    require(payload > 0 and connections > 0 and warmup >= 0 and client_timeout > 0,
+            "Controlled workload requires positive payload/connections/timeout and nonnegative warmup")
     require(1 <= min_inflight <= concurrency, "Invalid observed inflight floor")
     require(math.isfinite(max_error) and 0 <= max_error < 1,
             "Invalid maximum error rate")
@@ -72,6 +78,10 @@ def policy(environment: dict[str, str]) -> dict[str, object]:
         "jvmFlags": environment["OTRYX_RPC_JVM_FLAGS"],
         "concurrency": concurrency,
         "durationSeconds": duration,
+        "payloadBytes": payload,
+        "connectionsPerEndpoint": connections,
+        "warmupSeconds": warmup,
+        "clientTimeoutMillis": client_timeout,
         "minObservedInflight": min_inflight,
         "maxErrorRate": max_error,
         "maxP99Micros": p99,
@@ -226,8 +236,18 @@ def execute(repo: Path, output: Path, campaign: dict, settings: dict,
                 "OTRYX_RPC_REQUIRE_BARE_METAL": "true",
                 "OTRYX_RPC_EXPECT_RUNNER_ID": settings["runnerId"],
                 "OTRYX_RPC_RUNNER_BASELINE": str(output / "fixed-runner-baseline.json"),
+                "OTRYX_RPC_RUNNER_ID": settings["runnerId"],
+                "OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256": settings["hostFingerprintSha256"],
+                "OTRYX_RPC_JVM_FLAGS": settings["jvmFlags"],
                 "OTRYX_RPC_SOAK_CONCURRENCY": str(settings["concurrency"]),
                 "OTRYX_RPC_SOAK_DURATION_SECONDS": str(settings["durationSeconds"]),
+                "OTRYX_RPC_SOAK_PAYLOAD_SIZE": str(settings["payloadBytes"]),
+                "OTRYX_RPC_SOAK_CONNECTIONS": str(settings["connectionsPerEndpoint"]),
+                "OTRYX_RPC_SOAK_WARMUP_SECONDS": str(settings["warmupSeconds"]),
+                "OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS": str(settings["clientTimeoutMillis"]),
+                "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT": str(settings["minObservedInflight"]),
+                "OTRYX_RPC_SOAK_MAX_ERROR_RATE": str(settings["maxErrorRate"]),
+                "OTRYX_RPC_SOAK_MAX_P99_MICROS": str(settings["maxP99Micros"]),
             })
             checked_run(["bash", str(RUN_SCRIPT), str(bundle)], target, run_env)
             _verify_bundle(repo, bundle, campaign[side + "Sha"], run_id, settings)
