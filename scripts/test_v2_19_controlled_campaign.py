@@ -25,6 +25,10 @@ def environment() -> dict[str, str]:
         "OTRYX_RPC_JVM_FLAGS": "-Xms256m -Xmx256m",
         "OTRYX_RPC_SOAK_CONCURRENCY": "10000",
         "OTRYX_RPC_SOAK_DURATION_SECONDS": "3600",
+        "OTRYX_RPC_SOAK_PAYLOAD_SIZE": "256",
+        "OTRYX_RPC_SOAK_CONNECTIONS": "4",
+        "OTRYX_RPC_SOAK_WARMUP_SECONDS": "30",
+        "OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS": "15000",
         "OTRYX_RPC_SOAK_MAX_ERROR_RATE": "0.005",
         "OTRYX_RPC_SOAK_MIN_OBSERVED_INFLIGHT": "8000",
         "OTRYX_RPC_SOAK_MAX_P99_MICROS": "100000",
@@ -48,6 +52,10 @@ class V219ControlledCampaignTest(unittest.TestCase):
         env = environment()
         validated = policy(env)
         self.assertEqual(3600, validated["durationSeconds"])
+        self.assertEqual(256, validated["payloadBytes"])
+        self.assertEqual(4, validated["connectionsPerEndpoint"])
+        self.assertEqual(30, validated["warmupSeconds"])
+        self.assertEqual(15000, validated["clientTimeoutMillis"])
         self.assertEqual("dedicated-fixed-01", validated["runnerId"])
         for missing in ("OTRYX_RPC_RUNNER_ID", "OTRYX_RPC_JVM_FLAGS",
                         "OTRYX_RPC_EXPECT_HOST_FINGERPRINT_SHA256",
@@ -66,6 +74,10 @@ class V219ControlledCampaignTest(unittest.TestCase):
     def test_bad_numbers_and_shared_runner_rejected(self) -> None:
         for key, value in (("OTRYX_RPC_SOAK_DURATION_SECONDS", "3599"),
                            ("OTRYX_RPC_SOAK_CONCURRENCY", "9999"),
+                           ("OTRYX_RPC_SOAK_PAYLOAD_SIZE", "0"),
+                           ("OTRYX_RPC_SOAK_CONNECTIONS", "-1"),
+                           ("OTRYX_RPC_SOAK_WARMUP_SECONDS", "-1"),
+                           ("OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS", "0"),
                            ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "NaN"),
                            ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "-1"),
                            ("OTRYX_RPC_SOAK_MAX_ERROR_RATE", "1"),
@@ -256,6 +268,40 @@ class V219ControlledCampaignTest(unittest.TestCase):
                 execute(repo, output, campaign, policy(environment()),
                         environment(), resume=True)
             self.assertFalse((output / "campaign.json").exists())
+
+    def test_resume_rejects_workload_changes_before_running_any_new_job(self) -> None:
+        """All four workload dimensions are immutable across interrupted experiments."""
+        for variable, new_value in (
+                ("OTRYX_RPC_SOAK_PAYLOAD_SIZE", "512"),
+                ("OTRYX_RPC_SOAK_CONNECTIONS", "8"),
+                ("OTRYX_RPC_SOAK_WARMUP_SECONDS", "40"),
+                ("OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS", "20000")):
+            with self.subTest(variable=variable), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                repo, base, candidate = self._fixture_repository(root)
+                campaign = plan(base, candidate)
+                output = root / "evidence"
+                initial = environment()
+                initial["OTRYX_RPC_TEST_FAIL_RUN"] = "run03-candidate"
+                with self.assertRaises(subprocess.CalledProcessError):
+                    execute(repo, output, campaign, policy(initial), initial)
+                first = output / "runs/01-baseline/native-sample.txt"
+                initial_bytes = first.read_bytes()
+                changed = environment()
+                changed[variable] = new_value
+                with self.assertRaisesRegex(ValueError, "policy"):
+                    execute(repo, output, campaign, policy(changed), changed, resume=True)
+                self.assertEqual(initial_bytes, first.read_bytes())
+                self.assertFalse((output / "campaign.json").exists())
+                self.assertFalse((output / "failed-attempts/run03-candidate").exists())
+
+    def test_missing_workload_values_keep_same_canonical_defaults(self) -> None:
+        explicit = policy(environment())
+        defaults = environment()
+        for variable in ("OTRYX_RPC_SOAK_PAYLOAD_SIZE", "OTRYX_RPC_SOAK_CONNECTIONS",
+                         "OTRYX_RPC_SOAK_WARMUP_SECONDS", "OTRYX_RPC_SOAK_CLIENT_TIMEOUT_MS"):
+            defaults.pop(variable)
+        self.assertEqual(explicit, policy(defaults))
 
     def test_final_validator_failure_never_publishes_campaign_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
