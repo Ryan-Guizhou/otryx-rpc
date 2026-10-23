@@ -11,6 +11,7 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from zipfile import BadZipFile, ZIP_STORED, ZipFile
 
 from check_central_publication import PUBLIC_MODULES, module_path
 
@@ -63,8 +64,8 @@ def public_artifacts(root: Path, version: str) -> list[dict[str, object]]:
                 / f"{module}-{version}{classifier}.jar"
             )
             path = root / relative
-            if not path.is_file() or path.stat().st_size == 0:
-                raise ValueError(f"Release artifact missing/empty: {relative}")
+            if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+                raise ValueError(f"Release artifact missing/empty/linked: {relative}")
             inventory.append({
                 "path": relative.as_posix(),
                 "size": path.stat().st_size,
@@ -120,13 +121,73 @@ def build_manifest(
     }
 
 
-def save_evidence(
-        evidence: dict[str, object], output_dir: Path, bom_path: Path
+def verify_public_artifact_archive(
+        path: Path, inventory: list[dict[str, object]]
 ) -> None:
-    """Write source-linked checksums and a machine-readable dry-run result."""
+    """Read back the actual public JAR bytes; reject omissions and wrong digests."""
+    expected = {item["path"]: item for item in inventory}
+    if len(expected) != len(inventory):
+        raise ValueError("Duplicate paths in release artifact inventory")
+    try:
+        with ZipFile(path, "r") as archive:
+            names = archive.namelist()
+            if len(names) != len(expected) or set(names) != set(expected):
+                raise ValueError("Unsigned archive is missing or has extra public JARs")
+            for name, item in expected.items():
+                info = archive.getinfo(name)
+                if info.is_dir() or info.file_size != item["size"]:
+                    raise ValueError(f"Unexpected archived JAR size: {name}")
+                digest = hashlib.sha256()
+                with archive.open(info, "r") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() != item["sha256"]:
+                    raise ValueError(f"Archived JAR does not match manifest: {name}")
+    except (BadZipFile, KeyError, EOFError) as error:
+        raise ValueError(f"Unsigned public artifact archive is invalid: {error}") from error
+
+
+def build_public_artifact_archive(
+        root: Path, output_dir: Path, inventory: list[dict[str, object]]
+) -> dict[str, object]:
+    """Store only the inspected public JARs; no Quickstart/benchmark or signatures."""
+    archive_path = output_dir / "public-artifacts.zip"
+    if archive_path.exists() or archive_path.is_symlink():
+        raise ValueError(f"Refusing to overwrite an existing unsigned archive: {archive_path}")
+    pending = output_dir / ".public-artifacts.partial"
+    if pending.exists():
+        raise ValueError("A prior incomplete release archive must be inspected first")
+    try:
+        with ZipFile(pending, "w", compression=ZIP_STORED, allowZip64=True) as archive:
+            for item in inventory:
+                relative = Path(item["path"])
+                path = root / relative
+                if (relative.is_absolute() or ".." in relative.parts
+                        or path.is_symlink() or not path.is_file()
+                        or not path.resolve().is_relative_to(root.resolve())
+                        or path.stat().st_size != item["size"]
+                        or sha256(path) != item["sha256"]):
+                    raise ValueError(f"Source JAR changed since evidence inspection: {relative}")
+                archive.write(path, arcname=relative.as_posix())
+        verify_public_artifact_archive(pending, inventory)
+        pending.replace(archive_path)
+    except (ValueError, OSError, BadZipFile):
+        pending.unlink(missing_ok=True)
+        raise
+    return {"path": archive_path.name, "size": archive_path.stat().st_size,
+            "sha256": sha256(archive_path), "fileCount": len(inventory)}
+
+
+def save_evidence(
+        evidence: dict[str, object], output_dir: Path, bom_path: Path,
+        root: Path = ROOT,
+) -> None:
+    """Finish source-linked evidence after archiving actual public JARs."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    archive = build_public_artifact_archive(root, output_dir, evidence["artifacts"])
+    report = dict(evidence, archive=archive)
     (output_dir / "manifest.json").write_text(
-        json.dumps(evidence, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     lines = [
@@ -134,6 +195,11 @@ def save_evidence(
         for item in evidence["artifacts"]
     ]
     lines.append(f"{evidence['sbom']['sha256']}  {bom_path.as_posix()}")
+    try:
+        archive_ref = (output_dir / archive["path"]).relative_to(root).as_posix()
+    except ValueError:
+        archive_ref = archive["path"]
+    lines.append(f"{archive['sha256']}  {archive_ref}")
     (output_dir / "SHA256SUMS").write_text(
         "\n".join(lines) + "\n",
         encoding="utf-8",
@@ -165,7 +231,7 @@ def main() -> int:
         evidence = build_manifest(ROOT, args.stage, args.version,
                                   current_sha, sbom)
         output = args.output_dir if args.output_dir.is_absolute() else ROOT / args.output_dir
-        save_evidence(evidence, output, args.sbom)
+        save_evidence(evidence, output, args.sbom, root=ROOT)
         print(f"Unsigned dry-run evidence verified: {args.version}, "
               f"{len(evidence['artifacts'])} public artifact files")
         return 0

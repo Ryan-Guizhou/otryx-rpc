@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from zipfile import ZipFile
 
 from check_central_publication import PUBLIC_MODULES, module_path, check_dependency_only_starter
 from first_release_dry_run import (
@@ -16,6 +18,7 @@ from first_release_dry_run import (
     check_stage,
     public_artifacts,
     save_evidence,
+    verify_public_artifact_archive,
 )
 
 FAKE_SHA = "a" * 40
@@ -77,9 +80,28 @@ def main() -> None:
         assert len(evidence["artifacts"]) == len(PUBLIC_MODULES) * 3
         assert evidence["publication"] == "disabled"
         output = root / "evidence"
-        save_evidence(evidence, output, Path("target/bom.json"))
+        save_evidence(evidence, output, Path("target/bom.json"), root=root)
         assert (output / "manifest.json").is_file()
-        assert len((output / "SHA256SUMS").read_text().splitlines()) == len(PUBLIC_MODULES) * 3 + 1
+        manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+        zip_path = output / "public-artifacts.zip"
+        assert zip_path.is_file()
+        assert manifest["archive"]["sha256"] == hashlib.sha256(
+            zip_path.read_bytes()).hexdigest()
+        verify_public_artifact_archive(zip_path, evidence["artifacts"])
+        with ZipFile(zip_path) as archive:
+            assert len(archive.namelist()) == len(PUBLIC_MODULES) * 3
+            assert all(not entry.startswith(("otryx-quickstart", "otryx-benchmarks"))
+                       for entry in archive.namelist())
+        assert len((output / "SHA256SUMS").read_text().splitlines()) == len(PUBLIC_MODULES) * 3 + 2
+        original_zip = zip_path.read_bytes()
+        zip_path.write_bytes(b"corrupt-bytes")
+        expect_invalid(lambda: verify_public_artifact_archive(zip_path, evidence["artifacts"]))
+        zip_path.write_bytes(original_zip)
+        tampered = root / module_path(PUBLIC_MODULES[0]) / "target" / (
+            f"{PUBLIC_MODULES[0]}-{version}.jar")
+        tampered.write_bytes(b"CHANGED")
+        expect_invalid(lambda: save_evidence(
+            evidence, root / "tampered-release", Path("target/bom.json"), root=root))
 
         original = root / module_path(PUBLIC_MODULES[0]) / "target"
         (original / f"{PUBLIC_MODULES[0]}-{version}-sources.jar").unlink()

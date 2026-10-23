@@ -51,6 +51,6 @@ flowchart TD
 
 ## 5. 自动无签名首发候选验证
 
-[OTRYX First Release Dry Run](../../.github/workflows/first-release-dry-run.yml) 对修改候选脚本、发布状态及工作流入口的 PR 分别运行 RC1 / GA，完成实际 Maven `-Pquality,release`、Sources/Javadoc、CycloneDX SBOM、SHA256 和原始来源 Manifest 校验；手动 `workflow_dispatch` 仍允许单独重跑某一阶段。工作流永远不启用 `central-release`、GPG、Tag、部署或中央仓库上传。**仅在两阶段都真实成功且产物可复核时**才算候选工程构建验证通过，不能替代 #146 真正的物理机吞吐/长稳证据及外部 Namespace/版权授权。
+[OTRYX First Release Dry Run](../../.github/workflows/first-release-dry-run.yml) 对修改候选脚本、发布状态及工作流入口的 PR 分别运行 RC1 / GA，完成实际 Maven `-Pquality,release`、Sources/Javadoc、CycloneDX SBOM、SHA256 和原始来源 Manifest 校验，并归档实际 16 个公开模块各 Main/Sources/Javadoc JAR 字节；手动 `workflow_dispatch` 仍允许单独重跑某一阶段。工作流永远不启用 `central-release`、GPG、Tag、部署或中央仓库上传。**仅在两阶段都真实成功且产物可复核时**才算候选工程构建验证通过，不能替代 #146 真正的物理机吞吐/长稳证据及外部 Namespace/版权授权。
 
 **主线合并策略（#172）**：通过当前 PR Head 的相关门禁并 squash 合并后，仅核对新 `main` SHA；不会再为同一提交自动重复运行 Reactor/RC1/GA。最终发行前维护者可以在对应准确发行 SHA 上使用上述手动入口分别运行两阶段，不应把别的提交的历史成功证据当作当前发行产物。参见 [CI 门禁分层](../engineering/ci-gates.md)。
