@@ -142,6 +142,7 @@ jobs:
             target/bom.json
             target/first-release-evidence/manifest.json
             target/first-release-evidence/SHA256SUMS
+            target/first-release-evidence/public-artifacts.zip
           if-no-files-found: error
           retention-days: 60
 

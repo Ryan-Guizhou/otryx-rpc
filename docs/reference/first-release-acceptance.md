@@ -22,7 +22,7 @@
 2. 等待测试 Nacos，运行完整 `-Pquality,release` Reactor，不跳过核心测试及严格 Javadoc。
 3. 核对所有公开模块的 Main/Sources/Javadoc JAR；`otryx-quickstart` 与 Benchmarks 不属于 Central 发布产物。
 4. 用固定 CycloneDX 插件生成 Aggregate SBOM，校验项目与版本。
-5. 将源码 SHA、每个构建产物 SHA256、`manifest.json`、`SHA256SUMS`、`bom.json` 关联归档为 **unsigned evidence**。
+5. 将源码 SHA、每个构建产物 SHA256、`manifest.json`、`SHA256SUMS`、`bom.json` 和 **`public-artifacts.zip`（仅含 16 个公开模块各 Main/Sources/Javadoc JAR）** 一并归档为 unsigned evidence；打包前后逐个核验真实 JAR 大小、SHA-256 与唯一条目，不再只保存校验摘要而遗漏真实产物。
 
 ```mermaid
 flowchart LR
@@ -32,6 +32,8 @@ flowchart LR
     BOM --> Hashes[SHA256 inventory]
     Hashes --> Evidence[Unsigned evidence only]
 ```
+
+解压 Actions 下载的 unsigned evidence 后，可以把 `public-artifacts.zip` 的模块相对路径解压到独立审查目录，连同 `target/bom.json` 和清单重新执行 `sha256sum -c`；`manifest.json` 新增 `archive` 的 SHA-256、大小和包含的 JAR 数量。**该证据未签名、未发布，也不证明 Central Namespace/发行权限。**
 
 ## 强制失败与责任边界
 
