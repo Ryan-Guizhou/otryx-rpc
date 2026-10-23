@@ -22,6 +22,12 @@
         </dependency>
         <dependency>
             <groupId>com.peachsoft.otryx</groupId>
+            <artifactId>otryx-codegen</artifactId>
+            <optional>true</optional>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.peachsoft.otryx</groupId>
             <artifactId>otryx-serialization-fory</artifactId>
         </dependency>
         <dependency>

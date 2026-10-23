@@ -18,12 +18,12 @@ Nacos 可使用下文 Docker Compose 或自行部署的本地服务。准备 Etc
 ```bash
 git clone https://github.com/Ryan-Guizhou/otryx-rpc.git
 cd otryx-rpc
-java -version
+java -version   # 必须是 JDK 21
 ./mvnw --version
-./mvnw -B -ntp -pl otryx-quickstart -am clean package
+./mvnw -B -ntp -pl :otryx-quickstart-api,:otryx-quickstart-provider,:otryx-quickstart-consumer,:otryx-quickstart-memory -am clean package
 ```
 
-Windows CMD/PowerShell 使用 `mvnw.cmd` 替代 `./mvnw`。运行命令的工作目录始终为本仓库根目录。
+Windows CMD/PowerShell 使用 `mvnw.cmd` 替代 `./mvnw`，并先把 `JAVA_HOME` 指到 JDK 21。`-pl` 必须列出四个叶子模块，不能只写聚合模块 `otryx-quickstart`；`otryx-quickstart-api` 的 `provided` 依赖会让 `-am` 一并构建 `otryx-codegen`。运行命令的工作目录始终为本仓库根目录。
 
 ### 1.1 先选择安全 Profile
 
@@ -66,7 +66,7 @@ docker compose -f otryx-quickstart/docker-compose.yml up -d
 如果上一步没有构建 Quickstart，先运行：
 
 ```bash
-./mvnw -B -ntp -pl otryx-quickstart -am clean package
+./mvnw -B -ntp -pl :otryx-quickstart-api,:otryx-quickstart-provider,:otryx-quickstart-consumer,:otryx-quickstart-memory -am clean package
 ```
 
 **在启动任何应用之前**，为手工示例的 `public` namespace / `OTRYX_RPC` group 独占初始化 Mapping 分片：
@@ -77,7 +77,15 @@ bash scripts/bootstrap_quickstart_nacos.sh \
   127.0.0.1:8848 public OTRYX_RPC
 ```
 
-该 scope 中不能有业务进程并发写入 Mapping。命令创建缺失分片、校验并保留已有数据；失败时先解决问题再启动应用。普通 Starter 不会自动补建。下面的自动验证脚本使用各自随机 group 并内置初始化，无需手工初始化共享 group。详见 [Nacos 初始化约束](reference/registry-nacos-v2.md#4-nacos-config-servicemappingmd5-casfencing分片)。
+Windows：
+
+```powershell
+.\scripts\bootstrap_quickstart_nacos.ps1 `
+  otryx-quickstart\otryx-quickstart-provider\target\otryx-quickstart-provider-1.0.0-SNAPSHOT-exec.jar `
+  127.0.0.1:8848 public OTRYX_RPC
+```
+
+该 scope 中不能有业务进程并发写入 Mapping。命令创建缺失分片、校验并保留已有数据；失败时先解决问题再启动应用。普通 Starter 不会自动补建；跳过此步会在 Provider 启动时得到脱敏的 `Nacos control-plane operation failed`。下面的自动验证脚本使用各自随机 group 并内置初始化，无需手工初始化共享 group。详见 [Nacos 初始化约束](reference/registry-nacos-v2.md#4-nacos-config-servicemappingmd5-casfencing分片)。
 
 **终端 A — Provider**：
 

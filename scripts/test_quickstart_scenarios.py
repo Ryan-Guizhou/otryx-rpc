@@ -291,7 +291,8 @@ class ShellScenarioTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         scripts = self.root / "scripts"
         scripts.mkdir()
-        for name in ("quickstart_e2e_common.sh", "bootstrap_quickstart_nacos.sh", "observe_quickstart_nacos.sh",
+        for name in ("quickstart_e2e_common.sh", "bootstrap_quickstart_nacos.sh",
+                     "bootstrap_quickstart_nacos.ps1", "observe_quickstart_nacos.sh",
                      "observe_quickstart_registry.sh", "assert_quickstart_snapshot.py",
                      "run_quickstart_revision_e2e.sh", "run_quickstart_mtls_e2e.sh",
                      "run_quickstart_process_e2e.sh", "run_three_process_deadline_e2e.sh", "run_quickstart_e2e.sh",

@@ -103,6 +103,8 @@ def test_quickstart_maven_modules() -> None:
                 "otryx-registry-eureka"} <= deps
     memory = dependencies(pom("otryx-quickstart/otryx-quickstart-memory/pom.xml"))
     assert memory == {"otryx-quickstart-api", "otryx-spring-boot-starter"}
+    api_deps = dependencies(pom("otryx-quickstart/otryx-quickstart-api/pom.xml"))
+    assert {"otryx-core", "otryx-codegen"} <= api_deps
 
 
 def test_quickstart_actual_runtime() -> None:

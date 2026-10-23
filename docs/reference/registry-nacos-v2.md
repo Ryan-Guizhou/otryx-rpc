@@ -44,7 +44,7 @@ NacosV2MetadataBootstrap.initialize(options);
 
 它仅初始化缺失的空分片、核验现有内容且不清空已有有效数据。**禁止与运行期写入并发执行。** 运行期任何缺失分片都直接 fail closed，绝不使用 `publishConfigCas(..., null)` 或 `publishConfig` 回退写入。部署管道应在全部 Provider/Consumer 启动之前完成此步骤。
 
-Quickstart 的隔离 Nacos 环境可使用独立命令入口；先编译可执行 Provider JAR，确认 `java` 和 GNU coreutils 的 `timeout` 在 `PATH` 中，再执行：
+Quickstart 的隔离 Nacos 环境可使用独立命令入口；先编译可执行 Provider JAR，确认 `java`（JDK 21）在 `PATH` 中。Linux/macOS 还需要 GNU coreutils 的 `timeout`：
 
 ```bash
 bash scripts/bootstrap_quickstart_nacos.sh \
@@ -52,7 +52,9 @@ bash scripts/bootstrap_quickstart_nacos.sh \
   127.0.0.1:8848 public OTRYX_RPC
 ```
 
-脚本通过 Spring Boot `PropertiesLauncher` 在独立 JVM 调用 `NacosV2MetadataBootstrap.main`，设置 120 秒执行预算；超时先发出终止信号，5 秒宽限后仍未退出则强制结束。**Java CLI 必须恰好提供四个参数：endpoint、namespace、group、`TRUSTED_DEVELOPMENT`。** 上面的 Bash 包装器仍接收 JAR 与三个目标参数，由脚本固定追加第四个安全意图；不是由 Factory 推断开发模式。旧的三参 Java CLI 会拒绝，第四参为 `UNSPECIFIED`、`NETWORK_MTLS` 或其他值也会在创建 SDK 前以 `UNSUPPORTED_PROTECTION` 拒绝。
+Windows PowerShell 使用同参入口 `scripts/bootstrap_quickstart_nacos.ps1`。
+
+脚本通过 Spring Boot `PropertiesLauncher` 在独立 JVM 调用 `NacosV2MetadataBootstrap.main`，设置 120 秒执行预算；超时先发出终止信号，5 秒宽限后仍未退出则强制结束。**Java CLI 必须恰好提供四个参数：endpoint、namespace、group、`TRUSTED_DEVELOPMENT`。** 上面的 Bash/PowerShell 包装器仍接收 JAR 与三个目标参数，由脚本固定追加第四个安全意图；不是由 Factory 推断开发模式。旧的三参 Java CLI 会拒绝，第四参为 `UNSPECIFIED`、`NETWORK_MTLS` 或其他值也会在创建 SDK 前以 `UNSUPPORTED_PROTECTION` 拒绝。
 
 脚本中的 namespace/group 必须与应用配置一致。该 CLI 不接收秘密参数；需要 SDK 用户密码的开发初始化应使用下文 typed `RegistryOptions` 调用 `initialize`，仍必须显式选择 `TRUSTED_DEVELOPMENT`。双进程、三进程和滚动验证脚本为每轮生成独立 group，并在任何应用启动前初始化；普通应用启动不执行初始化。
 

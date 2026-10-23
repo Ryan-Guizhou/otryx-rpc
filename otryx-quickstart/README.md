@@ -45,12 +45,14 @@ flowchart LR
 ```bash
 git clone https://github.com/Ryan-Guizhou/otryx-rpc.git
 cd otryx-rpc
-java -version
+java -version   # 必须是 JDK 21；本仓库 enforcer 拒绝其他主版本
 ./mvnw --version
-./mvnw -B -ntp -pl otryx-quickstart -am clean package
+./mvnw -B -ntp -pl :otryx-quickstart-api,:otryx-quickstart-provider,:otryx-quickstart-consumer,:otryx-quickstart-memory -am clean package
 ```
 
-**Windows**：将上述 `./mvnw` 改为 `mvnw.cmd`；下面以 Linux/macOS bash 命令为主，Windows 可用两个 CMD/PowerShell 终端启动对应确切 JAR 文件名。
+必须用四个叶子模块的 `-pl`，不能只写聚合模块 `otryx-quickstart`（后者不会编出 `-exec.jar`）。`otryx-quickstart-api` 以 `provided` 依赖声明编译期注解处理器 `otryx-codegen`，因此 `-am` 会把它编进同一 Reactor；不要省略本地构建就去解析未发布的 `1.0.0-SNAPSHOT`。
+
+**Windows**：将上述 `./mvnw` 改为 `mvnw.cmd`，并先把 `JAVA_HOME` 指到 JDK 21（例如 `C:\Program Files\Java\jdk-21.0.11`），再把 `%JAVA_HOME%\bin` 放在 PATH 最前。下面以 Linux/macOS bash 为主；Windows 可用 PowerShell 启动对应 `-exec.jar`，Nacos 分片初始化用 `scripts/bootstrap_quickstart_nacos.ps1`。
 
 ### 已构建 JAR 后，一条命令运行全部场景
 
@@ -115,7 +117,15 @@ bash scripts/bootstrap_quickstart_nacos.sh \
   127.0.0.1:8848 public OTRYX_RPC
 ```
 
-该命令通过独立 JVM 调用已有 `NacosV2MetadataBootstrap`，与后续示例使用相同的 endpoint、namespace 和 Nacos group。它只创建缺失分片并校验、保留已有内容；初始化失败时先解决错误，再启动应用。普通 Starter 启动不会代替这一步，也不能与业务 Mapping 写入并发执行。参数和 CAS 约束见 [Nacos V2 文档](../docs/reference/registry-nacos-v2.md#4-nacos-config-servicemappingmd5-casfencing分片)。
+Windows PowerShell（仓库根目录，JDK 21 已在 PATH）：
+
+```powershell
+.\scripts\bootstrap_quickstart_nacos.ps1 `
+  otryx-quickstart\otryx-quickstart-provider\target\otryx-quickstart-provider-1.0.0-SNAPSHOT-exec.jar `
+  127.0.0.1:8848 public OTRYX_RPC
+```
+
+该命令通过独立 JVM 调用已有 `NacosV2MetadataBootstrap`，与后续示例使用相同的 endpoint、namespace 和 Nacos group。它只创建缺失分片并校验、保留已有内容；初始化失败时先解决错误，再启动应用。普通 Starter 启动不会代替这一步，也不能与业务 Mapping 写入并发执行。若未初始化就启动 Provider，会看到脱敏后的 `Nacos control-plane operation failed`。参数和 CAS 约束见 [Nacos V2 文档](../docs/reference/registry-nacos-v2.md#4-nacos-config-servicemappingmd5-casfencing分片)。
 
 手工初始化命令有 120 秒执行预算和 5 秒强制退出宽限。自动化场景使用各自随机 group，已经包含这一步；不要为了运行自动脚本而初始化正在被其他应用写入的共享 group。
 
@@ -476,10 +486,12 @@ java -jar otryx-quickstart/otryx-quickstart-consumer/target/otryx-quickstart-con
 
 | 现象 | 检查项 |
 |---|---|
-| `exec.jar` 找不到 | 先在**仓库根目录**运行 `./mvnw -B -ntp -pl otryx-quickstart -am clean package`；区分普通 JAR 与 `-exec.jar` |
+| `exec.jar` 找不到 | 先在**仓库根目录**用 **JDK 21** 运行 `./mvnw -B -ntp -pl :otryx-quickstart-api,:otryx-quickstart-provider,:otryx-quickstart-consumer,:otryx-quickstart-memory -am clean package`（Windows 为 `mvnw.cmd`）；区分普通 JAR 与 `-exec.jar` |
+| `OTRYX RPC requires JDK 21` | 当前 `JAVA_HOME`/`java` 不是 21；本机若并存 JDK 8/17，必须显式切换到 JDK 21 后再构建或启动 |
 | Maven 解析不了 OTRYX `1.0.0-SNAPSHOT` | 尚未发布 Central；先本地运行 `./mvnw -B -ntp clean install -DskipTests` |
 | 无法连接 Nacos | 检查 `docker compose ... up -d`、8848/9848、Registry type、namespace 与 Provider/Consumer 配置是否一致 |
-| 缺少 Mapping 分片 | 停止该 scope 的所有业务写入，再独占运行 bootstrap；自动脚本已在应用启动前执行 |
+| `Nacos control-plane operation failed` / 缺少 Mapping 分片 | 停止该 scope 的所有业务写入，再独占运行 bootstrap（Linux/macOS 用 `.sh`，Windows 用 `.ps1`）；自动脚本已在应用启动前执行 |
+| `Remote GO_AWAY: com/peachsoft/otryx/protocol/RpcHandshakeCodec` | 多为旧 Provider 进程仍占用 19090，而 Consumer 已用新 JAR；先停掉旧 Provider，用**同一轮构建**的 `-exec.jar` 再启 Provider，再启 Consumer |
 | Memory 模式双进程互相看不到 | Memory Registry **不跨 JVM**；使用 Nacos / Etcd / Consul / Eureka 等共享注册中心 |
 | Consumer 成员存在却无法调用 | 成员入册不等于 Provider 路由就绪；检查 Mapping、该实例 Manifest、角色与 `verifiedProviders` |
 | 观察器拒绝写文件 | 输出必须是新文件；每轮观察改用新文件名，检查 namespace/group/applicationName 是否一致 |

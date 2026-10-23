@@ -17,6 +17,13 @@
             <groupId>com.peachsoft.otryx</groupId>
             <artifactId>otryx-core</artifactId>
         </dependency>
+        <!-- Compile-time stub processor only; -am must build it before this module. -->
+        <dependency>
+            <groupId>com.peachsoft.otryx</groupId>
+            <artifactId>otryx-codegen</artifactId>
+            <optional>true</optional>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
     <build>
         <plugins>

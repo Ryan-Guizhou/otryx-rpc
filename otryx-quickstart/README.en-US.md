@@ -41,12 +41,14 @@ Scripts require Bash, Python 3 and GNU coreutils `timeout`. Automated mTLS accep
 ```bash
 git clone https://github.com/Ryan-Guizhou/otryx-rpc.git
 cd otryx-rpc
-java -version
+java -version   # must be JDK 21; the enforcer rejects other major versions
 ./mvnw --version
-./mvnw -B -ntp -pl otryx-quickstart -am clean package
+./mvnw -B -ntp -pl :otryx-quickstart-api,:otryx-quickstart-provider,:otryx-quickstart-consumer,:otryx-quickstart-memory -am clean package
 ```
 
-On Windows use `mvnw.cmd` instead of `./mvnw`. The shell snippets below target Linux/macOS; Windows can run the exact `-exec.jar` artifact paths from two terminals.
+Use the four leaf modules in `-pl`; selecting only the `otryx-quickstart` aggregator does not build `-exec.jar` artifacts. `otryx-quickstart-api` declares the compile-time `otryx-codegen` annotation processor as a `provided` dependency, so `-am` builds it in the same reactor. Do not resolve unpublished `1.0.0-SNAPSHOT` artifacts without a local build.
+
+On Windows use `mvnw.cmd` instead of `./mvnw`, point `JAVA_HOME` at JDK 21 (for example `C:\Program Files\Java\jdk-21.0.11`), and put `%JAVA_HOME%\bin` first on `PATH`. The shell snippets below target Linux/macOS; Windows can run the exact `-exec.jar` paths from PowerShell and bootstrap Mapping shards with `scripts/bootstrap_quickstart_nacos.ps1`.
 
 ### Run every scenario with one command after building the JARs
 
@@ -105,7 +107,15 @@ bash scripts/bootstrap_quickstart_nacos.sh \
   127.0.0.1:8848 public OTRYX_RPC
 ```
 
-The standalone JVM invokes the existing `NacosV2MetadataBootstrap` with the same endpoint, namespace and Nacos group used below. It creates missing shards and validates and preserves existing contents. Resolve initialization failures before starting applications. Normal Starter startup does not replace this maintenance step, which must never run concurrently with application Mapping writes. See the [Nacos V2 contract](../docs/reference/registry-nacos-v2.md#4-nacos-config-servicemappingmd5-casfencing分片).
+Windows PowerShell from the repository root with JDK 21 on `PATH`:
+
+```powershell
+.\scripts\bootstrap_quickstart_nacos.ps1 `
+  otryx-quickstart\otryx-quickstart-provider\target\otryx-quickstart-provider-1.0.0-SNAPSHOT-exec.jar `
+  127.0.0.1:8848 public OTRYX_RPC
+```
+
+The standalone JVM invokes the existing `NacosV2MetadataBootstrap` with the same endpoint, namespace and Nacos group used below. It creates missing shards and validates and preserves existing contents. Resolve initialization failures before starting applications. Normal Starter startup does not replace this maintenance step, which must never run concurrently with application Mapping writes. Starting a Provider without bootstrap fails closed with the sanitized `Nacos control-plane operation failed`. See the [Nacos V2 contract](../docs/reference/registry-nacos-v2.md#4-nacos-config-servicemappingmd5-casfencing分片).
 
 The manual bootstrap command has a 120-second execution budget and a 5-second forced-exit grace period. Automated scenarios already perform this step in their own random groups; do not bootstrap an active shared group to prepare an automated run.
 
@@ -463,10 +473,12 @@ These manual profiles explicitly use `TRUSTED_DEVELOPMENT` and configure no back
 
 | Symptom | Checks |
 |---|---|
-| `-exec.jar` not found | Run `./mvnw -B -ntp -pl otryx-quickstart -am clean package` from repo root |
+| `-exec.jar` not found | From repo root with **JDK 21**, run `./mvnw -B -ntp -pl :otryx-quickstart-api,:otryx-quickstart-provider,:otryx-quickstart-consumer,:otryx-quickstart-memory -am clean package` (`mvnw.cmd` on Windows) |
+| `OTRYX RPC requires JDK 21` | Current `JAVA_HOME`/`java` is not 21; switch explicitly when JDK 8/17 also exist |
 | Maven cannot resolve `1.0.0-SNAPSHOT` | Not published: run `./mvnw -B -ntp clean install -DskipTests` first |
 | Nacos endpoint unavailable | Compose service, 8848/9848, matching namespace/configuration |
-| Missing Mapping shards | Stop all writers in that scope, then bootstrap exclusively; automated scenarios already bootstrap before startup |
+| `Nacos control-plane operation failed` / missing Mapping shards | Stop all writers in that scope, then bootstrap exclusively (`.sh` or Windows `.ps1`); automated scenarios already bootstrap before startup |
+| `Remote GO_AWAY: com/peachsoft/otryx/protocol/RpcHandshakeCodec` | Usually a stale Provider still bound to 19090 while Consumer uses a newer JAR; stop the old Provider, restart it from the **same build** `-exec.jar`, then start Consumer |
 | Memory mode cannot discover remote JVM | Memory Registry is not shared across processes |
 | Consumer member exists but calls fail | Membership is not Provider readiness; inspect Mapping, that instance's Manifest, role and `verifiedProviders` |
 | Observer refuses the output file | Use a new filename each time; verify namespace/group/applicationName |

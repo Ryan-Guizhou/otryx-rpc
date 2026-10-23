@@ -14,7 +14,7 @@
 
 ```bash
 ./mvnw -B -ntp clean install -DskipTests
-./mvnw -B -ntp -pl otryx-quickstart -am clean package
+./mvnw -B -ntp -pl :otryx-quickstart-api,:otryx-quickstart-provider,:otryx-quickstart-consumer,:otryx-quickstart-memory -am clean package
 bash scripts/run_quickstart_memory.sh
 ```
 
@@ -24,7 +24,7 @@ bash scripts/run_quickstart_memory.sh
 docker compose -f otryx-quickstart/docker-compose.yml up -d
 ```
 
-确认 HTTP 8848 与客户端 gRPC 9848 可用。在任何应用启动前，为手工示例的同一 scope 独占初始化 Mapping 分片：
+确认 HTTP 8848 与客户端 gRPC 9848 可用。在任何应用启动前，为手工示例的同一 scope 独占初始化 Mapping 分片（Windows 用 `scripts/bootstrap_quickstart_nacos.ps1`，参数相同）：
 
 ```bash
 bash scripts/bootstrap_quickstart_nacos.sh \
