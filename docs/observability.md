@@ -94,6 +94,8 @@ client.retries = attempts - 1
 
 真实 RPC 路径传播 W3C Trace Context/Baggage。
 
+Spring Boot Starter 与 OpenTelemetry Adapter 同时使用时，`OtryxRpcOpenTelemetryAutoConfiguration` 会在 Spring Boot 的 `org.springframework.boot.actuate.autoconfigure.opentelemetry.OpenTelemetryAutoConfiguration` 之后评估，确保 `OpenTelemetry` Bean 已可见后再创建 `RpcTracingBridge`。若应用提供自定义 `RpcTracingBridge`，自动配置会退让；若未提供 OpenTelemetry Bean，则不强制创建 Trace Bridge。仅看到 Spring MVC/Scheduler 的 Span 不足以证明 OTRYX RPC Trace 已传播，应在真实跨进程验收中确认 client/server Span 的 `traceId` 一致，且 server 的 `parentSpanId` 等于 client 的 `spanId`。
+
 ```mermaid
 sequenceDiagram
     participant A as Application

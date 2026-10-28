@@ -10,6 +10,8 @@
 
 ### 2026-10 首发工程准备（未发布）
 
+- Issue #180：修正 OpenTelemetry Trace Bridge 自动配置顺序，并增加 Spring Boot 自动配置回归测试；确保 Boot 注册 OpenTelemetry 后再创建 OTRYX RPC 的 client/server Trace Bridge。
+
 - U10：低基数遥测、有界 Observer、JFR Registry 标签脱敏和基准工具。
 - U11：Maven Wrapper、Lite Starter 自定义 Bean/SPI 接入测试和独立进程示例。
 - U12：重试决策及关闭总预算提取为可独立测试的内部职责；保持 Wire v1。
