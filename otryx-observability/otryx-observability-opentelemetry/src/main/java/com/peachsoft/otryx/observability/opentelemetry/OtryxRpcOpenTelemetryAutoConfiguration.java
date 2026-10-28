@@ -15,7 +15,10 @@ import org.springframework.context.annotation.Bean;
  * @Version 1.0.0
  * @CreateTime 2026/9/29 14:59
  */
-@AutoConfiguration
+@AutoConfiguration(
+        afterName = {
+                "org.springframework.boot.actuate.autoconfigure.opentelemetry.OpenTelemetryAutoConfiguration"
+        })
 @ConditionalOnClass(OpenTelemetry.class)
 public class OtryxRpcOpenTelemetryAutoConfiguration {
 
