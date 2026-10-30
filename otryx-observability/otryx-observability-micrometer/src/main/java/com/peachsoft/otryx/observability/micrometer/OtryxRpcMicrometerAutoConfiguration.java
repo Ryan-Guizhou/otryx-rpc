@@ -9,13 +9,18 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean;
 
 /**
- * OTRYX RPC Micrometer 自动配置。
+ * OTRYX RPC Micrometer 自动配置；必须在 Spring Boot MeterRegistry exporter 装配后评估条件。
  *
  * @Author Ryan
  * @Version 1.0.0
  * @CreateTime 2026/9/29 14:51
  */
-@AutoConfiguration
+@AutoConfiguration(afterName = {
+        "org.springframework.boot.actuate.autoconfigure.metrics.MetricsAutoConfiguration",
+        "org.springframework.boot.actuate.autoconfigure.metrics.export.simple.SimpleMetricsExportAutoConfiguration",
+        "org.springframework.boot.actuate.autoconfigure.metrics.export.prometheus."
+                + "PrometheusMetricsExportAutoConfiguration"
+})
 @ConditionalOnClass(MeterRegistry.class)
 public class OtryxRpcMicrometerAutoConfiguration {
 
