@@ -119,13 +119,22 @@ class NacosApplicationRegistryHealthTest {
         FakeNaming remote = new FakeNaming();
         Notifications listener = new Notifications();
         CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch running = new CountDownLatch(4);
         try (NacosApplicationRegistry registry = remote.registry()) {
             Field field = NacosApplicationRegistry.class.getDeclaredField("executor");
             field.setAccessible(true);
             NacosControlExecutor executor = (NacosControlExecutor) field.get(registry);
             List<CompletableFuture<Void>> jobs = new ArrayList<>();
-            for (int index = 0; index < 260; index++) {
-                jobs.add(executor.submit("saturation-test", "bounded", () -> {
+            for (int index = 0; index < 4; index++) {
+                jobs.add(executor.submit("saturation-test", "running", () -> {
+                    running.countDown();
+                    release.await();
+                    return null;
+                }));
+            }
+            assertTrue(running.await(2, TimeUnit.SECONDS));
+            for (int index = 0; index < 256; index++) {
+                jobs.add(executor.submit("saturation-test", "queued", () -> {
                     release.await();
                     return null;
                 }));
