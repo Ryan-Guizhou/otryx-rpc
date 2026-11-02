@@ -4,6 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
 import com.alibaba.nacos.api.config.ConfigService;
 import com.alibaba.nacos.api.naming.NamingService;
 import com.alibaba.nacos.api.naming.listener.EventListener;
@@ -106,6 +112,48 @@ class NacosApplicationRegistryHealthTest {
             assertFalse(listener.latest.get().instances().isEmpty());
             assertEquals(1, listener.snapshots.get());
         }
+    }
+
+    @Test
+    void executorRejectionMustNotRecursivelyRefreshAndReconcileAfterCapacityRecovers() throws Exception {
+        FakeNaming remote = new FakeNaming();
+        Notifications listener = new Notifications();
+        CountDownLatch release = new CountDownLatch(1);
+        try (NacosApplicationRegistry registry = remote.registry()) {
+            Field field = NacosApplicationRegistry.class.getDeclaredField("executor");
+            field.setAccessible(true);
+            NacosControlExecutor executor = (NacosControlExecutor) field.get(registry);
+            List<CompletableFuture<Void>> jobs = new ArrayList<>();
+            for (int index = 0; index < 260; index++) {
+                jobs.add(executor.submit("saturation-test", "bounded", () -> {
+                    release.await();
+                    return null;
+                }));
+            }
+            // Rejection settles synchronously: the old callback recursively resubmitted forever.
+            try (RegistrySubscription ignored = registry.subscribe(APPLICATION, listener)) {
+                await(() -> listener.failures.get() == 1);
+                assertEquals(0, listener.snapshots.get());
+                assertEquals(0, listener.successes.get());
+                release.countDown();
+                CompletableFuture.allOf(jobs.toArray(CompletableFuture[]::new))
+                        .get(3, TimeUnit.SECONDS);
+                // Recovery uses the existing five-second periodic reconciler, not an unbounded retry.
+                awaitWithin(() -> listener.snapshots.get() == 1 && listener.successes.get() > 0,
+                        Duration.ofSeconds(8));
+                assertEquals(1, listener.latest.get().instances().size());
+            }
+        } finally {
+            release.countDown();
+        }
+    }
+
+    private static void awaitWithin(BooleanSupplier condition, Duration timeout) throws Exception {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            Thread.sleep(10L);
+        }
+        assertTrue(condition.getAsBoolean(), "Expected subscription recovery");
     }
 
     private static void await(BooleanSupplier condition) throws Exception {
