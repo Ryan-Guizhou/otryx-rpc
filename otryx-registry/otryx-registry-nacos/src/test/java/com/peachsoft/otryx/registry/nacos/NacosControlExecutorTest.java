@@ -64,6 +64,56 @@ class NacosControlExecutorTest {
     }
 
     @Test
+    void shutdownMustSettleQueuedFuturesWithoutExecutingDroppedTasks() throws Exception {
+        NacosControlExecutor executor = new NacosControlExecutor();
+        CountDownLatch started = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger queuedInvocations = new AtomicInteger();
+        List<CompletableFuture<String>> queued = new ArrayList<>();
+        try {
+            for (int index = 0; index < 2; index++) {
+                executor.submit("running-test", "worker", () -> {
+                    started.countDown();
+                    release.await();
+                    return null;
+                });
+            }
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            for (int index = 0; index < 32; index++) {
+                queued.add(executor.submit("queued-test", "worker", () -> {
+                    queuedInvocations.incrementAndGet();
+                    return "unexpected";
+                }));
+            }
+
+            executor.close();
+            executor.close();
+
+            for (CompletableFuture<String> future : queued) {
+                ExecutionException failure = assertThrows(ExecutionException.class,
+                        () -> future.get(2, TimeUnit.SECONDS));
+                IllegalStateException rejected = assertInstanceOf(
+                        IllegalStateException.class, failure.getCause());
+                assertEquals("Nacos control executor is closed", rejected.getMessage());
+                assertNull(rejected.getCause());
+            }
+            assertEquals(0, queuedInvocations.get());
+
+            CompletableFuture<String> afterClose = executor.submit("after-close", "private-subject", () -> {
+                queuedInvocations.incrementAndGet();
+                return "unexpected";
+            });
+            ExecutionException rejected = assertThrows(ExecutionException.class,
+                    () -> afterClose.get(2, TimeUnit.SECONDS));
+            assertEquals("Nacos control executor is closed", rejected.getCause().getMessage());
+            assertEquals(0, queuedInvocations.get());
+        } finally {
+            release.countDown();
+            executor.close();
+        }
+    }
+
+    @Test
     void checkedControlFailureMustCompleteFutureAndPreserveWorker()
             throws Exception {
         NacosControlExecutor executor =
