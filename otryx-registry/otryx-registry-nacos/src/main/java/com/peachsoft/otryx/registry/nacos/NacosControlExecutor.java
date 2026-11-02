@@ -250,6 +250,21 @@ final class NacosControlExecutor implements AutoCloseable {
     }
 
     /**
+     * 等待已开始的控制任务真正退场，不将 Future 取消视为 SDK 操作完成。
+     *
+     * @param timeout 最长等待时间，必须为非负时间
+     * @return true 表示全部已开始任务都已结束
+     * @throws InterruptedException 当前线程等待时被中断
+     */
+    boolean awaitTermination(Duration timeout) throws InterruptedException {
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isNegative()) {
+            throw new IllegalArgumentException("Nacos executor termination timeout must not be negative");
+        }
+        return executor.awaitTermination(timeout.toNanos(), TimeUnit.NANOSECONDS);
+    }
+
+    /**
      * 拒绝新任务并释放队列中尚未开始的任务完成信号。
      *
      * <p>仅对 shutdownNow 实际返回的排队任务完成关闭失败；已经取走的任务

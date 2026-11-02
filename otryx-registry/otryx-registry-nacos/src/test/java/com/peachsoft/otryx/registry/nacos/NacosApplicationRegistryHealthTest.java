@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /**
  * 将 Naming 初始失败、稳定快照和无变更恢复合同应用于真实应用级订阅实现。
@@ -165,6 +166,44 @@ class NacosApplicationRegistryHealthTest {
         }
     }
 
+    @Test
+    @Timeout(12)
+    void shutdownMustNotCloseNamingOrConfigWhileLookupStillUsesSdk() throws Exception {
+        FakeNaming remote = new FakeNaming();
+        remote.blockLookups.set(true);
+        NacosApplicationRegistry registry = remote.registry();
+        CompletableFuture<ApplicationDirectorySnapshot> inFlight = registry.lookup(APPLICATION).toCompletableFuture();
+        try {
+            assertTrue(remote.lookupEntered.await(2, TimeUnit.SECONDS));
+            // shutdownNow interrupts the worker, but this simulated SDK call has not exited.
+            registry.close();
+            registry.close();
+            assertFalse(inFlight.isDone());
+            assertEquals(0, remote.namingCloseCalls.get());
+            assertEquals(0, remote.configCloseCalls.get());
+        } finally {
+            remote.lookupRelease.countDown();
+        }
+        awaitWithin(() -> remote.namingCloseCalls.get() == 1
+                && remote.configCloseCalls.get() == 1, Duration.ofSeconds(4));
+        assertEquals(1, inFlight.get(2, TimeUnit.SECONDS).instances().size());
+        registry.close();
+        assertEquals(1, remote.namingCloseCalls.get());
+        assertEquals(1, remote.configCloseCalls.get());
+    }
+
+    @Test
+    void idleRegistryCloseShutsDownNamingAndConfigExactlyOnce() throws Exception {
+        FakeNaming remote = new FakeNaming();
+        NacosApplicationRegistry registry = remote.registry();
+        registry.close();
+        registry.close();
+        assertEquals(1, remote.namingCloseCalls.get());
+        assertEquals(1, remote.configCloseCalls.get());
+        assertTrue(remote.namingClosed.get());
+        assertTrue(remote.configClosed.get());
+    }
+
     private static void awaitWithin(BooleanSupplier condition, Duration timeout) throws Exception {
         long deadline = System.nanoTime() + timeout.toNanos();
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
@@ -209,6 +248,11 @@ class NacosApplicationRegistryHealthTest {
         private final AtomicBoolean empty = new AtomicBoolean();
         private final AtomicBoolean namingClosed = new AtomicBoolean();
         private final AtomicBoolean configClosed = new AtomicBoolean();
+        private final AtomicBoolean blockLookups = new AtomicBoolean();
+        private final CountDownLatch lookupEntered = new CountDownLatch(1);
+        private final CountDownLatch lookupRelease = new CountDownLatch(1);
+        private final AtomicInteger namingCloseCalls = new AtomicInteger();
+        private final AtomicInteger configCloseCalls = new AtomicInteger();
         private final AtomicInteger subscriptions = new AtomicInteger();
         private final AtomicInteger unsubscriptions = new AtomicInteger();
         private final AtomicInteger lookups = new AtomicInteger();
@@ -230,10 +274,15 @@ class NacosApplicationRegistryHealthTest {
                         }
                         case "getAllInstances" -> {
                             lookups.incrementAndGet();
+                            if (blockLookups.get()) {
+                                lookupEntered.countDown();
+                                awaitUninterruptibly(lookupRelease);
+                            }
                             requireReachable();
                             yield empty.get() ? List.of() : List.of(provider());
                         }
                         case "shutDown" -> {
+                            namingCloseCalls.incrementAndGet();
                             namingClosed.set(true);
                             yield null;
                         }
@@ -243,6 +292,7 @@ class NacosApplicationRegistryHealthTest {
                     ConfigService.class.getClassLoader(), new Class<?>[] {ConfigService.class},
                     (proxy, method, args) -> {
                         if ("shutDown".equals(method.getName())) {
+                            configCloseCalls.incrementAndGet();
                             configClosed.set(true);
                             return null;
                         }
@@ -254,6 +304,24 @@ class NacosApplicationRegistryHealthTest {
 
         private void change() {
             events.get().onEvent(null);
+        }
+
+        private static void awaitUninterruptibly(CountDownLatch latch) {
+            boolean interrupted = false;
+            try {
+                while (true) {
+                    try {
+                        latch.await();
+                        return;
+                    } catch (InterruptedException ignored) {
+                        interrupted = true;
+                    }
+                }
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+            }
         }
 
         private void requireReachable() {
