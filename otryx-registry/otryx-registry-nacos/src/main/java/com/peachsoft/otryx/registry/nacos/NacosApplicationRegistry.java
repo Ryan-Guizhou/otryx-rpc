@@ -32,7 +32,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -57,6 +56,8 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
     private static final Logger LOGGER = LoggerFactory.getLogger(NacosApplicationRegistry.class);
     private static final Duration RECONCILE_INTERVAL = Duration.ofSeconds(5);
     private static final Duration CLOSE_TIMEOUT = Duration.ofSeconds(3);
+    private static final Duration DEFERRED_CLOSE_WAIT = Duration.ofSeconds(30);
+    private static final String DEFERRED_CLOSE_THREAD = "otryx-nacos-close-";
     private static final int MAX_APPLICATIONS = 64;
     private static final int MAX_INSTANCES_PER_APP = 256;
     private static final int MAX_SUBSCRIBERS = 128;
@@ -306,10 +307,11 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
     }
 
     /**
-     * 关闭订阅、撤销本进程 Naming 成员并通知两个 SDK 所有者清理资源。
+     * 拒绝新任务、停止订阅并等待已开始的 SDK 控制调用真实退场。
      *
-     * <p>控制任务等待受 CLOSE_TIMEOUT 约束，后续同步 SDK 清理不承诺硬退出时限，
-     * 不能从 RPC EventLoop 调用。shutdown 返回也不证明全部 SDK 后台线程已经退出。
+     * <p>等待预算仅约束调用者，不是强制关闭底层 SDK 的时限。如果 SDK 调用迟迟
+     * 不退出，每个 Registry 至多创建一个 daemon 清理所有者，待控制线程退出后
+     * 再注销成员和关闭 Naming/Config。不能从 RPC EventLoop 调用。
      */
     @Override
     public void close() {
@@ -319,31 +321,70 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
         reconcileTask.cancel(false);
         subscriptions.forEach(Subscription::close);
         subscriptions.clear();
+        executor.close();
+
+        boolean drained = false;
         try {
-            executor.submit("application-shutdown", namespace, () -> {
-                for (Map.Entry<ApplicationKey, Registration> entry : registered.entrySet()) {
-                    try {
-                        naming.deregisterInstance(NacosV2Names.serviceName(entry.getKey()),
-                                group, entry.getValue().nacos());
-                    } catch (Exception failure) {
-                        LOGGER.warn("Nacos V2 membership cleanup failed: errorType={}",
-                                failure.getClass().getSimpleName());
+            drained = executor.awaitTermination(CLOSE_TIMEOUT);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            LOGGER.warn("Nacos V2 shutdown wait interrupted; cleanup deferred");
+        }
+        if (drained) {
+            cleanupAfterControlTermination();
+        } else {
+            LOGGER.warn("Nacos V2 control operations still active; SDK cleanup deferred");
+            Thread cleanup = new Thread(this::waitForControlTerminationAndCleanup,
+                    DEFERRED_CLOSE_THREAD + Integer.toHexString(System.identityHashCode(this)));
+            cleanup.setDaemon(true);
+            cleanup.start();
+        }
+    }
+
+    /**
+     * 后台清理只有一个所有者，等待全部控制任务退场，不能提前对活跃 SDK 关闭。
+     * 如果清理线程被中断，继续等待，并在完成清理后恢复中断标志。
+     */
+    private void waitForControlTerminationAndCleanup() {
+        boolean interrupted = false;
+        try {
+            while (true) {
+                try {
+                    if (executor.awaitTermination(DEFERRED_CLOSE_WAIT)) {
+                        break;
                     }
+                } catch (InterruptedException ignored) {
+                    interrupted = true;
                 }
-                registered.clear();
-                closeClients();
-                return null;
-            }).orTimeout(CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS).join();
-        } catch (RuntimeException error) {
-            LOGGER.warn("Nacos V2 shutdown incomplete: errorType={}", error.getClass().getSimpleName());
-            try {
-                closeClients();
-            } catch (Exception closeError) {
-                LOGGER.warn("Nacos V2 forced close failed: errorType={}",
-                        closeError.getClass().getSimpleName());
             }
+            cleanupAfterControlTermination();
         } finally {
-            executor.close();
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /** 仅在控制线程全部退出后注销实际成员并各关闭一次 Naming/Config。 */
+    private void cleanupAfterControlTermination() {
+        for (Map.Entry<ApplicationKey, Registration> entry : registered.entrySet()) {
+            try {
+                naming.deregisterInstance(NacosV2Names.serviceName(entry.getKey()),
+                        group, entry.getValue().nacos());
+            } catch (Exception failure) {
+                LOGGER.warn("Nacos V2 membership cleanup failed: errorType={}",
+                        failure.getClass().getSimpleName());
+            }
+        }
+        registered.clear();
+        try {
+            closeClients();
+        } catch (Exception failure) {
+            if (failure instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            LOGGER.warn("Nacos V2 SDK cleanup failed: errorType={}",
+                    failure.getClass().getSimpleName());
         }
     }
 
@@ -454,7 +495,8 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
                 return;
             }
             subscriptions.remove(this);
-            if (subscribed.get()) {
+            // Registry shutdown closes the owned Naming client after control tasks drain.
+            if (subscribed.get() && !closed.get()) {
                 executor.submit("application-unsubscribe", application.applicationName(), () -> {
                     naming.unsubscribe(NacosV2Names.serviceName(application), group, events);
                     return null;
