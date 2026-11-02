@@ -438,7 +438,10 @@ public final class NacosApplicationRegistry implements ApplicationRegistry, Appl
                         LOGGER.debug("Nacos V2 subscription callback rejected executor failure");
                     }
                 }
-                if (dirty.get() && !stopped.get() && !closed.get()) {
+                // A rejected submission can complete synchronously on the Nacos callback thread.
+                // Never recurse on rejection: the bounded periodic reconciler will retry later.
+                // Successful jobs still coalesce events that arrived while the worker was active.
+                if (error == null && dirty.get() && !stopped.get() && !closed.get()) {
                     refresh();
                 }
             });
