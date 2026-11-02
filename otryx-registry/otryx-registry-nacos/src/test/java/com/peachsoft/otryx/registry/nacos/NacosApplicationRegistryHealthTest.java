@@ -125,20 +125,28 @@ class NacosApplicationRegistryHealthTest {
             field.setAccessible(true);
             NacosControlExecutor executor = (NacosControlExecutor) field.get(registry);
             List<CompletableFuture<Void>> jobs = new ArrayList<>();
-            for (int index = 0; index < 4; index++) {
-                jobs.add(executor.submit("saturation-test", "running", () -> {
+            // ThreadPoolExecutor starts two core workers, fills the queue, then grows to four.
+            for (int index = 0; index < 2; index++) {
+                jobs.add(executor.submit("saturation-test", "core", () -> {
                     running.countDown();
                     release.await();
                     return null;
                 }));
             }
-            assertTrue(running.await(2, TimeUnit.SECONDS));
             for (int index = 0; index < 256; index++) {
                 jobs.add(executor.submit("saturation-test", "queued", () -> {
                     release.await();
                     return null;
                 }));
             }
+            for (int index = 0; index < 2; index++) {
+                jobs.add(executor.submit("saturation-test", "expanded", () -> {
+                    running.countDown();
+                    release.await();
+                    return null;
+                }));
+            }
+            assertTrue(running.await(3, TimeUnit.SECONDS));
             // Rejection settles synchronously: the old callback recursively resubmitted forever.
             try (RegistrySubscription ignored = registry.subscribe(APPLICATION, listener)) {
                 await(() -> listener.failures.get() == 1);
