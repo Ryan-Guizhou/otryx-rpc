@@ -24,6 +24,8 @@ Nacos Naming 仅表示应用成员状态：`otryx.v2.namespace`、`application`�
 
 Naming 的健康与订阅由 SDK 心跳支持；本适配器还每 5 秒执行低频 reconcile，保留同步失败事件。新鲜度及 LKG 由 Core Resolver 控制。任何 Naming Event 仅触发**有界控制线程**刷新；热路径绝不调用 SDK。
 
+订阅刷新任务在控制线程池已满时**立即报告同步失败但不递归重试**；由既有的 5 秒周期性 reconcile 在容量恢复后重新获取真实 Naming 快照。执行中的重复变更继续合并，不会将拒绝提交伪装成健康的空目录。
+
 ## 3. Nacos Config Manifest
 
 Manifest 存入 `otryx.v2.manifest.{sha256(appName)}.{revisionHex}`，内容为 Canonical Binary 的 `otryx-v2-manifest:` + Base64 文本。读取后校验原始字节、App Namespace、ApplicationName 和完整 SHA256 Revision。配置已存在时，只允许写入**完全相同**内容。首次发布允许使用内容寻址键的创建接口，但必须读取并严格比对完整 canonical bytes；它不承担 Mapping 的 CAS 语义。不同 Revision 可并存，不自动 GC，以保护滚动升级与回滚。
@@ -132,6 +134,9 @@ NACOS_TEST_ENDPOINT=127.0.0.1:8848 ./mvnw -B -ntp -pl otryx-registry/otryx-regis
 - 变更后的 PR Head 需通过 Maven、Checkstyle、Java/Javadoc 门禁、Doc Previews、Chaos 和 CI；合并后核对 main CI。
 
 ## English overview
+
+Subscription refresh rejection is fail-closed and non-recursive: the listener receives a synchronization failure without a fabricated empty snapshot. The existing five-second reconciler retries after bounded control-executor capacity recovers; successful in-flight refreshes continue to coalesce changes.
+
 
 Both Factory creation and bootstrap currently require explicit `TRUSTED_DEVELOPMENT` with NONE or typed USER_PASSWORD credentials. `UNSPECIFIED`, `NETWORK_MTLS`, any TLS material and unsupported credentials fail before SDK creation; the full Naming/Config/login protection chain is not supported. The old `RegistryOptions` constructors no longer imply development mode, and security keys in `providerOptions` are rejected. Use `RegistryOptions.trustedDevelopment` for isolated credential-free fixtures, or the seven-argument typed configuration for development username/password authentication.
 
